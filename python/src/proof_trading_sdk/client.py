@@ -36,10 +36,28 @@ from proof_trading_sdk._native import (
 from proof_trading_sdk.external_signer import ExternalSigner
 from proof_trading_sdk.actions import (
     Action,
+    CancelClientOrder,
+    CancelClientOrders,
+    CancelOrder,
+    CancelOrders,
     CancelPositionTriggers,
+    MarketOrder,
+    OrderEntry,
+    PlaceOrder,
+    PlaceOrders,
     SetPositionTriggers,
     TriggerLimb,
     encode_action,
+)
+from proof_trading_sdk.order_lists import (
+    ORDERS_CANCELLED,
+    ORDERS_PLACED,
+    OrderCancellation,
+    OrderPlacement,
+    SentList,
+    check_order_result,
+    order_cancellations,
+    order_placements,
 )
 from proof_trading_sdk.config import SdkConfig, load_config
 from proof_trading_sdk.finalized_markets import (
@@ -171,6 +189,40 @@ def _submission_may_have_been_admitted(exc: TransportError) -> bool:
     return isinstance(cause, httpx.RequestError) and not isinstance(cause, _NOT_SENT)
 
 
+def _sent_list(action: Action) -> SentList | None:
+    """What an order action sent as a list; ``None`` for any other action."""
+    if isinstance(action, (PlaceOrder, MarketOrder)):
+        return SentList(ORDERS_PLACED, 1, True)
+    if isinstance(action, (CancelOrder, CancelClientOrder)):
+        return SentList(ORDERS_CANCELLED, 1, True)
+    if isinstance(action, PlaceOrders):
+        return SentList(ORDERS_PLACED, len(action.orders), False)
+    if isinstance(action, CancelOrders):
+        return SentList(ORDERS_CANCELLED, len(action.order_ids), False)
+    if isinstance(action, CancelClientOrders):
+        return SentList(ORDERS_CANCELLED, len(action.client_order_ids), False)
+    return None
+
+
+def _read_order_result(
+    envelope: bytes, data: dict[str, t.Any], sent: SentList | None
+) -> dict[str, t.Any]:
+    """Check an executed code-0 response's order list (see
+    :func:`check_order_result`); any other response passes through."""
+    code = data.get("code")
+    executed = "height" in data or "events" in data
+    if isinstance(code, bool) or code != 0 or not executed:
+        # A code-less acknowledgement has not executed yet.
+        return data
+    check_order_result(
+        hashlib.sha256(envelope).hexdigest().upper(),
+        data.get("events"),
+        sent,
+        log=str(data.get("message") or data.get("log") or data.get("error") or ""),
+    )
+    return data
+
+
 def _to_hex(owner: bytes | str) -> str:
     """Normalise *owner* to a hex string (with or without ``0x`` prefix).
 
@@ -262,6 +314,23 @@ class RateLimitState:
     reset: int = 0
     tier: str = ""
     bucket: str = ""
+
+
+@dataclass(frozen=True)
+class Closed:
+    """:meth:`ExchangeClient.close_position` sent the close; ``tx`` is its
+    ``/exchange`` response."""
+
+    tx: dict[str, t.Any]
+
+
+@dataclass(frozen=True)
+class NothingToClose:
+    """:meth:`ExchangeClient.close_position` found no position, so sent
+    nothing."""
+
+
+CloseOutcome = Closed | NothingToClose
 
 
 # ── Client ───────────────────────────────────────────────────────────────────
@@ -624,13 +693,56 @@ class ExchangeClient:
         return self.sign_and_encode_action(action_type, payload)
 
     def submit(self, action: Action) -> dict[str, t.Any]:
-        """Encode + sign + submit a typed action in one call."""
-        return self.submit_action(self.sign_action(action))
+        """Encode + sign + submit a typed action in one call.
+
+        A refused :class:`PlaceOrder`, :class:`MarketOrder`,
+        :class:`CancelOrder` or :class:`CancelClientOrder` raises
+        :class:`EngineError` with its code, although the engine reports it as
+        a list of one with code 0. An executed order action whose list event
+        does not read, or is missing, or has the wrong number of entries,
+        raises :class:`OrderResultUnreadable`: reconcile by hash, never
+        re-submit.
+        """
+        envelope = self.sign_action(action)
+        return _read_order_result(envelope, self._post_envelope(envelope), _sent_list(action))
+
+    def close_position(self, market: int, *, owner: bytes | None = None) -> CloseOutcome:
+        """Close the whole position on *market*: a reduce-only market order on
+        the opposite side for the position's size, read first with
+        :meth:`account`. ``owner`` defaults to the signer.
+
+        A flat account sends nothing and returns :class:`NothingToClose`. A
+        refused close raises :class:`EngineError`, including code 35 when the
+        position went flat before the close ran, and an executed close whose
+        result does not read raises :class:`OrderResultUnreadable`.
+        """
+        selected_owner = self._own_owner() if owner is None else owner
+        position = next(
+            (
+                p
+                for p in self.account(selected_owner).positions
+                if p["market"] == market and p["size"] > 0
+            ),
+            None,
+        )
+        if position is None:
+            return NothingToClose()
+        order = MarketOrder(
+            market=market,
+            owner=selected_owner,
+            side="Sell" if position["side"] == "Buy" else "Buy",
+            quantity=int(position["size"]),
+            reduce_only=True,
+        )
+        return Closed(tx=self.submit(order))
 
     def _submit_with_signer_revision(self, action: Action, revision: int) -> dict[str, t.Any]:
         action_type, payload = encode_action(action)
         envelope = self._sign_and_encode_action(action_type, payload, expected_revision=revision)
-        return self.submit_action(envelope)
+        sent = _sent_list(action)
+        if sent is None:
+            return self.submit_action(envelope)
+        return _read_order_result(envelope, self._post_envelope(envelope), sent)
 
     def set_position_triggers(
         self,
@@ -683,6 +795,64 @@ class ExchangeClient:
             revision,
         )
 
+    def place_orders(
+        self, orders: t.Sequence[OrderEntry], *, owner: bytes | None = None
+    ) -> list[OrderPlacement]:
+        """Place 1 to 100 limit or market orders under one signature, each on
+        its own (market entries via :meth:`OrderEntry.market_order`).
+
+        Returns one :class:`OrderPlacement` per order, in order; a refused
+        order is ``rejected`` with its code and raises nothing. ``owner``
+        defaults to the signer. An executed list whose event does not read,
+        or does not report every order, raises
+        :class:`OrderResultUnreadable`: reconcile by hash, never re-submit.
+        """
+        with self._signer_lock:
+            revision = self._signer_revision
+            selected_owner = self._own_owner() if owner is None else owner
+        return order_placements(
+            self._submit_with_signer_revision(
+                PlaceOrders(owner=selected_owner, orders=list(orders)), revision
+            )
+        )
+
+    def cancel_orders(
+        self, order_ids: t.Sequence[int], *, owner: bytes | None = None
+    ) -> list[OrderCancellation]:
+        """Cancel 1 to 100 resting orders by order id, each on its own.
+
+        Returns one :class:`OrderCancellation` per entry, in order; a cancel
+        that removed nothing is ``refused`` with its code and raises nothing.
+        An unreadable result raises as in :meth:`place_orders`.
+        """
+        with self._signer_lock:
+            revision = self._signer_revision
+            selected_owner = self._own_owner() if owner is None else owner
+        return order_cancellations(
+            self._submit_with_signer_revision(
+                CancelOrders(owner=selected_owner, order_ids=list(order_ids)), revision
+            )
+        )
+
+    def cancel_client_orders(
+        self, client_order_ids: t.Sequence[int], *, owner: bytes | None = None
+    ) -> list[OrderCancellation]:
+        """Cancel 1 to 100 resting orders by client order id, each on its own.
+
+        Results as :meth:`cancel_orders`.
+        """
+        with self._signer_lock:
+            revision = self._signer_revision
+            selected_owner = self._own_owner() if owner is None else owner
+        return order_cancellations(
+            self._submit_with_signer_revision(
+                CancelClientOrders(
+                    owner=selected_owner, client_order_ids=list(client_order_ids)
+                ),
+                revision,
+            )
+        )
+
     # ── Write action ─────────────────────────────────────────────────────
 
     def submit_action(self, envelope: bytes) -> dict[str, t.Any]:
@@ -710,7 +880,15 @@ class ExchangeClient:
                 ``Unavailable``. An ambiguous 5xx is ``SubmissionPending``.
             TransportError: a transport or HTTP failure with no refusal
                 envelope.
+            OrderResultUnreadable: the transaction executed but an order
+                list event in it does not read; reconcile by hash, never
+                re-submit. A list of one whose entry was refused raises its
+                ``EngineError``, as a single order does.
         """
+        return _read_order_result(envelope, self._post_envelope(envelope), None)
+
+    def _post_envelope(self, envelope: bytes) -> dict[str, t.Any]:
+        """``POST /exchange`` the envelope and classify the answer."""
         body = json.dumps({"action": base64.b64encode(envelope).decode("ascii")}).encode()
         try:
             resp = self._post(

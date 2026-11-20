@@ -236,17 +236,19 @@ const NONCES = [
 // is pinned by conformance/signing.ndjson (`place_order_no_triggers@seq2`)
 // and the decode-compat test in triggers.test.ts.
 const PAYLOADS: Record<string, readonly [string, string]> = {
+  // The single orders and cancels are lists of one on 0x01 and 0x02 since
+  // exchange#1513/#1514 (market orders, once 0x04, are entries on 0x01).
   "PlaceOrder (limit, GTC)": [
     "01",
-    "c42e9b03dc00140303030303030303030303030303030303030303a3427579ce04ad14f0cd0190c0c2c2a3477463c0c0",
+    "c43892dc00140303030303030303030303030303030303030303919803a3427579cd019081a54c696d697493ce04ad14f0a3477463c2c2c0c0c0",
   ],
   "PlaceOrder (reduce-only IOC)": [
     "01",
-    "c42d9b07dc00140303030303030303030303030303030303030303a453656c6cce001312d019c0c2c3a3496f63c0c0",
+    "c43792dc00140303030303030303030303030303030303030303919807a453656c6c1981a54c696d697493ce001312d0a3496f63c2c3c0c0c0",
   ],
   CancelOrder: [
     "02",
-    "c41d92ce36bbbe6ddc00140303030303030303030303030303030303030303",
+    "c41e92dc0014030303030303030303030303030303030303030391ce36bbbe6d",
   ],
   "AtomicBasketOrder (multi-leg, mixed optionals)": [
     "1c",
@@ -273,8 +275,8 @@ const PAYLOADS: Record<string, readonly [string, string]> = {
     "c43b92dc00140303030303030303030303030303030303030303dc00200808080808080808080808080808080808080808080808080808080808080808",
   ],
   MarketOrder: [
-    "04",
-    "c4219703dc00140303030303030303030303030303030303030303a342757978c0c0c0",
+    "01",
+    "c42e92dc00140303030303030303030303030303030303030303919803a34275797881a64d61726b657491c0c2c0c0c0",
   ],
   "SetPositionTriggers (both limbs)": [
     "25",
@@ -314,9 +316,9 @@ const SIGNING_MESSAGES = [
   },
 ];
 const ACTION_IDS = {
-  PlaceOrder: 1,
-  CancelOrder: 2,
-  MarketOrder: 4,
+  PlaceOrder: 0x01,
+  CancelOrder: 0x02,
+  MarketOrder: 0x01,
   AtomicBasketOrder: 28,
   AmendOrder: 27,
   CancelReplaceOrder: 26,

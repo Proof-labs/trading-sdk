@@ -33,8 +33,7 @@ is enough.
 ## Quick start
 
 ```rust,no_run
-use std::time::Duration;
-use proof_sdk_rs::{Action, ClientConfig, Event, ExchangeClient, LocalSigner, Side};
+use proof_sdk_rs::{ClientConfig, ExchangeClient, LocalSigner, PlacementOutcome, Side};
 
 #[tokio::main]
 async fn main() -> Result<(), proof_sdk_rs::Error> {
@@ -52,12 +51,12 @@ async fn main() -> Result<(), proof_sdk_rs::Error> {
     let mut order = client.limit_order(1, Side::Buy, 60_000_000_000, 1_000);
     order.post_only = true;
     order.client_order_id = Some(42);
-    let placed = client.submit_and_wait(&Action::PlaceOrder(order), Duration::from_secs(10)).await?;
+    let placed = client.place_order(order).await?;
     match placed.error() {
         None => {
-            for e in placed.receipt().into_iter().flat_map(|r| &r.events) {
-                if let Event::OrderPlaced(o) = e {
-                    println!("resting as order {}", o.order_id);
+            for p in placed.receipt().into_iter().flat_map(|r| r.placements()) {
+                if let PlacementOutcome::Resting { order_id, .. } = p.outcome {
+                    println!("resting as order {order_id}");
                 }
             }
         }
@@ -89,16 +88,20 @@ On devnet, fund a new address with the faucet first:
 | ----------------------------------------------- | ------------------------------------------------------------------------- |
 | `connect(&config, signer)`                      | reads `GET /v1/status` and `recent-nonces`, binds signatures to the chain |
 | `new(&config, signer)`                          | no request; signs for the config's chain id                               |
-| `limit_order(market, side, price, qty)`         | builds a GTC `PlaceOrder` for this account                                |
-| `place_order(order)`                            | `PlaceOrder`                                                              |
-| `market_order(market, side, qty)`               | `MarketOrder` (IOC)                                                       |
-| `cancel_order(order_id)`                        | `CancelOrder`                                                             |
-| `cancel_order_by_client_id(client_order_id)`    | `CancelClientOrder`                                                       |
+| `limit_order(market, side, price, qty)`         | builds a GTC order for this account                                       |
+| `place_order(order)`                            | `PlaceOrders` of one; a refused order is the receipt's error              |
+| `place_orders(Vec<OrderEntry>)`                 | `PlaceOrders`: 1 to 100 limit or market orders, one signature, each placed or refused on its own (entries from `actions::order_entry` / `actions::market_entry`) |
+| `market_order(market, side, qty)`               | `PlaceOrders` of one market entry (IOC); a refused order is the receipt's error |
+| `place_entry(entry)`                            | `PlaceOrders` of one entry of any kind, e.g. `actions::market_entry(market, side, qty, Some(worst_price))` |
+| `cancel_order(order_id)`                        | `CancelOrders` of one; nothing to cancel is the receipt's error           |
+| `cancel_order_by_client_id(client_order_id)`    | `CancelClientOrders` of one, same                                         |
+| `cancel_orders(Vec<OrderId>)`                   | `CancelOrders`: 1 to 100 order ids, each cancelled or refused on its own  |
+| `cancel_client_orders(Vec<u64>)`                | `CancelClientOrders`: 1 to 100 client order ids, the same                 |
 | `cancel_all_orders(Option<market>)`             | `CancelAllOrders`                                                         |
 | `amend_order(order_id, new_price, new_qty)`     | `AmendOrder` (same-price size cuts keep priority)                         |
 | `cancel_replace_order(order_id, order)`         | `CancelReplaceOrder`                                                      |
 | `cancel_replace_order_by_client_id(cid, order)` | `CancelReplaceOrder`, cancelling by client id                             |
-| `close_position(market)`                        | `ClosePosition`                                                           |
+| `close_position(market)`                        | reads the position, then a reduce-only market entry on the other side for its size; `CloseOutcome::NothingToClose` without sending when flat |
 | `submit(&action)`                               | sign with the next nonce, `POST /exchange` once                           |
 | `submit_and_wait(&action, timeout)`             | `submit`, then wait if the verdict is pending                             |
 | `sign(&action)` / `send(&signed_tx)`            | the two halves, for pre-signing on a hot path                             |
@@ -112,7 +115,7 @@ Beyond orders:
 
 | Helper                                               | Action                                                                          |
 | ---------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `buy_no` / `sell_no(&market_config, price, qty)`     | `PlaceOrder` on the Yes book at `$1 - price`, opposite side; refuses a market that is not a binary book, 0 and `$1` |
+| `buy_no` / `sell_no(&market_config, price, qty)`     | One order on the Yes book at `$1 - price`, opposite side; refuses a market that is not a binary book, 0 and `$1` |
 | `set_position_triggers` / `cancel_position_triggers` | `SetPositionTriggers` / `CancelPositionTriggers` for one position epoch         |
 | `approve_agent` / `revoke_agent(agent_key)`          | `ApproveAgent` / `RevokeAgent`                                                  |
 | `create_sub_account(SubAccountId, name)`             | `CreateSubAccount` (address: `actions::sub_account_address`); id 0 cannot be built |
@@ -142,6 +145,25 @@ computed hash, a `TxStatus`, and `retry_after: Option<Duration>`:
 | `Pending`            | Admitted without a verdict yet; call `wait_for_receipt`.                                                             |
 | `Refused(reason)`    | Turned away by the gateway (`Unauthorized`, `RateLimited`, `Paused`, `CancelOnly`, `Unavailable`, `InvalidRequest`). |
 
+A list (`place_orders`, `cancel_orders`, `cancel_client_orders`) commits with
+no error whatever its entries did: `receipt.placements()` and
+`receipt.cancellations()` say what each entry did, in the order sent, with
+the code of each one refused. An order done without resting is `Executed`
+with its `requested_quantity`, `filled_quantity` and `unfilled` reason. The
+single helpers (`place_order`, `place_entry`, `market_order`, `cancel_order`,
+`cancel_order_by_client_id`, `buy_no`, `sell_no`) send a list of one and
+report its refusal as `receipt.error`, as before lists. `close_position`
+returns `CloseOutcome::Closed(submitted)` with the same refusal reporting, or
+`CloseOutcome::NothingToClose` when the account holds no position on the
+market (nothing is sent). `wait_for_receipt` reads a reconciled receipt the
+same way without knowing what was sent: a list of one whose entry was
+refused is `receipt.error`. An executed transaction whose list event does
+not parse, or (from a helper) does not report one entry per order sent, is
+`Error::OrderResultUnreadable { receipt, reason }`: it executed, so reconcile
+`receipt.hash` and never sign it again. A basket's legs are
+`receipt.placements()` too, in order; a failed basket is `receipt.error` with
+every leg rejected.
+
 `TxStatus` is exhaustive, so a `match` decides every case. Only `Committed`
 executed; `Pending` may still.
 
@@ -151,10 +173,10 @@ checks. An `EngineError` is `Known(ErrorKind)` (`InsufficientMargin`,
 `is_order_not_found()` says a cancel or replace found nothing to act on.
 
 The gateway answers once the transaction is in a block, so the receipt
-carries its events, typed, in emission order: `Event::OrderPlaced` carries
-the resting order's `order_id` (a basket or cancel-replace can emit several),
-and `Event::Fill` is each fill it took. An order that fully fills on arrival
-emits no `OrderPlaced`. Every account-level event carries the `owner` it
+carries its events, typed, in emission order: `Event::OrdersPlaced` lists
+every order a placement sent, resting (with its `order_id`), executed or
+rejected, `Event::OrdersCancelled` every order that left the book, and
+`Event::Fill` is each fill it took. Every account-level event carries the `owner` it
 happened to: a fill updates the maker's position as well as yours, in the same
 receipt. A kind this SDK does not type stays raw in
 `Event::Other`; a typed kind whose attributes do not read stays raw in
@@ -167,12 +189,14 @@ rejections and gateway refusals are `TxStatus`, not errors. When a
 submission may have landed without a verdict (transport failure, 5xx,
 unreadable answer), every submitting call, the order helpers included,
 returns `Error::Unconfirmed { tx, source }` with the exact signed transaction.
-Any other `Err` means nothing executed.
+`Error::OrderResultUnreadable` means it executed but its order result did not
+read. Any other `Err` means nothing executed.
 
 ```rust,ignore
 match client.place_order(order).await {
     Ok(s) => { /* verdict */ }
     Err(Error::Unconfirmed { tx, .. }) => { /* wait_for_receipt(tx.hash), or send(&tx) again */ }
+    Err(Error::OrderResultUnreadable { receipt, .. }) => { /* executed: reconcile receipt.hash */ }
     Err(e) => { /* not sent */ }
 }
 ```
@@ -261,8 +285,8 @@ while let Some(msg) = rx.recv().await {                      // or use it as a `
                     (f.taker_side(), f.taker_fee)
                 };
             }
-            Event::OrderPlaced(o) => {}                       // o.order_id, keyed by o.client_order_id
-            Event::OrderCancelled(c) => {}
+            Event::OrdersPlaced(p) => {}                      // p.orders: each order's outcome and client_order_id
+            Event::OrdersCancelled(c) => {}                   // c.reason, c.orders
             Event::PositionUpdated(p) => {}
             _ => {}                                           // `Other` / `Malformed`: raw attributes
         },
@@ -287,11 +311,12 @@ while let Some(msg) = rx.recv().await {                      // or use it as a `
   ported). Reconcile through `InfoClient::open_orders` / `account_state` (balance
   and positions at a block height) if a missed fill matters.
 - **Account events are typed** with the same `Event` as receipts: `Fill`,
-  `OrderPlaced`, `OrderCancelled`, `OrderAmended`, `OrderRejected`,
-  `MarketOrderProcessed`, `PositionUpdated`, `PositionClosed`,
-  `FundingSettled`, `Deposited`, and at resolution `EventResolved`,
-  `PredictionSettled`, `ConditionMet`, `ConditionNotMet` and
-  `PositionTriggersInvalidated`. Any other kind is `Event::Other`, and a known
+  `OrdersPlaced`, `OrdersCancelled`, `OrderAmended`, `PositionUpdated`,
+  `PositionClosed`, `FundingSettled`, `Deposited`, and at resolution
+  `EventResolved`, `PredictionSettled`, `ConditionMet`, `ConditionNotMet` and
+  `PositionTriggersInvalidated`. `OrderPlaced`, `OrderCancelled`,
+  `OrderRejected` and `MarketOrderProcessed` are no longer emitted and still
+  decode from stored history. Any other kind is `Event::Other`, and a known
   kind whose payload does not read is `Event::Malformed`; both carry the
   engine event name and raw attributes. `tx_hash` is the causing
   transaction's `TxHash`, `None` for block events (funding, expiry);
@@ -304,9 +329,9 @@ while let Some(msg) = rx.recv().await {                      // or use it as a `
   delivered. A refused subscription is dropped, so subscribing again retries
   it. The feed has no sequence numbers, so a long-quiet book is worth
   resyncing.
-- **Order ids.** Your own submission's receipt events carry them
-  (`Event::OrderPlaced`). `OrderPlaced` on the feed carries the same id, with your
-  `client_order_id`, for orders placed by another process.
+- **Order ids.** Your own submission's receipt carries them
+  (`receipt.placements()`). `OrdersPlaced` on the feed carries the same ids, with
+  your `client_order_id`s, for orders placed by another process.
 - **Backpressure.** Messages buffer up to `WsConfig::with_buffer` (default 4096). A
   consumer that falls further behind pauses socket reads; frames queued behind
   it still count as signs of life, so a slow consumer does not drop a busy

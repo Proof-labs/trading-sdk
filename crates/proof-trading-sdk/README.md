@@ -42,13 +42,14 @@ key. This block is illustrative; the same example is compiled as a doctest in
 
 ```rust,ignore
 use ed25519_dalek::SigningKey;
-use proof_trading_sdk::{codec, crypto, types::{Action, PlaceOrder, Side, TimeInForce}};
+use proof_trading_sdk::{codec, crypto, types::{Action, PlaceOrder, PlaceOrders, Side, TimeInForce}};
 
 let key = SigningKey::from_bytes(&[7u8; 32]);
 let owner = crypto::pubkey_to_owner(&key.verifying_key().to_bytes());
 let chain_id = crypto::chain_id_from_string("exchange-devnet-1");
 
-let action = Action::PlaceOrder(PlaceOrder {
+// One order is a `PlaceOrders` (0x01) list of one.
+let action = Action::PlaceOrders(PlaceOrders::one(PlaceOrder {
     market: 1,
     owner,
     side: Side::Buy,
@@ -58,7 +59,7 @@ let action = Action::PlaceOrder(PlaceOrder {
     post_only: true,
     time_in_force: TimeInForce::Gtc,
     ..Default::default()
-});
+}));
 
 // `seq` is a wall-clock-millisecond timestamp nonce, unique per signature.
 // The engine accepts it only within [block time - 2 days, block time + 1 day].

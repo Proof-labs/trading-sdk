@@ -9,7 +9,8 @@ import type { GatewayRefusalCode, TxEvent, TxResult } from "./types.js";
  *
  * The numeric `code` field continues to carry 0 for success, engine
  * `ExecError` values 1..53/255 (codes 51-53 added in SDK 3.0.0),
- * synthesized HTTP 401/429/413/500/1, or `-1` for timeout. The `outcome` tag
+ * synthesized HTTP 401/429/413/500/1, or `-1` for timeout or an unreadable
+ * order result. The `outcome` tag
  * lets callers tell an engine rejection apart from a transport failure that
  * happens to reuse a small integer `code`.
  */
@@ -111,6 +112,25 @@ export function txRefusal(
  */
 export function txTimeout(hash: string, log: string): TxResult {
   return { ok: false, outcome: "timeout", code: -1, error: null, hash, log };
+}
+
+/**
+ * An executed code-0 transaction whose order list event did not read
+ * (`code === -1`). It keeps the hash, height and raw events: the transaction
+ * committed, so reconcile by `hash` and never resubmit.
+ */
+export function txUnreadable(tx: TxResult, log: string): TxResult {
+  return {
+    ok: false,
+    outcome: "unreadable",
+    code: -1,
+    error: null,
+    hash: tx.hash,
+    height: tx.height,
+    log,
+    ...(tx.info !== undefined ? { info: tx.info } : {}),
+    events: tx.events,
+  };
 }
 
 /**

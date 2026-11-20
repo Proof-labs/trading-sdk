@@ -1206,6 +1206,25 @@ mod tests {
         assert_eq!((c.order_id, c.client_order_id), (3_211_376, Some(9)));
         assert_eq!(c.reason, CancelReason::UserRequested);
 
+        let m = message(
+            r#"{"channel":"accountEvents","type":"orderUpdate","eventType":"orders_cancelled","owner":"bdae2ddf5bde1e6a5be62bcd9e008106fca6dfd9","height":9,"txHash":"8D4D7F2C1A5E0B6F3C9A2E7D1B4F8A6C0E3D5B7A9C1E2F4A6B8D0C2E4F6A8B0C","payload":{"owner":"bdae2ddf5bde1e6a5be62bcd9e008106fca6dfd9","reason":"expired","orders":"[{\"outcome\":\"cancelled\",\"order_id\":\"3211376\",\"market\":\"1\",\"client_order_id\":\"9\",\"original_quantity\":\"260\",\"remaining_quantity\":\"259\",\"filled_quantity\":\"1\"}]"}}"#,
+        );
+        let WsMessage::AccountEvent(e) = m else {
+            panic!("{m:?}")
+        };
+        let Event::OrdersCancelled(c) = &e.event else {
+            panic!("{:?}", e.event)
+        };
+        assert_eq!(c.reason, CancelReason::Expired);
+        assert!(matches!(
+            c.orders.as_slice(),
+            [crate::OrderCancellation::Cancelled {
+                order_id: 3_211_376,
+                client_order_id: Some(9),
+                ..
+            }]
+        ));
+
         // A payload that does not match its event stays raw rather than mistyped.
         let m = message(
             r#"{"channel":"accountEvents","type":"fill","eventType":"trade_executed","owner":"bdae2ddf5bde1e6a5be62bcd9e008106fca6dfd9","height":8,"txHash":"height-8-kind-block-event-0","payload":{"price":"1"}}"#,

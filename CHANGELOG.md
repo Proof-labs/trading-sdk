@@ -9,11 +9,102 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Order placement and cancels as lists (exchange#1513, #1514): `PlaceOrders`
+  (0x01), `CancelOrders` (0x02) and `CancelClientOrders` (0x18) carry 1 to 100
+  entries for one account under one signature, each placed or cancelled on its
+  own; the transaction succeeds and one `orders_placed` / `orders_cancelled`
+  event reports every entry. A `PlaceOrders` entry is a limit or a market
+  order; a market entry takes an optional worst price that stops the walk
+  through the book.
+  - TypeScript: `client.placeOrders` / `cancelOrders` / `cancelClientOrders`
+    returning `{ tx, orders }` per entry; `OrderEntry` (`LimitOrderEntry` |
+    `MarketOrderEntry` with `kind: "market"`), `MAX_LIST_ENTRIES`,
+    `decodeOrderListEvent`, `orderPlacements`, `orderCancellations`,
+    `UnfilledReason`; `worstPrice` and `reduceOnly` on `MarketOrder`;
+    `CloseOutcome`.
+  - Python: `PlaceOrders` / `CancelOrders` / `CancelClientOrders` /
+    `OrderEntry` (`OrderEntry.market_order(...)`, `kind`, `worst_price`),
+    `ExchangeClient.place_orders` / `cancel_orders` / `cancel_client_orders`
+    returning `OrderPlacement` / `OrderCancellation` lists, top-level
+    `order_placements` / `order_cancellations`; `worst_price` and
+    `reduce_only` on `MarketOrder`; `ExchangeClient.close_position` returning
+    `Closed` / `NothingToClose` (`CloseOutcome`).
+  - Rust (`proof-sdk-rs`): `ExchangeClient::place_orders` / `cancel_orders` /
+    `cancel_client_orders` / `place_entry`, `actions::place_orders` /
+    `cancel_orders` / `cancel_client_orders` / `order_entry` / `market_entry` /
+    `place_entry`, `Receipt::placements` / `cancellations`,
+    `Event::OrdersPlaced` / `OrdersCancelled`, `CloseOutcome`, `OrderKind`
+    and `UnfilledReason` re-exports.
+- An executed entry (done without resting) reports `requested_quantity`,
+  `filled_quantity` and the `unfilled` reason in every SDK.
+- An executed order or list whose `orders_placed` / `orders_cancelled` event
+  does not read (malformed, or from a call that knows what it sent, missing or
+  not one entry per order sent) is reported as executed and unreadable, never
+  as success or as a retryable error: TypeScript `outcome: "unreadable"`
+  (`code: -1`, hash and height kept; a list method returns no `orders`),
+  Python `OrderResultUnreadable(tx_hash)`, Rust
+  `Error::OrderResultUnreadable { receipt, reason }`. Reconcile by hash.
+- Python `check_order_result(tx_hash, events)` reads a reconciled
+  transaction's order list (e.g. `transaction_evidence(...).events`) as
+  `submit` does.
 - **Rust core:** `market_snapshot::decode_snapshot_view` decodes a complete
   `GET /v2/markets-snapshot` body, bound to a chain, into proof-wire's
   `query_v2` view (`market_snapshot::MarketsSnapshotView`). A record that is
   not a map keyed by field name, or a name that is not a string (a status
   sent as the integer 0, for example), refuses the whole read.
+
+### Changed
+
+- The single-order calls keep their signatures and error behaviour:
+  `placeOrder`, `marketOrder`, `cancelOrder`, `cancelClientOrder`
+  (TypeScript), `submit` of `PlaceOrder` / `MarketOrder` / `CancelOrder` /
+  `CancelClientOrder` (Python) and `place_order`, `market_order`,
+  `cancel_order`, `cancel_order_by_client_id`, `buy_no`, `sell_no` (Rust).
+  They send a list of one; when that entry is refused they return or raise
+  the same engine error as before, though the transaction itself now
+  succeeds. A pending result reconciled later (`waitForDelivery` with or
+  without its action, Python `check_order_result`, Rust `wait_for_receipt`)
+  maps a refused list of one to the same error. The single names stay as
+  aliases of the list bytes (`ActionType.PlaceOrder` / `MarketOrder` on 0x01,
+  `CancelOrder` on 0x02, `CancelClientOrder` on 0x18).
+- Close position (`closePosition` in TypeScript, `close_position` in Rust,
+  and the new `ExchangeClient.close_position` in Python) reads the account's
+  position and sends a reduce-only market order on the opposite side for its
+  size. It now returns a close outcome instead of a transaction result: closed
+  with the transaction (TypeScript `{ kind: "closed", tx }`, Python
+  `Closed(tx)`, Rust `CloseOutcome::Closed(submitted)`), or nothing to close on
+  a flat account, sent without a transaction (`{ kind: "nothingToClose" }`,
+  `NothingToClose()`, `CloseOutcome::NothingToClose`). A refused close is the
+  engine error: code 12 when the account cannot afford it, code 35 when the
+  position went flat before the close ran.
+- `AtomicBasketOrder` leg outcomes are read from `orders_placed`
+  (`orderPlacements` / `order_placements` / `Receipt::placements`); a failed
+  basket reports every leg rejected with the transaction's code.
+- Account streams treat `orders_placed` / `orders_cancelled` as order updates.
+  `order_placed`, `order_cancelled`, `order_rejected` and
+  `market_order_processed` are no longer emitted and still decode from stored
+  history.
+- Needs the wire of exchange#1514 (proof-wire pinned to its head).
+
+### Removed
+
+- Action bytes 0x01 (`PlaceOrder`), 0x02 (`CancelOrder`), 0x04
+  (`MarketOrder`), 0x17 (`ClosePosition`) and 0x18 (`CancelClientOrder`) are
+  retired by the wire and no longer encode or decode in any SDK; the stale
+  `crates/spec/golden-vectors/place_order.hex` and `cancel_order.hex` go
+  with them.
+- The raw `ClosePosition` action is removed from every SDK; close with
+  `closePosition` / `close_position`, or send a reduce-only market order.
+  TypeScript drops the `ClosePosition` type; Python drops the `ClosePosition`
+  class (and `client.submit(ClosePosition(...))`); Rust drops
+  `actions::close_position`.
+- Python: `decode_action` of order bytes returns the list form.
+- Rust: `Action::PlaceOrder` / `CancelOrder` / `CancelClientOrder` are
+  `Action::PlaceOrders` / `CancelOrders` / `CancelClientOrders` (build one
+  with `actions::place_order(order)` or `PlaceOrders::one(order)`);
+  `Action::MarketOrder` / `ClosePosition` and the `MarketOrder` re-export are
+  gone; `actions::market_order` returns `Action`; `PlacementOutcome::Executed`
+  gained fields.
 
 ## [14.0.0] — 2026-11-20
 

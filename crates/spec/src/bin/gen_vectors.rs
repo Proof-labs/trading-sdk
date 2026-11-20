@@ -72,6 +72,54 @@ fn attach_fields() -> serde_json::Value {
     })
 }
 
+/// A `PlaceOrders` limit entry with no client id, not reduce-only, no limbs.
+fn limit_entry(
+    market: u32,
+    side: &str,
+    price: u64,
+    quantity: u64,
+    time_in_force: &str,
+    post_only: bool,
+) -> serde_json::Value {
+    json!({
+        "market": market, "side": side, "quantity": quantity,
+        "kind": { "Limit": { "price": price, "time_in_force": time_in_force, "post_only": post_only } },
+        "reduce_only": false, "client_order_id": null, "stop_loss": null, "take_profit": null
+    })
+}
+
+/// A `PlaceOrders` market entry with no client id, not reduce-only, no limbs.
+fn market_entry(
+    market: u32,
+    side: &str,
+    quantity: u64,
+    worst_price: Option<u64>,
+) -> serde_json::Value {
+    json!({
+        "market": market, "side": side, "quantity": quantity,
+        "kind": { "Market": { "worst_price": worst_price } },
+        "reduce_only": false, "client_order_id": null, "stop_loss": null, "take_profit": null
+    })
+}
+
+/// `entry` with `key` set to `value`.
+fn with(mut entry: serde_json::Value, key: &str, value: serde_json::Value) -> serde_json::Value {
+    if let Some(fields) = entry.as_object_mut() {
+        fields.insert(key.to_owned(), value);
+    }
+    entry
+}
+
+/// The engine's golden stop-loss limb.
+fn stop_loss() -> serde_json::Value {
+    json!({ "trigger_price": 95_000u64, "max_slippage_bps": 75u32, "client_trigger_id": 11u64 })
+}
+
+/// The engine's golden take-profit limb.
+fn take_profit() -> serde_json::Value {
+    json!({ "trigger_price": 110_000u64, "max_slippage_bps": 50u32, "client_trigger_id": 12u64 })
+}
+
 fn codec_case(case: &str, action_type: u8, input: serde_json::Value) -> cv::CodecCase {
     let payload = cv::codec_payload(action_type, &input)
         .unwrap_or_else(|e| panic!("codec_payload failed for {case}: {e}"));
@@ -143,10 +191,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Action-type bytes (kept inline; the runners read action_type from the
     // vectors, and Python/TS map names→bytes via the core's get_action_types).
-    const PLACE_ORDER: u8 = 0x01;
-    const CANCEL_ORDER: u8 = 0x02;
-    const MARKET_ORDER: u8 = 0x04;
-    const CLOSE_POSITION: u8 = 0x17;
+    const PLACE_ORDERS: u8 = cv::PLACE_ORDERS;
+    const CANCEL_ORDERS: u8 = 0x02;
+    const CANCEL_CLIENT_ORDERS: u8 = 0x18;
+    // Retired bytes, kept only to sign the frozen envelopes below.
+    const RETIRED_PLACE_ORDER: u8 = 0x01;
+    const RETIRED_MARKET_ORDER: u8 = 0x04;
     const CONFIRM_DEPOSIT: u8 = 0x09;
     const CREATE_MARKET: u8 = 0x07;
     const UPDATE_MARKET_FEES: u8 = 0x10;
@@ -173,7 +223,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     const CLAIM_WITHDRAWAL_PAYOUT: u8 = 0x2e;
     const RECORD_WITHDRAWAL_PAYOUT: u8 = 0x31;
     const SET_USER_MARKET_LEVERAGE: u8 = 0x16;
-    const CANCEL_CLIENT_ORDER: u8 = 0x18;
     const CANCEL_ALL_ORDERS: u8 = 0x19;
     const CANCEL_REPLACE_ORDER: u8 = 0x1a;
     const AMEND_ORDER: u8 = 0x1b;
@@ -185,48 +234,89 @@ fn main() -> Result<(), Box<dyn Error>> {
     let signer = vec![0x03u8; 20];
 
     // ── codec family ─────────────────────────────────────────────────────
-    // Trigger expansion (proof-wire 2.1.0): the engine's frozen vectors from
-    // Proof-labs/exchange `exchange-wire/vectors/`. The .hex files there are
-    // FULL SIGNED ENVELOPES (test key
-    // 0x42×32, UNBOUND_CHAIN_ID); the payload segment of each is pinned here
-    // byte-exactly, and the full envelopes themselves are pinned in the
-    // signing family below (`…@seqN/unbound` cases). `place_order_no_triggers`
-    // freezes the pre-2.1.0 byte string (no trailing nils) — non-canonical by
-    // design now — so its codec row pins the 2.1.0 canonical form (trailing
-    // nils) while the old bytes ride the signing row + the TS decode-compat
-    // round-trip test.
+    // Cases pinned to the engine's frozen `exchange-wire/vectors/` payloads
+    // name them in a comment; the rest are the core's own encodings.
     let codec = vec![
+        // Order lists (0x01, 0x02, 0x18): a single order is a list of one. A
+        // `PlaceOrders` entry carries its kind, limit or market.
         codec_case(
-            "place_order/min",
-            PLACE_ORDER,
-            json!({
-                "market": 1, "owner": owner, "side": "Buy",
-                "price": 100, "quantity": 10, "client_order_id": null,
-                "post_only": false, "reduce_only": false, "time_in_force": "Gtc"
-            }),
+            "place_orders/limit_min",
+            PLACE_ORDERS,
+            json!({ "owner": owner, "orders": [limit_entry(1, "Buy", 100, 10, "Gtc", false)] }),
         ),
         codec_case(
-            "place_order/flags_cloid_ioc",
-            PLACE_ORDER,
-            json!({
-                "market": 7, "owner": owner, "side": "Sell",
-                "price": 6675000u64, "quantity": 3, "client_order_id": 99u64,
-                "post_only": true, "reduce_only": false, "time_in_force": "Ioc"
-            }),
+            "place_orders/limit_flags_cloid_ioc",
+            PLACE_ORDERS,
+            json!({ "owner": owner, "orders": [
+                with(limit_entry(7, "Sell", 6675000u64, 3, "Ioc", true), "client_order_id", json!(99u64))
+            ] }),
         ),
         codec_case(
-            "place_order/max_u64",
-            PLACE_ORDER,
-            json!({
-                "market": 4294967295u32, "owner": vec![0xFFu8; 20], "side": "Sell",
-                "price": u64::MAX, "quantity": u64::MAX, "client_order_id": u64::MAX,
-                "post_only": false, "reduce_only": true, "time_in_force": "Fok"
-            }),
+            "place_orders/limit_max_u64",
+            PLACE_ORDERS,
+            json!({ "owner": vec![0xFFu8; 20], "orders": [with(
+                with(limit_entry(4294967295u32, "Sell", u64::MAX, u64::MAX, "Fok", false),
+                     "reduce_only", json!(true)),
+                "client_order_id", json!(u64::MAX))
+            ] }),
         ),
         codec_case(
-            "cancel_order/basic",
-            CANCEL_ORDER,
-            json!({ "order_id": 42, "owner": vec![0x02u8; 20] }),
+            "place_orders/limit_with_triggers",
+            PLACE_ORDERS,
+            json!({ "owner": owner, "orders": [with(
+                with(limit_entry(1, "Buy", 100, 10, "Gtc", false), "stop_loss", stop_loss()),
+                "take_profit", take_profit())
+            ] }),
+        ),
+        codec_case(
+            "place_orders/market_basic",
+            PLACE_ORDERS,
+            json!({ "owner": owner, "orders": [market_entry(3, "Buy", 250, None)] }),
+        ),
+        codec_case(
+            "place_orders/market_worst_price_with_triggers",
+            PLACE_ORDERS,
+            json!({ "owner": owner, "orders": [
+                with(market_entry(1, "Sell", 10, Some(95_000)), "stop_loss", stop_loss())
+            ] }),
+        ),
+        // A close: a reduce-only market entry on the position's other side.
+        codec_case(
+            "place_orders/close",
+            PLACE_ORDERS,
+            json!({ "owner": owner, "orders": [
+                with(market_entry(2, "Sell", 5, None), "reduce_only", json!(true))
+            ] }),
+        ),
+        // The engine's frozen `place_orders_list.hex` payload, byte for byte.
+        codec_case(
+            "place_orders/engine_list",
+            PLACE_ORDERS,
+            json!({ "owner": vec![0x0Au8; 20], "orders": [
+                with(with(limit_entry(1, "Buy", 99_000_000u64, 10, "Gtc", true),
+                          "client_order_id", json!(1u64)), "stop_loss", stop_loss()),
+                with(market_entry(2, "Sell", 10, Some(101_000_000)), "reduce_only", json!(true)),
+            ] }),
+        ),
+        codec_case(
+            "cancel_orders/one",
+            CANCEL_ORDERS,
+            json!({ "owner": vec![0x02u8; 20], "order_ids": [42] }),
+        ),
+        codec_case(
+            "cancel_orders/two_orders",
+            CANCEL_ORDERS,
+            json!({ "owner": vec![0x02u8; 20], "order_ids": [42, 43] }),
+        ),
+        codec_case(
+            "cancel_client_orders/one",
+            CANCEL_CLIENT_ORDERS,
+            json!({ "owner": owner, "client_order_ids": [99u64] }),
+        ),
+        codec_case(
+            "cancel_client_orders/two_orders",
+            CANCEL_CLIENT_ORDERS,
+            json!({ "owner": owner, "client_order_ids": [99u64, 100u64] }),
         ),
         codec_case(
             "submit_oracle_observation/max_u64_with_confidence",
@@ -241,17 +331,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             json!({"market": 1, "policy_version": 1, "source_id": 1,
                    "publish_time_ms": 1700000000123u64, "price_micro": 67000000000u64,
                    "confidence_micro": null, "evidence_digest": vec![0x5Au8;32], "signer": signer}),
-        ),
-        codec_case(
-            "market_order/basic",
-            MARKET_ORDER,
-            json!({ "market": 3, "owner": owner, "side": "Buy",
-                    "quantity": 250, "client_order_id": null }),
-        ),
-        codec_case(
-            "close_position/basic",
-            CLOSE_POSITION,
-            json!({ "market": 2, "owner": owner }),
         ),
         // ConfirmDeposit (0x09) with the trailing DepositLocator. Mirrors the
         // engine's own `all_action_variants` fixture (owner 0x55, amount
@@ -942,13 +1021,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             SET_USER_MARKET_LEVERAGE,
             json!({ "owner": owner, "market": 7, "user_im_bps": 2000 }),
         ),
-        // Order management: cancel-by-cloid, cancel-all (scoped + global),
+        // Order management: cancel-all (scoped + global),
         // cancel-replace (by order id + by client id), amend (populated + null).
-        codec_case(
-            "cancel_client_order/basic",
-            CANCEL_CLIENT_ORDER,
-            json!({ "owner": owner, "client_order_id": 99u64 }),
-        ),
         codec_case(
             "cancel_all_orders/market_scoped",
             CANCEL_ALL_ORDERS,
@@ -1022,54 +1096,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "expected_position_epoch": 3u64
             }),
         ),
-        // F2 frozen vectors (payload segments of the exchange envelopes):
-        // place_order with both limbs, post_only/reduce_only/GTC set.
-        codec_case(
-            "place_order/with_triggers",
-            PLACE_ORDER,
-            json!({
-                "market": 1, "owner": owner, "side": "Buy",
-                "price": 100, "quantity": 10, "client_order_id": null,
-                "post_only": false, "reduce_only": false, "time_in_force": "Gtc",
-                "stop_loss": {
-                    "trigger_price": 95_000u64,
-                    "max_slippage_bps": 75u32,
-                    "client_trigger_id": 11u64
-                },
-                "take_profit": {
-                    "trigger_price": 110_000u64,
-                    "max_slippage_bps": 50u32,
-                    "client_trigger_id": 12u64
-                }
-            }),
-        ),
-        // Same order without limbs: the 2.1.0 canonical form carries the two
-        // trailing nils (pre-2.1.0 encoders emitted the 9-field array that
-        // `place_order_no_triggers@seq2/unbound` freezes below).
-        codec_case(
-            "place_order/no_triggers_canonical",
-            PLACE_ORDER,
-            json!({
-                "market": 1, "owner": owner, "side": "Buy",
-                "price": 100, "quantity": 10, "client_order_id": null,
-                "post_only": false, "reduce_only": false, "time_in_force": "Gtc"
-            }),
-        ),
-        // market_order with a stop-loss limb only.
-        codec_case(
-            "market_order/with_triggers",
-            MARKET_ORDER,
-            json!({
-                "market": 1, "owner": owner, "side": "Sell",
-                "quantity": 10, "client_order_id": null,
-                "stop_loss": {
-                    "trigger_price": 95_000u64,
-                    "max_slippage_bps": 75u32,
-                    "client_trigger_id": 11u64
-                },
-                "take_profit": null
-            }),
-        ),
         // cancel_replace with a take-profit limb only.
         codec_case(
             "cancel_replace_order/with_triggers",
@@ -1115,15 +1141,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     // ── signing family ───────────────────────────────────────────────────
     let unbound = [0u8; 32];
     let sk = [0x42u8; 32];
-    let po_payload = cv::codec_payload(
-        PLACE_ORDER,
-        &json!({
-            "market": 1, "owner": vec![0x01u8; 20], "side": "Buy",
-            "price": 100, "quantity": 10, "client_order_id": null,
-            "post_only": false, "reduce_only": false, "time_in_force": "Gtc"
-        }),
+    // Signing pins envelope framing over opaque payload bytes: the retired
+    // 0x01 `place_order/min` payload, which no longer decodes.
+    let po_payload = hex::decode(
+        "9b01dc00140101010101010101010101010101010101010101a3427579640ac0c2c2a3477463c0c0",
     )?;
-    let envelope = cv::sign_envelope(&unbound, PLACE_ORDER, 1, &po_payload, &sk)?;
+    let envelope = cv::sign_envelope(&unbound, RETIRED_PLACE_ORDER, 1, &po_payload, &sk)?;
     let guard_chain = [0x11u8; 32];
     let guard_payload = cv::codec_payload(
         PROPOSE_ADMIN_ACTION,
@@ -1155,7 +1178,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         cv::SigningCase::Sign {
             case: "place_order/min@seq1/unbound".to_string(),
             chain_id: unbound.to_vec(),
-            action_type: PLACE_ORDER,
+            action_type: RETIRED_PLACE_ORDER,
             seq: 1,
             payload_hex: hex::encode(&po_payload),
             secret_key: sk.to_vec(),
@@ -1174,12 +1197,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     ];
 
     // ── Frozen envelopes (proof-wire 2.1.0) ──────────────────────────────
-    // Byte-exact pins of Proof-labs/exchange `exchange-wire/vectors/*.hex`:
-    // full signed envelopes, test key 0x42×32 over UNBOUND_CHAIN_ID. Generation panics if the core's
-    // envelope framing drifts from the engine's frozen bytes. The
-    // `no_triggers` row signs the pre-2.1.0 9-field payload verbatim —
-    // old bytes keep verifying; canonical 2.1.0 encodes add the two
-    // trailing nils (see the codec row + TS decode-compat test).
+    // Byte-exact signed envelopes the engine froze (test key 0x42×32 over
+    // UNBOUND_CHAIN_ID). Generation panics if the core's envelope framing
+    // drifts from them. The 0x01 and 0x04 payloads are retired and no longer
+    // decode; they still pin signing over opaque bytes.
     fn frozen_envelope_case(
         case: &str,
         action_type: u8,
@@ -1213,7 +1234,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let frozen: Vec<cv::SigningCase> = vec![
         frozen_envelope_case(
             "place_order/with_triggers@seq1/unbound",
-            PLACE_ORDER,
+            RETIRED_PLACE_ORDER,
             1,
             "9b01dc00140101010101010101010101010101010101010101a3427579640ac0c2c2a347746393ce000173184b0b93ce0001adb0320c",
             "96020101c4369b01dc00140101010101010101010101010101010101010101a3427579640ac0c2c2a347746393ce000173184b0b93ce0001adb0320cc4202152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12c440dc991c8b31063e6cd1d26cd61e3dcf91f6af2e1d9092db51ca49808316e7b3640c3f9622cb55036adbb39424508f56e1e5acdb59aa56088d2ecea3d309307e05",
@@ -1222,7 +1243,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         ),
         frozen_envelope_case(
             "place_order_no_triggers@seq2/unbound",
-            PLACE_ORDER,
+            RETIRED_PLACE_ORDER,
             2,
             "9901dc00140101010101010101010101010101010101010101a3427579640ac0c2c2a3477463",
             "96020102c4269901dc00140101010101010101010101010101010101010101a3427579640ac0c2c2a3477463c4202152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12c44063588d198e83ae1e4862432b1cf58d23fc95c6638db6e0b0c2d76b2248552a67d4200214b0299aff617aab73b91183e43def96d0e23b3d83be22a75722460b0d",
@@ -1231,7 +1252,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         ),
         frozen_envelope_case(
             "market_order/with_triggers@seq4/unbound",
-            MARKET_ORDER,
+            RETIRED_MARKET_ORDER,
             4,
             "9701dc00140101010101010101010101010101010101010101a453656c6c0ac093ce000173184b0bc0",
             "96020404c4299701dc00140101010101010101010101010101010101010101a453656c6c0ac093ce000173184b0bc0c4202152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12c4407da0887ef1326b5a33afa7d640c19ff1247cf510f1031ab2b087034133296bd93222a52cf0f02219b3ad3d18ba81f7e1e9bc990357412055d101da65b272b007",
@@ -1560,6 +1581,48 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "balance_after": 6_250_000u64,
                 "settlement_balance_before": 5_000_000u64,
                 "settlement_balance_after": 6_000_000u64,
+            }}),
+        ),
+        // List events: every placement outcome and both cancel entries.
+        (
+            "orders_placed/every_outcome",
+            json!({"OrdersPlaced": {
+                "owner": vec![0xA1u8; 20],
+                "orders": [
+                    {"market": 7, "client_order_id": 3001u64, "outcome": {"Resting": {
+                        "order_id": 2001u64, "side": "Buy", "price": 100_000_000u64,
+                        "quantity": 5u64, "time_in_force": "Gtc", "post_only": true,
+                        "reduce_only": false,
+                    }}},
+                    {"market": 7, "client_order_id": null,
+                     "outcome": {"Executed": {
+                        "order_id": 2002u64, "requested_quantity": 10u64,
+                        "filled_quantity": 4u64, "unfilled": "NoLiquidity",
+                     }}},
+                    {"market": 7, "client_order_id": 3004u64,
+                     "outcome": {"Executed": {
+                        "order_id": 2003u64, "requested_quantity": 6u64,
+                        "filled_quantity": 6u64, "unfilled": null,
+                     }}},
+                    {"market": 7, "client_order_id": 3003u64,
+                     "outcome": {"Rejected": {"code": 22}}},
+                ],
+            }}),
+        ),
+        (
+            "orders_cancelled/user_requested",
+            json!({"OrdersCancelled": {
+                "owner": vec![0xA1u8; 20],
+                "reason": "UserRequested",
+                "orders": [
+                    {"Cancelled": {
+                        "order_id": 2001u64, "market": 7, "client_order_id": null,
+                        "original_quantity": 5u64, "remaining_quantity": 3u64,
+                        "filled_quantity": 2u64,
+                    }},
+                    {"Refused": {"target": {"OrderId": 2004u64}, "code": 2}},
+                    {"Refused": {"target": {"ClientOrderId": 3005u64}, "code": 44}},
+                ],
             }}),
         ),
     ];

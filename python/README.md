@@ -529,9 +529,11 @@ newer than this package.
 `SetUserMarketLeverage` has a typed builder, but ordinary-account submission is
 unsupported. See [availability](../README.md#setusermarketleverage-availability).
 
-- **Trading:** `PlaceOrder`, `MarketOrder`, `CancelOrder`, `CancelClientOrder`,
-  `CancelAllOrders`, `CancelReplaceOrder`, `AmendOrder`, `ClosePosition`,
-  `AtomicBasketOrder`, `SetPositionTriggers`, `CancelPositionTriggers`,
+- **Trading:** `PlaceOrder`, `PlaceOrders` (of `OrderEntry`s), `MarketOrder`,
+  `CancelOrder`, `CancelOrders`, `CancelClientOrder`, `CancelClientOrders`,
+  `CancelAllOrders`,
+  `CancelReplaceOrder`, `AmendOrder`, `AtomicBasketOrder`,
+  `SetPositionTriggers`, `CancelPositionTriggers`,
   `SetUserMarketLeverage`, `ApproveAgent`, `RevokeAgent`, `CreateSubAccount`,
   `SubAccountTransfer`, `Deposit`, `Withdraw`, `WithdrawRequest`.
 - **Operator (privileged):** `SubmitOracleObservation`, `CreateMarket`, `UpdateMarketFees`,
@@ -551,6 +553,58 @@ propose = actions.ProposeAdminAction(
 )
 action_type, payload = actions.encode_action(propose)
 ```
+
+## Order lists
+
+`PlaceOrders`, `CancelOrders` and `CancelClientOrders` carry 1 to 100 entries
+under one signature, like Hyperliquid's `order` and `cancel`. A `PlaceOrders`
+entry is a limit order (`OrderEntry(...)`) or a market order
+(`OrderEntry.market_order(...)`, with an optional `worst_price` that stops its
+walk at that price). Each entry runs on its own: the transaction succeeds and
+its `orders_placed` or `orders_cancelled` event reports every entry. The client
+methods return those per-entry results and raise nothing for a refused entry:
+
+```python
+from proof_trading_sdk import OrderEntry
+
+placements = client.place_orders([
+    OrderEntry(market=1, side="Buy", price=66_740_000_000, quantity=50, post_only=True),
+    OrderEntry(market=1, side="Sell", price=66_760_000_000, quantity=50, post_only=True),
+    OrderEntry.market_order(2, "Buy", 10, worst_price=1_510_000_000),
+])
+for p in placements:
+    if p.rejected:
+        print(p.market, p.code, p.error_name)
+    elif p.outcome == "executed":
+        # Done without resting; `unfilled` says why less than requested filled.
+        print(p.order_id, p.filled_quantity, p.requested_quantity, p.unfilled)
+    else:
+        print(p.order_id, p.quantity)  # resting remainder
+
+for c in client.cancel_orders([order_id_a, order_id_b]):
+    print(c.outcome, c.order_id, c.code)  # "cancelled", or "refused" with a code
+client.cancel_client_orders([7, 8])
+```
+
+A single `PlaceOrder`, `MarketOrder`, `CancelOrder` or `CancelClientOrder` is
+sent as a list of one, and `client.submit` still raises `EngineError` with its
+code when that one entry is refused. An executed order whose list event does
+not read, or does not report one entry per order sent, raises
+`OrderResultUnreadable` with its `tx_hash`: it executed, so reconcile and
+never re-submit (the list methods raise it too). After `SubmissionPending`,
+read the reconciled transaction with
+`check_order_result(evidence.hash, evidence.events)` (for example from
+`client.transaction_evidence(...)`): a list of one whose entry was refused
+raises the same `EngineError`. `MarketOrder` takes an optional
+`worst_price` and `reduce_only`. `client.close_position(market)` reads the
+position and sends a reduce-only market order on the opposite side for its
+size, returning `Closed(tx)`; a refused close raises `EngineError`. On a flat
+account it sends nothing and returns `NothingToClose()`. There is no close
+action: to close by hand, send a `MarketOrder` with `reduce_only=True`.
+Entries out of range raise `ValueError` before signing.
+
+An `AtomicBasketOrder` reports its legs in `orders_placed` too:
+`order_placements(client.submit(basket))` gives one placement per leg.
 
 ## Position stop-loss / take-profit
 

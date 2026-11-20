@@ -4,7 +4,7 @@ use std::fmt;
 
 use proof_trading_sdk::gateway::{ErrorKind, GatewayError, TxHash};
 
-use crate::exchange::SignedTx;
+use crate::exchange::{Receipt, SignedTx};
 use proof_trading_sdk::SignerError;
 
 /// A client failure. Never carries a key, signature or API key in its text.
@@ -17,7 +17,8 @@ use proof_trading_sdk::SignerError;
 /// have reached the gateway, the error is [`Error::Unconfirmed`] and carries
 /// the signed transaction: reconcile its hash with
 /// [`crate::ExchangeClient::wait_for_receipt`], or resend the same bytes,
-/// before signing a replacement.
+/// before signing a replacement. [`Error::OrderResultUnreadable`] is the one
+/// error whose transaction executed: reconcile it, never sign it again.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Error {
@@ -67,6 +68,15 @@ pub enum Error {
     /// A submission got no verdict and may have landed. `tx` is exactly what
     /// was sent; `source` is why no verdict came back.
     Unconfirmed { tx: SignedTx, source: Box<Error> },
+    /// The transaction executed with code 0, but its order list did not read:
+    /// an `orders_placed` or `orders_cancelled` that does not parse, or (from
+    /// a helper that knows what it sent) none, or not one entry per order
+    /// sent. What each order did is unknown. Not a rejection: reconcile
+    /// `receipt.hash` (open orders, fills) and never sign the action again.
+    OrderResultUnreadable {
+        receipt: Box<Receipt>,
+        reason: String,
+    },
     /// A core transport failure with no closer match above (a hash mismatch,
     /// a rejected option), as the core reported it.
     Gateway(GatewayError),
@@ -98,6 +108,12 @@ impl fmt::Display for Error {
             Error::Unconfirmed { tx, source } => {
                 write!(f, "{} may have landed: {source}", tx.hash)
             }
+            Error::OrderResultUnreadable { receipt, reason } => write!(
+                f,
+                "{} executed at height {} but its order result did not read ({reason}); \
+                 reconcile by hash, do not sign it again",
+                receipt.hash, receipt.height
+            ),
             Error::Gateway(e) => write!(f, "gateway: {e}"),
         }
     }

@@ -184,6 +184,9 @@ pub enum PositionViewExpect {
 // ---------------------------------------------------------------------------
 
 /// Encode an action payload via the shared core (the same path PyO3/WASM use).
+/// The `PlaceOrders` action byte.
+pub const PLACE_ORDERS: u8 = 0x01;
+
 pub fn codec_payload(action_type: u8, fields: &serde_json::Value) -> Result<Vec<u8>, String> {
     proof_trading_sdk::codec::encode_payload_dyn(action_type, fields.clone())
         .map_err(|e| format!("{e:?}"))
@@ -320,7 +323,23 @@ pub fn no_order_expect(input: &serde_json::Value) -> Result<NoOrderExpect, Strin
         "stop_loss": limb_to_json(&yes.stop_loss),
         "take_profit": limb_to_json(&yes.take_profit),
     });
-    let payload = codec_payload(1, &fields)?;
+    // A single order goes out as a list of one `PlaceOrders` entry.
+    let entry = serde_json::json!({
+        "market": yes.market,
+        "side": fields["side"],
+        "quantity": yes.quantity,
+        "kind": {"Limit": {
+            "price": yes.price,
+            "time_in_force": fields["time_in_force"],
+            "post_only": yes.post_only,
+        }},
+        "reduce_only": yes.reduce_only,
+        "client_order_id": yes.client_order_id,
+        "stop_loss": fields["stop_loss"],
+        "take_profit": fields["take_profit"],
+    });
+    let list = serde_json::json!({"owner": fields["owner"], "orders": [entry]});
+    let payload = codec_payload(PLACE_ORDERS, &list)?;
     Ok(NoOrderExpect::YesOrder {
         fields,
         payload_hex: hex::encode(payload),

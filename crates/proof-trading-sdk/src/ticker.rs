@@ -325,6 +325,6 @@ mod tests {
     #[test]
     fn other_actions_pass_untouched() {
         // Not a CreateMarket payload, and never decoded.
-        check_payload_tickers(ActionType::PlaceOrder as u8, &[0xc1]).unwrap();
+        check_payload_tickers(ActionType::PlaceOrders as u8, &[0xc1]).unwrap();
     }
 }

@@ -119,6 +119,29 @@ class SubmissionPending(ProofTradingSdkError):
         )
 
 
+class OrderResultUnreadable(ProofTradingSdkError):
+    """The transaction executed, but its order result did not read.
+
+    Raised for an executed code-0 transaction whose ``orders_placed`` or
+    ``orders_cancelled`` event is malformed, or (when the SDK knows what was
+    sent) missing or not one entry per order sent. What each order did is
+    unknown. This is **not** a rejection: reconcile by ``tx_hash`` (open
+    orders, fills) and never re-submit.
+
+    Attributes:
+        tx_hash: Hash of the executed transaction.
+        message: Why the result did not read.
+    """
+
+    def __init__(self, tx_hash: str, message: str = "") -> None:
+        self.tx_hash = tx_hash
+        self.message = message
+        super().__init__(
+            f"order result unreadable: {message or 'no detail'}; the transaction "
+            f"executed, reconcile by tx_hash={tx_hash}; do NOT re-submit"
+        )
+
+
 class AuthenticationError(ProofTradingSdkError):
     """HTTP or WebSocket authentication was refused (API key or signed auth)."""
 

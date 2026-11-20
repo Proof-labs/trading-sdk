@@ -43,12 +43,23 @@ class TimeInForce(StrEnum):
 # ── Action-type byte map (generated from the Rust core) ──────────────────────
 
 
+_SINGLE_ACTION_NAMES = {
+    "PlaceOrder": "PlaceOrders",
+    "MarketOrder": "PlaceOrders",
+    "CancelOrder": "CancelOrders",
+    "CancelClientOrder": "CancelClientOrders",
+}
+
+
 class _ActionTypeMap:
     """``ActionType.PlaceOrder`` → the wire byte, generated from the core."""
 
     def __init__(self) -> None:
         for entry in _native.get_action_types():
             setattr(self, entry["name"], entry["code"])
+        # The single-order names keep working: a single order is a list of one.
+        for single, listed in _SINGLE_ACTION_NAMES.items():
+            setattr(self, single, getattr(self, listed))
 
     def __getitem__(self, name: str) -> int:
         return getattr(self, name)
@@ -122,20 +133,24 @@ class PlaceOrder(Action):
             self.stop_loss, self.take_profit, reduce_only=self.reduce_only
         )
 
+    def entry(self) -> "OrderEntry":
+        """This order as one :class:`PlaceOrders` entry."""
+        return OrderEntry(
+            market=self.market,
+            side=self.side,
+            price=self.price,
+            quantity=self.quantity,
+            client_order_id=self.client_order_id,
+            post_only=self.post_only,
+            reduce_only=self.reduce_only,
+            time_in_force=self.time_in_force,
+            stop_loss=self.stop_loss,
+            take_profit=self.take_profit,
+        )
+
     def fields(self) -> dict[str, Any]:
-        return {
-            "market": self.market,
-            "owner": self.owner,
-            "side": self.side,
-            "price": self.price,
-            "quantity": self.quantity,
-            "client_order_id": self.client_order_id,
-            "post_only": self.post_only,
-            "reduce_only": self.reduce_only,
-            "time_in_force": self.time_in_force,
-            "stop_loss": _limb_wire(self.stop_loss),
-            "take_profit": _limb_wire(self.take_profit),
-        }
+        # A single order is a PlaceOrders list of one.
+        return {"owner": self.owner, "orders": [self.entry().as_wire()]}
 
 
 @dataclass
@@ -155,22 +170,31 @@ class MarketOrder(Action):
     client_order_id: Optional[int] = None
     stop_loss: Optional[TriggerLimb] = None
     take_profit: Optional[TriggerLimb] = None
+    # Stops the walk at this price; bounds fills, not admission.
+    worst_price: Optional[int] = None
+    reduce_only: bool = False
 
     def __post_init__(self) -> None:
         _validate_order_triggers(
-            self.stop_loss, self.take_profit, reduce_only=False
+            self.stop_loss, self.take_profit, reduce_only=self.reduce_only
+        )
+
+    def entry(self) -> "OrderEntry":
+        """This order as one :class:`PlaceOrders` market entry."""
+        return OrderEntry.market_order(
+            self.market,
+            self.side,
+            self.quantity,
+            worst_price=self.worst_price,
+            reduce_only=self.reduce_only,
+            client_order_id=self.client_order_id,
+            stop_loss=self.stop_loss,
+            take_profit=self.take_profit,
         )
 
     def fields(self) -> dict[str, Any]:
-        return {
-            "market": self.market,
-            "owner": self.owner,
-            "side": self.side,
-            "quantity": self.quantity,
-            "client_order_id": self.client_order_id,
-            "stop_loss": _limb_wire(self.stop_loss),
-            "take_profit": _limb_wire(self.take_profit),
-        }
+        # A market order is a PlaceOrders list of one market entry.
+        return {"owner": self.owner, "orders": [self.entry().as_wire()]}
 
 
 @dataclass
@@ -180,7 +204,8 @@ class CancelOrder(Action):
     owner: bytes
 
     def fields(self) -> dict[str, Any]:
-        return {"order_id": self.order_id, "owner": self.owner}
+        # A single cancel is a CancelOrders list of one.
+        return {"owner": self.owner, "order_ids": [self.order_id]}
 
 
 @dataclass
@@ -190,7 +215,8 @@ class CancelClientOrder(Action):
     client_order_id: int
 
     def fields(self) -> dict[str, Any]:
-        return {"owner": self.owner, "client_order_id": self.client_order_id}
+        # A single cancel is a CancelClientOrders list of one.
+        return {"owner": self.owner, "client_order_ids": [self.client_order_id]}
 
 
 @dataclass
@@ -267,16 +293,6 @@ class AmendOrder(Action):
         }
 
 
-@dataclass
-class ClosePosition(Action):
-    ACTION_NAME = "ClosePosition"
-    market: int
-    owner: bytes
-
-    def fields(self) -> dict[str, Any]:
-        return {"market": self.market, "owner": self.owner}
-
-
 _U64_MAX = (1 << 64) - 1
 _U32_MAX = (1 << 32) - 1
 _U16_MAX = (1 << 16) - 1
@@ -321,7 +337,7 @@ def _validate_order_triggers(
     *,
     reduce_only: bool,
 ) -> None:
-    """Shared placement-time SL/TP parity for the order actions (0x01/0x04/0x1A).
+    """Shared placement-time SL/TP parity for the order actions (0x01/0x1A).
 
     Per-limb bounds are enforced by :class:`TriggerLimb.__post_init__`; this
     adds the order-level rules: a reduce-only order cannot carry limbs
@@ -565,6 +581,157 @@ class AtomicBasketOrder(Action):
             "legs": [leg.as_wire() for leg in self.legs],
             "max_slippage_bps": self.max_slippage_bps,
         }
+
+
+MAX_LIST_ENTRIES = 100
+"""Most entries one :class:`PlaceOrders`, :class:`CancelOrders` or
+:class:`CancelClientOrders` carries; the wire refuses more."""
+
+
+def _check_list_size(entries: list[Any]) -> None:
+    if not 1 <= len(entries) <= MAX_LIST_ENTRIES:
+        raise ValueError(
+            f"list carries {len(entries)} entries, must carry 1..={MAX_LIST_ENTRIES}"
+        )
+
+
+ORDER_KIND_LIMIT = "limit"
+ORDER_KIND_MARKET = "market"
+
+
+@dataclass
+class OrderEntry:
+    """One order of a :class:`PlaceOrders`. Not an action on its own.
+
+    A limit entry (the default ``kind``) has the fields of a
+    :class:`PlaceOrder` without its owner. A market entry
+    (:meth:`market_order`) has no ``price``, ``post_only`` or
+    ``time_in_force``; ``worst_price``, when set, stops its walk at that
+    price.
+    """
+
+    market: int
+    side: str
+    price: Optional[int]
+    quantity: int
+    client_order_id: Optional[int] = None
+    post_only: bool = False
+    reduce_only: bool = False
+    time_in_force: str = TimeInForce.Gtc
+    stop_loss: Optional[TriggerLimb] = None
+    take_profit: Optional[TriggerLimb] = None
+    kind: str = ORDER_KIND_LIMIT
+    worst_price: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        if self.kind == ORDER_KIND_LIMIT:
+            if self.price is None:
+                raise ValueError("a limit entry needs a price")
+            if self.worst_price is not None:
+                raise ValueError("worst_price is for market entries; a limit entry has price")
+        elif self.kind == ORDER_KIND_MARKET:
+            if self.price is not None:
+                raise ValueError("a market entry has no price; bound it with worst_price")
+        else:
+            raise ValueError(f"unknown order kind {self.kind!r}")
+        _validate_order_triggers(
+            self.stop_loss, self.take_profit, reduce_only=self.reduce_only
+        )
+
+    @classmethod
+    def market_order(
+        cls,
+        market: int,
+        side: str,
+        quantity: int,
+        *,
+        worst_price: Optional[int] = None,
+        reduce_only: bool = False,
+        client_order_id: Optional[int] = None,
+        stop_loss: Optional[TriggerLimb] = None,
+        take_profit: Optional[TriggerLimb] = None,
+    ) -> "OrderEntry":
+        """A market entry: immediate-or-cancel at the best prices."""
+        return cls(
+            market=market,
+            side=side,
+            price=None,
+            quantity=quantity,
+            client_order_id=client_order_id,
+            reduce_only=reduce_only,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            kind=ORDER_KIND_MARKET,
+            worst_price=worst_price,
+        )
+
+    def as_wire(self) -> dict[str, Any]:
+        if self.kind == ORDER_KIND_MARKET:
+            kind: dict[str, Any] = {"Market": {"worst_price": self.worst_price}}
+        else:
+            kind = {
+                "Limit": {
+                    "price": self.price,
+                    "time_in_force": self.time_in_force,
+                    "post_only": self.post_only,
+                }
+            }
+        return {
+            "market": self.market,
+            "side": self.side,
+            "quantity": self.quantity,
+            "kind": kind,
+            "reduce_only": self.reduce_only,
+            "client_order_id": self.client_order_id,
+            "stop_loss": _limb_wire(self.stop_loss),
+            "take_profit": _limb_wire(self.take_profit),
+        }
+
+
+@dataclass
+class PlaceOrders(Action):
+    """1 to 100 limit or market orders for one account under one signature.
+    Each order runs in turn and stands or is refused on its own; the
+    transaction succeeds and ``orders_placed`` reports every order."""
+
+    ACTION_NAME = "PlaceOrders"
+    owner: bytes
+    orders: list[OrderEntry]
+
+    def fields(self) -> dict[str, Any]:
+        _check_list_size(self.orders)
+        return {
+            "owner": self.owner,
+            "orders": [order.as_wire() for order in self.orders],
+        }
+
+
+@dataclass
+class CancelOrders(Action):
+    """Cancel 1 to 100 resting orders by order id, each on its own;
+    ``orders_cancelled`` reports every entry."""
+
+    ACTION_NAME = "CancelOrders"
+    owner: bytes
+    order_ids: list[int]
+
+    def fields(self) -> dict[str, Any]:
+        _check_list_size(self.order_ids)
+        return {"owner": self.owner, "order_ids": list(self.order_ids)}
+
+
+@dataclass
+class CancelClientOrders(Action):
+    """Cancel 1 to 100 resting orders by client order id, each on its own;
+    ``orders_cancelled`` reports every entry."""
+
+    ACTION_NAME = "CancelClientOrders"
+    owner: bytes
+    client_order_ids: list[int]
+
+    def fields(self) -> dict[str, Any]:
+        _check_list_size(self.client_order_ids)
+        return {"owner": self.owner, "client_order_ids": list(self.client_order_ids)}
 
 
 @dataclass
@@ -1129,10 +1296,16 @@ __all__ = [
     "MarketOrder",
     "CancelOrder",
     "CancelClientOrder",
+    "MAX_LIST_ENTRIES",
+    "ORDER_KIND_LIMIT",
+    "ORDER_KIND_MARKET",
+    "OrderEntry",
+    "PlaceOrders",
+    "CancelOrders",
+    "CancelClientOrders",
     "CancelAllOrders",
     "CancelReplaceOrder",
     "AmendOrder",
-    "ClosePosition",
     "TriggerLimb",
     "SetPositionTriggers",
     "CancelPositionTriggers",
