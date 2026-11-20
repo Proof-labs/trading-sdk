@@ -53,7 +53,7 @@ import {
   type RecentTrade,
   type RecentTradesOptions,
 } from "./recent-trades.js";
-import { boundedGatewayJson } from "./bounded-read.js";
+import { boundedGatewayJson, type BoundedReadOptions } from "./bounded-read.js";
 import {
   decodeLiquidationHistoryPage,
   liquidationHistorySearchParams,
@@ -163,6 +163,11 @@ import {
   type ExchangeHttpTransport,
 } from "./http-transport.js";
 import { yesOrder, type NoOrder } from "./binary.js";
+import {
+  depositAccount,
+  queryDepositAddressAnswer,
+  type DepositAddressReady,
+} from "./deposit-address.js";
 import { Side } from "./types.js";
 import type { MarketsSnapshot } from "./types.js";
 import { sha256 } from "@noble/hashes/sha2.js";
@@ -2230,6 +2235,41 @@ export class ExchangeClient {
     const page: unknown = await res.json();
     opts.signal?.throwIfAborted();
     return decodePortfolioHistoryPage(page, canonicalOwner, opts);
+  }
+
+  /**
+   * The account's USDC deposit address on Solana
+   * (`GET /v1/deposit-address/{account}`), from the gateway even in internal
+   * node mode: only the gateway serves it. `account` is 40 hex digits, with
+   * or without `0x`, in either case; it is sent as `0x` and lowercase.
+   * Anything else throws `GatewayReadError` (kind `"configuration"`, field
+   * `account`) before any request.
+   *
+   * The gateway answers once the address exists, creating it first when
+   * needed. Resolves `ready` with `address`, the deposit authority a wallet
+   * sends USDC to (not the token account). Times out after `opts.timeoutMs`
+   * (default `DEPOSIT_ADDRESS_TIMEOUT_MS`) with `GatewayReadError` kind
+   * `"deadline"`. The gateway passes the service's answer through
+   * unchecked, so only an HTTP 200 `ready` answer is a success; any other
+   * 2xx throws `GatewayReadError` kind `"malformed"` naming the field; an
+   * abort rejects with the signal's reason. A refusal throws
+   * `GatewayHttpError` with `errorCode` set when the body's code is a
+   * `DepositAddressErrorCode` (`Paused` while deposits are paused). The
+   * body's `retryAfterMs` stays in `error.response`, as on the submission
+   * path.
+   */
+  async queryDepositAddress(
+    account: string,
+    opts: BoundedReadOptions = {},
+  ): Promise<DepositAddressReady> {
+    const captured = { ...opts };
+    captured.signal?.throwIfAborted();
+    const canonical = depositAccount(account);
+    return queryDepositAddressAnswer(
+      `${this.gatewayUrl}/v1/deposit-address/${canonical}`,
+      this.httpTransport,
+      captured,
+    );
   }
 
   /** One newest-first gateway page of a market's indexed `price_updated`

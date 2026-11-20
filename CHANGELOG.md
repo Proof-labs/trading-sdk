@@ -14,11 +14,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `query_v2` view (`market_snapshot::MarketsSnapshotView`). A record that is
   not a map keyed by field name, or a name that is not a string (a status
   sent as the integer 0, for example), refuses the whole read.
-- **TypeScript:** `queryEventVoided(gatewayUrl, eventId, { signal?, fetch?, maxPages? })`
-  reads the indexed `event_voided` record (the Yes price a Void settled at)
-  from `GET /v1/history/admin-events`, following `next_cursor`; `null` when the
-  event is not voided or not yet indexed. A malformed page, a repeated cursor
-  or more than `maxPages` pages (default 100) fails with `GatewayReadError`.
 - Error codes 136-142 (the unreleased proof-wire after 12.1.0), named in
   Rust, TypeScript and Python: 136 `PositionEpochMismatch`, 137 `TriggerBracketNotFound`, 138
   `TriggerAlreadyCrossed`, 139 `PositionNotFound`, 140
@@ -47,14 +42,51 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   stays in `FundingSettled`. Do not add it to PnL derived from
   `TradeExecuted`.
 
-## [13.1.0] — 2026-11-19
+## [13.2.0] — 2026-11-20
 
-npm only: a MINOR with two TypeScript additions on the same wire as 13.0.0
+npm only: a MINOR with one TypeScript addition on the same wire as 13.1.0
 (proof-wire 12.0.0) and no change to existing behaviour. The Rust core entry
 above stays under [Unreleased].
 
 ### Added
 
+- **TypeScript:** `client.queryDepositAddress(account, opts?)` reads an
+  account's USDC deposit address on Solana
+  (`GET /v1/deposit-address/{account}`, served by the gateway from the deposit
+  address service), always from the gateway. `account` is 40 hex digits, with
+  or without `0x`, in either case; anything else throws `GatewayReadError`
+  (kind `"configuration"`) before any request. The read takes
+  `{ signal, timeoutMs }` and a 1 MiB body cap. The gateway answers once the
+  address exists, creating it first when needed; the default deadline is
+  `DEPOSIT_ADDRESS_TIMEOUT_MS` rather than the usual 5 seconds. It resolves a
+  `DepositAddressReady` (`status: "ready"`) with `address`, `tokenAccount`
+  and `createdAt` (Unix seconds or `null`). `address` is the deposit
+  authority, the address a wallet sends USDC to, not the token account. The
+  gateway passes the service's status and body through without checking
+  them, so the SDK decides success itself: only an HTTP 200 with
+  `status: "ready"` and both addresses present resolves; any other 2xx throws
+  `GatewayReadError` (kind `"malformed"`) naming the field. A refusal throws
+  `GatewayHttpError` with an unread copy of the response, and `errorCode`
+  when the body's code is a `DepositAddressErrorCode` (`InvalidAccount`,
+  `SubAccount`, `RateLimited`, `Paused` while deposits are paused,
+  `Unavailable`; `isDepositAddressErrorCode`). As on the submission path, the
+  retry time is the body's own `retryAfterMs`; the SDK does not read the
+  `Retry-After` header. `conformance/deposit-address.json` pins the
+  service's ready, sub-account, rate-limited, paused and unavailable answers.
+
+## [13.1.0] — 2026-11-19
+
+npm only: a MINOR with three TypeScript additions on the same wire as 13.0.0
+(proof-wire 12.0.0) and no change to existing behaviour. The Rust core entry
+above stays under [Unreleased].
+
+### Added
+
+- **TypeScript:** `queryEventVoided(gatewayUrl, eventId, { signal?, fetch?, maxPages? })`
+  reads the indexed `event_voided` record (the Yes price a Void settled at)
+  from `GET /v1/history/admin-events`, following `next_cursor`; `null` when the
+  event is not voided or not yet indexed. A malformed page, a repeated cursor
+  or more than `maxPages` pages (default 100) fails with `GatewayReadError`.
 - **TypeScript:** `decodeFinalizedReadWitness` is exported from the package
   root, so a caller can decode the `witness` object of a raw gateway answer
   (for example, in its own `ExchangeHttpTransport`) with the SDK's decoder
@@ -2563,7 +2595,8 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v13.1.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v13.2.0...HEAD
+[13.2.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v13.1.0...npm-v13.2.0
 [13.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v13.0.0...npm-v13.1.0
 [13.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v12.1.0...npm-v13.0.0
 [12.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v12.0.0...npm-v12.1.0
