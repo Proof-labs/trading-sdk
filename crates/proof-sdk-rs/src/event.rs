@@ -319,7 +319,10 @@ pub struct PositionUpdated {
     pub side: Side,
     pub size: u64,
     pub entry_price: u64,
-    /// micro-USDC realized by this change.
+    /// Gross PnL this change realized, in micro-USDC: the closed part of a
+    /// partial close or of an insurance-fund takeover netting, or a gain
+    /// realized in place to pay a resolution deficit. Its closed funding debt
+    /// is reported in `FundingSettled`. Zero when nothing is closed.
     pub realized_pnl: i64,
 }
 

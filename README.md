@@ -231,6 +231,13 @@ class ExchangeClient {
   queryPositionTriggerHistory(addressHex?: string, filters?: PositionTriggerHistoryFilters): Promise<PositionTriggerHistoryPage>;
   queryTriggerMarketHistory(market: number, filters?: TriggerMarketHistoryFilters): Promise<TriggerMarketHistoryPage>;
   queryLiquidationConfig(): Promise<LiquidationConfigInfo>;
+  // USDC deposit address on Solana (address = deposit authority). The gateway
+  // answers once the address exists; default deadline
+  // DEPOSIT_ADDRESS_TIMEOUT_MS. Success is HTTP 200 with status "ready".
+  // Refusals throw GatewayHttpError with errorCode when it is a
+  // DepositAddressErrorCode (Paused while deposits are paused); the body's
+  // retryAfterMs stays in error.response.
+  queryDepositAddress(account: string, opts?: { signal?: AbortSignal; timeoutMs?: number }): Promise<DepositAddressReady>;
 
   // Owner defaults to signer; version-active agents pass delegated owner.
   setPositionTriggers(params: Omit<SetPositionTriggers, "owner"> & { owner?: Uint8Array }): Promise<TxResult>;
@@ -409,6 +416,19 @@ remain in the application; `status: "ok"` alone does not mean fresh data, and
 not trading authorization. Like every other gateway interaction, admin calls
 included, it goes through the SDK
 ([ADR 0003](docs/adr/0003-every-gateway-interaction-through-the-sdk.md)).
+
+### Markets with their status
+
+```typescript
+const snapshot = await client.reads().marketsSnapshotView();
+const halted = snapshot.markets.filter((market) => market.status === "Halted");
+```
+
+One read of `GET /v2/markets-snapshot` at one height, bound to the configured
+`chainId`: every market with its status (`"Trading"`, `"ReduceOnly"`,
+`"Halted"`, `"Delisted"`, or `"Unknown"`, which must never be read as
+trading), every event and each market's open interest. It carries no witness.
+See [docs/market-snapshot.md](docs/market-snapshot.md).
 
 ### Insurance fund observations
 

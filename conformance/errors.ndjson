@@ -28,7 +28,7 @@
 {"case":"manifest/32","code":32,"log":null,"expect":{"name":"SettlementPriceMismatch"}}
 {"case":"manifest/33","code":33,"log":null,"expect":{"name":"OracleNotApplicable"}}
 {"case":"manifest/34","code":34,"log":null,"expect":{"name":"PostOnlyWouldCross"}}
-{"case":"manifest/35","code":35,"log":null,"expect":{"name":"ReduceOnlyWouldIncrease"}}
+{"case":"manifest/35","code":35,"log":null,"expect":{"name":"ReduceOnlyRefused"}}
 {"case":"manifest/37","code":37,"log":null,"expect":{"name":"UnpricedStale"}}
 {"case":"manifest/38","code":38,"log":null,"expect":{"name":"UserLeverageBelowMarketIm"}}
 {"case":"manifest/39","code":39,"log":null,"expect":{"name":"TickSizeViolation"}}
@@ -112,6 +112,13 @@
 {"case":"manifest/133","code":133,"log":null,"expect":{"name":"MarketBacksLiveEvent"}}
 {"case":"manifest/134","code":134,"log":null,"expect":{"name":"MarketHalted"}}
 {"case":"manifest/135","code":135,"log":null,"expect":{"name":"OffCurveWithdrawalDestination"}}
+{"case":"manifest/136","code":136,"log":null,"expect":{"name":"PositionEpochMismatch"}}
+{"case":"manifest/137","code":137,"log":null,"expect":{"name":"TriggerBracketNotFound"}}
+{"case":"manifest/138","code":138,"log":null,"expect":{"name":"TriggerAlreadyCrossed"}}
+{"case":"manifest/139","code":139,"log":null,"expect":{"name":"PositionNotFound"}}
+{"case":"manifest/140","code":140,"log":null,"expect":{"name":"AccountPositionCapReached"}}
+{"case":"manifest/141","code":141,"log":null,"expect":{"name":"SubAccountCapReached"}}
+{"case":"manifest/142","code":142,"log":null,"expect":{"name":"WorkCapReached"}}
 {"case":"manifest/255","code":255,"log":null,"expect":{"name":"InternalError"}}
 {"case":"code50/oi_log","code":50,"log":"open interest limit exceeded on market 7: would be 4, cap 3","expect":{"name":"OpenInterestLimitExceeded"}}
 {"case":"code50/slippage_log","code":50,"log":"atomic basket aggregate slippage 51 bps exceeds budget 50 bps","expect":{"name":"SlippageExceeded"}}

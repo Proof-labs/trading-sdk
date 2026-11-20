@@ -1,0 +1,172 @@
+// `GET /v1/deposit-address/{account}`: the Solana address an account's USDC
+// deposits go to. api-gateway passes the deposit address service's answer
+// through unchanged; Proof-labs/deposit-address-service `tests/routes.rs`
+// pins every body, and `conformance/deposit-address.json` is the shared copy
+// of those answers (ready, sub-account, rate-limited, paused and unavailable).
+// The gateway answers once the address exists; the read waits up to
+// `DEPOSIT_ADDRESS_TIMEOUT_MS` by default.
+
+import { boundedGatewayJson, type BoundedReadOptions } from "./bounded-read.js";
+import { GatewayHttpError } from "./errors.js";
+import type { ExchangeHttpTransport } from "./http-transport.js";
+import { invalidRead, type HexAddress } from "./read-values.js";
+
+/** Default deadline for `queryDepositAddress`, in milliseconds. The gateway
+ * answers once the address is created (about a second, at most about ten,
+ * and its own client gives up after 15 seconds), so the SDK waits longer
+ * than the shared 5-second read default. */
+export const DEPOSIT_ADDRESS_TIMEOUT_MS = 20_000;
+
+/** The answer to `ExchangeClient.queryDepositAddress`: the account's deposit
+ * address exists on Solana. */
+export interface DepositAddressReady {
+  status: "ready";
+  /**
+   * The deposit authority (base58): the address a wallet sends USDC to.
+   * It is not the token account; a wallet derives that itself.
+   */
+  address: string;
+  /** The USDC token account the deposit authority owns (base58). */
+  tokenAccount: string;
+  /** When the address was created, in Unix seconds; `null` when unknown. */
+  createdAt: number | null;
+}
+
+/** The error codes the deposit address service answers with. */
+export const DEPOSIT_ADDRESS_ERROR_CODES = [
+  /** 400: the account is not `0x` followed by 40 hex digits. */
+  "InvalidAccount",
+  /** 403: the account is a sub-account; deposits go to its main account. */
+  "SubAccount",
+  /** 429: too many requests; the body's `retryAfterMs` says when to retry. */
+  "RateLimited",
+  /** 503: deposits are paused (the bridge or address creation is paused). */
+  "Paused",
+  /** 503: deposit addresses are unavailable; try again later. */
+  "Unavailable",
+] as const;
+
+export type DepositAddressErrorCode =
+  (typeof DEPOSIT_ADDRESS_ERROR_CODES)[number];
+
+/** True when `code` is one of the deposit address service's error codes. */
+export function isDepositAddressErrorCode(
+  code: unknown,
+): code is DepositAddressErrorCode {
+  return (
+    typeof code === "string" &&
+    (DEPOSIT_ADDRESS_ERROR_CODES as readonly string[]).includes(code)
+  );
+}
+
+// A Solana public key in base58: 32 bytes encode to 32-44 characters.
+const BASE58_PUBKEY = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const BASE58_ALPHABET =
+  "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
+/** True when `value` is base58 that decodes to exactly 32 bytes, not all
+ * zero: the all-zero key is the System Program id, never a deposit address
+ * or token account. */
+function isSolanaPublicKey(value: unknown): value is string {
+  if (typeof value !== "string" || !BASE58_PUBKEY.test(value)) return false;
+  let n = 0n;
+  for (const char of value) n = n * 58n + BigInt(BASE58_ALPHABET.indexOf(char));
+  if (n === 0n) return false;
+  // Each leading "1" is one zero byte; the rest is the number's bytes.
+  const zeros = /^1*/.exec(value)![0].length;
+  const bytes = Math.ceil(n.toString(16).length / 2);
+  return zeros + bytes === 32;
+}
+
+const isWholeNumber = (v: unknown): v is number =>
+  Number.isSafeInteger(v) && (v as number) >= 0;
+
+/** The account as the gateway takes it, `0x` and 40 lowercase hex digits.
+ * Accepts the hex with or without `0x`/`0X`, in either case; anything else
+ * throws `GatewayReadError` with kind `"configuration"` and field `account`. */
+export function depositAccount(account: unknown): HexAddress {
+  const hex =
+    typeof account === "string" ? account.replace(/^0x/i, "") : undefined;
+  if (hex === undefined || !/^[0-9a-fA-F]{40}$/.test(hex))
+    invalidRead("account", "configuration");
+  return `0x${hex.toLowerCase()}` as HexAddress;
+}
+
+/**
+ * Read `GET /v1/deposit-address/{account}` within one deadline
+ * (`options.timeoutMs`, default `DEPOSIT_ADDRESS_TIMEOUT_MS`) and a 1 MiB
+ * body cap. The gateway passes the service's status and body through without
+ * checking them, so success is decided here: only an HTTP 200 whose body is
+ * `status: "ready"` with both addresses present resolves. Any other 2xx
+ * throws `GatewayReadError` with kind `"malformed"` and the offending field.
+ * A non-2xx answer throws `GatewayHttpError` with an unread copy of the
+ * response, and `errorCode` when the body's code is one of
+ * `DEPOSIT_ADDRESS_ERROR_CODES`. As on the submission path, `retryAfterMs`
+ * stays in the body.
+ */
+export async function queryDepositAddressAnswer(
+  url: string,
+  transport: ExchangeHttpTransport,
+  options: BoundedReadOptions,
+): Promise<DepositAddressReady> {
+  // boundedGatewayJson returns the body alone; record the status beside it.
+  let status = 0;
+  const recording: ExchangeHttpTransport = async (input, init, context) => {
+    const response = await transport(input, init, context);
+    status = response.status;
+    return response;
+  };
+  let body: unknown;
+  try {
+    body = await boundedGatewayJson(
+      url,
+      recording,
+      {
+        ...options,
+        timeoutMs: options.timeoutMs ?? DEPOSIT_ADDRESS_TIMEOUT_MS,
+      },
+      { purpose: "account" },
+    );
+  } catch (error) {
+    if (error instanceof GatewayHttpError) throw await refusal(error);
+    throw error;
+  }
+  const answer = decodeDepositAddress(status, body);
+  options.signal?.throwIfAborted();
+  return answer;
+}
+
+/** The refusal with the service's `errorCode` (when it is one of
+ * `DEPOSIT_ADDRESS_ERROR_CODES`) and `error` text, read from the bounded
+ * copy of the body; the copy on the new error stays unread. */
+async function refusal(error: GatewayHttpError): Promise<GatewayHttpError> {
+  let fields: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(await error.response.clone().text());
+    if (parsed !== null && typeof parsed === "object")
+      fields = parsed as Record<string, unknown>;
+  } catch {
+    // Not JSON (a proxy's HTML page, say): the status alone is the answer.
+  }
+  return new GatewayHttpError(
+    error.status,
+    error.response,
+    isDepositAddressErrorCode(fields.errorCode) ? fields.errorCode : undefined,
+    typeof fields.error === "string" ? fields.error : undefined,
+  );
+}
+
+function decodeDepositAddress(
+  status: number,
+  body: unknown,
+): DepositAddressReady {
+  // boundedGatewayJson only returns JSON objects.
+  const fields = body as Record<string, unknown>;
+  if (status !== 200 || fields.status !== "ready") return invalidRead("status");
+  const { address, tokenAccount, createdAt } = fields;
+  if (!isSolanaPublicKey(address)) invalidRead("address");
+  if (!isSolanaPublicKey(tokenAccount) || tokenAccount === address)
+    invalidRead("tokenAccount");
+  if (createdAt !== null && !isWholeNumber(createdAt)) invalidRead("createdAt");
+  return { status: "ready", address, tokenAccount, createdAt };
+}

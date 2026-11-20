@@ -156,7 +156,8 @@ export interface PlaceOrder {
    *  maker-side fills. Defaults to false. */
   postOnly?: boolean;
   /** When true, the order may only reduce an existing position. Same-side
-   *  orders are rejected (ReduceOnlyWouldIncrease, code 35); over-closing
+   *  orders, and orders with no position to reduce, are rejected
+   *  (ReduceOnlyRefused, code 35); over-closing
    *  is clamped to the position size. Defaults to false. */
   reduceOnly?: boolean;
   /**
@@ -1854,9 +1855,10 @@ export interface PositionUpdatedEvent {
   entryPrice: string;
   /** Absolute position size in contracts (integer lots). */
   size: string;
-  /** PnL this update booked to cash without a fill, in microUSDC (signed):
-   *  a gain realized in place to pay a resolution deficit. "0" for every
-   *  other update. */
+  /** Gross PnL this update realized, in microUSDC (signed): the closed part
+   *  of a partial close or of an insurance-fund takeover netting, or a gain
+   *  realized in place to pay a resolution deficit. Its closed funding debt
+   *  is reported in `FundingSettled`. "0" when nothing is closed. */
   realizedPnl: string;
 }
 

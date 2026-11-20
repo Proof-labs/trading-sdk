@@ -54,6 +54,12 @@ import { bytesToHex } from "./crypto.js";
 import { validateSetLiquidationConfig } from "./liquidation-config.js";
 import { validateSetMarginOffsetPolicy } from "./margin-offsets.js";
 import type { SetMarginOffsetPolicy } from "./types.js";
+import type { MarketStatus, MarkSourceMode } from "./types.js";
+import type {
+  EventView,
+  MarketsSnapshotView,
+  MarketView,
+} from "./markets-snapshot-view.js";
 import { validateSetOracleGuards } from "./oracle-guards.js";
 import { validateScheduleUpgrade } from "./upgrade-plan.js";
 import { validateTicker } from "./ticker.js";
@@ -940,4 +946,155 @@ export function marketsSnapshotFromWasm(v: unknown): MarketsSnapshot {
     }));
   }
   return snapshot;
+}
+
+/** The engine's names, keyed by the version 2 view's spelling of them. */
+const VIEW_MARKET_STATUSES: ReadonlyMap<unknown, MarketStatus> = new Map([
+  ["trading", "Trading"],
+  ["reduce_only", "ReduceOnly"],
+  ["halted", "Halted"],
+  ["delisted", "Delisted"],
+]);
+const VIEW_BRANCHES: ReadonlyMap<unknown, "Yes" | "No"> = new Map([
+  ["yes", "Yes"],
+  ["no", "No"],
+]);
+const VIEW_MARK_SOURCES: ReadonlyMap<unknown, MarkSourceMode> = new Map([
+  ["oracle_only", "OracleOnly"],
+  ["median", "Median"],
+]);
+const VIEW_EVENT_STATUSES: ReadonlyMap<
+  unknown,
+  "Trading" | "PreResolution" | "Resolved"
+> = new Map([
+  ["trading", "Trading"],
+  ["pre_resolution", "PreResolution"],
+  ["resolved", "Resolved"],
+]);
+const VIEW_OUTCOMES: ReadonlyMap<unknown, "Yes" | "No" | "Void"> = new Map([
+  ["yes", "Yes"],
+  ["no", "No"],
+  ["void", "Void"],
+]);
+const VIEW_COMPARISONS: ReadonlyMap<unknown, PriceComparison> = new Map([
+  ["greater_than", "GreaterThan"],
+  ["less_than", "LessThan"],
+  ["greater_than_or_equal", "GreaterThanOrEqual"],
+  ["less_than_or_equal", "LessThanOrEqual"],
+]);
+
+/** `value` under the engine's name; `"Unknown"` for a name the core decoded
+ *  as the view's `Unknown`. */
+function viewName<T extends string>(
+  names: ReadonlyMap<unknown, T>,
+  value: unknown,
+): T | "Unknown" {
+  return names.get(value) ?? "Unknown";
+}
+
+/** An optional view field: the core leaves an absent one undefined. */
+function viewOptional<T>(value: unknown): T | null {
+  return value == null ? null : (value as T);
+}
+
+function marketViewFromWasm(v: unknown): MarketView {
+  const m = v as WasmRecord;
+  const kind = m.kind as WasmRecord;
+  const mark = m.mark as WasmRecord | undefined;
+  return {
+    market: m.market as number,
+    ticker: viewOptional(m.ticker),
+    kind:
+      kind.type === "perpetual"
+        ? { type: "Perpetual" }
+        : kind.type === "conditional" || kind.type === "prediction_binary"
+          ? {
+              type:
+                kind.type === "conditional"
+                  ? "Conditional"
+                  : "PredictionBinary",
+              eventId: kind.event_id as number,
+              branch: viewName(VIEW_BRANCHES, kind.branch),
+            }
+          : { type: "Unknown" },
+    szDecimals: m.sz_decimals as number,
+    tickSize: viewOptional(m.tick_size),
+    lotSize: viewOptional(m.lot_size),
+    imBps: m.im_bps as number,
+    mmBps: m.mm_bps as number,
+    takerFeeBps: m.taker_fee_bps as number,
+    makerFeeBps: m.maker_fee_bps as number,
+    feeTiers: (m.fee_tiers as WasmRecord[]).map((t) => ({
+      min30dVolumeMicroUsdc: t.min_30d_volume_micro_usdc as bigint,
+      makerFeeTenthBps: t.maker_fee_tenth_bps as number,
+      takerFeeTenthBps: t.taker_fee_tenth_bps as number,
+    })),
+    fundingIntervalMs: viewOptional(m.funding_interval_ms),
+    maxFundingRateBps: m.max_funding_rate_bps as number,
+    maxPositionSize: viewOptional(m.max_position_size),
+    maxOpenInterest: viewOptional(m.max_open_interest),
+    defaultTtlMs: viewOptional(m.default_ttl_ms),
+    mark:
+      mark == null
+        ? null
+        : {
+            source: viewName(VIEW_MARK_SOURCES, mark.source),
+            maxOracleAgeMs: viewOptional(mark.max_oracle_age_ms),
+            maxSpreadBps: mark.max_spread_bps as number,
+            cexCompositeMaxAgeMs: mark.cex_composite_max_age_ms as bigint,
+          },
+    status: viewName(VIEW_MARKET_STATUSES, m.status),
+    fundingDeadBandBps: viewOptional(m.funding_dead_band_bps),
+    fundingInterestRate: viewOptional(m.funding_interest_rate),
+  };
+}
+
+function eventViewFromWasm(v: unknown): EventView {
+  const e = v as WasmRecord;
+  const source = e.resolution_source as WasmRecord;
+  return {
+    eventId: e.event_id as number,
+    binaryMarket: e.binary_market as number,
+    question: e.question as string,
+    settlementMs: e.settlement_ms as bigint,
+    resolutionWindowMs: e.resolution_window_ms as bigint,
+    status: viewName(VIEW_EVENT_STATUSES, e.status),
+    outcome: e.outcome == null ? null : viewName(VIEW_OUTCOMES, e.outcome),
+    createdMs: e.created_ms as bigint,
+    resolvedMs: viewOptional(e.resolved_ms),
+    resolutionSource:
+      source.type === "market_oracle"
+        ? {
+            type: "MarketOracle",
+            market: source.market as number,
+            strikePrice: source.strike_price as bigint,
+            comparison: viewName(VIEW_COMPARISONS, source.comparison),
+          }
+        : source.type === "relayer_attested"
+          ? { type: "RelayerAttested" }
+          : { type: "Unknown" },
+    attachedConditionals: (e.attached_conditionals as WasmRecord[]).map(
+      (a) => ({
+        underlyingMarket: a.underlying_market as number,
+        yesMarket: a.yes_market as number,
+        noMarket: a.no_market as number,
+      }),
+    ),
+  };
+}
+
+/** The `/v2/markets-snapshot` view under the SDK's names. */
+export function marketsSnapshotViewFromWasm(v: unknown): MarketsSnapshotView {
+  const s = v as WasmRecord;
+  return {
+    chainId: bytesOf(s.chain_id),
+    height: s.height as bigint,
+    markets: (s.markets as unknown[]).map(marketViewFromWasm),
+    events: (s.events as unknown[]).map(eventViewFromWasm),
+    openInterest: (s.open_interest as WasmRecord[]).map((r) => ({
+      market: r.market as number,
+      long: r.long as bigint,
+      short: r.short as bigint,
+    })),
+  };
 }
