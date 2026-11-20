@@ -820,8 +820,9 @@ export interface EventInfo {
  * chain we couldn't rebase. This is the engine-level lever to tighten
  * parameters on a running market.
  *
- * `kind` and `szDecimals` remain immutable. Margin ratios may only be
- * tightened by the engine; lowering either live risk floor is rejected.
+ * `kind` and `szDecimals` remain immutable. Lowering either margin ratio
+ * needs a `MarketParams` grant for the signing key; the admin quorum
+ * (`MarketSettingsChange`) needs none.
  */
 export interface UpdateMarketFees {
   market: number;
@@ -856,12 +857,14 @@ export interface UpdateMarketFees {
   netDeltaMargin?: boolean | null;
   /**
    * New tick size in micro-USDC. Omit (or null) to leave unchanged.
-   * 0 disables the tick gate (any price accepted). BE-48.
+   * 0 means no tick gate (any price accepted); a market that has one
+   * cannot be set back to 0. BE-48.
    */
   tickSize?: bigint | null;
   /**
    * New lot size in contracts. Omit (or null) to leave unchanged.
-   * 0 disables the lot gate (any quantity accepted). BE-48.
+   * 0 means no lot gate (any quantity accepted); a market that has one
+   * cannot be set back to 0. BE-48.
    */
   lotSize?: bigint | null;
   /**
@@ -899,19 +902,20 @@ export interface UpdateMarketFees {
    */
   feeTiers?: FeeTier[] | null;
   /**
-   * New initial margin ratio in basis points. Omit to leave unchanged.
-   * Must be greater than or equal to the current market value.
+   * New initial margin ratio in basis points, 1 to 10,000. Omit to leave
+   * unchanged. Lowering it needs a `MarketParams` grant for the signing
+   * key; the admin quorum needs none.
    */
   imBps?: number | null;
   /**
    * New maintenance margin ratio in basis points. Omit to leave unchanged.
-   * Must be greater than or equal to the current value, positive, and no
-   * greater than the resulting `imBps`.
+   * Positive and no greater than the resulting `imBps`; lowering it follows
+   * the same rule as `imBps`.
    */
   mmBps?: number | null;
   /**
-   * New aggregate open-interest cap in contracts. Omit to leave unchanged;
-   * 0 disables the cap.
+   * New aggregate open-interest cap in contracts. Omit to leave unchanged.
+   * Must be greater than 0: the cap cannot be removed.
    */
   maxOpenInterest?: bigint | null;
   /** Impact notional in micro-USDC. Omit to leave unchanged. */
