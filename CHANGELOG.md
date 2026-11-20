@@ -32,11 +32,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   holds no position on the market (`ExecError::ReduceOnlyNoPosition`); the log
   names which. The trigger outcome reason `ReduceOnlyWouldIncrease` keeps its
   name.
-- The Rust core pins the pre-release proof-wire commit `014be80`, which
-  mirrors exchange-wire at `77e5d0060` and adds codes 136-142 and
-  `ReduceOnlyNoPosition` on top of the published `v12.1.0` tag. It is
-  repinned to the released proof-wire (expected 12.2.0) before release. No
-  bytes change.
+- The Rust core pins proof-wire 12.2.0 (tag `v12.2.0`), the wire of exchange
+  2.27.0, which adds codes 136-142 and `ReduceOnlyNoPosition`. No bytes
+  change.
   `PositionUpdated.realizedPnl` now also carries the gross PnL of a partial
   close and of an insurance-fund takeover netting; its closed funding debt
   stays in `FundingSettled`. Do not add it to PnL derived from
