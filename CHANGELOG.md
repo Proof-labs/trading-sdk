@@ -14,7 +14,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `query_v2` view (`market_snapshot::MarketsSnapshotView`). A record that is
   not a map keyed by field name, or a name that is not a string (a status
   sent as the integer 0, for example), refuses the whole read.
-- Error codes 136-142 (the unreleased proof-wire after 12.1.0), named in
+
+## [14.0.0] — 2026-11-20
+
+npm only: a MAJOR for exchange 2.27.0 (proof-wire 12.2.0). Code 35 is renamed
+`ReduceOnlyRefused` and codes 136-142 are named. The Rust core entry above
+stays under [Unreleased].
+
+### Added
+
+- Error codes 136-142 (proof-wire 12.2.0), named in
   Rust, TypeScript and Python: 136 `PositionEpochMismatch`, 137 `TriggerBracketNotFound`, 138
   `TriggerAlreadyCrossed`, 139 `PositionNotFound`, 140
   `AccountPositionCapReached`, 141 `SubAccountCapReached` and 142
