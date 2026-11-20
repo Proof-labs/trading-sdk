@@ -1258,6 +1258,25 @@ export interface SetMarketStatus {
   status: MarketStatus;
 }
 
+/** The settings a quorum `UpdateMarketFees` sets on `market`: every field of
+ *  {@link UpdateMarketFees} but `signer`, with the same meaning, because the
+ *  quorum is the authorization. An omitted or `null` field keeps its
+ *  setting. The quorum may also lower a margin rate, which a key may do only
+ *  with a `MarketParams` grant. */
+export type MarketSettingsChange = Omit<UpdateMarketFees, "signer">;
+
+/** Changes a live market's settings through the admin quorum (inner tag 35).
+ *  The engine refuses the proposal with code 155 (`MarketSettingsChanged`)
+ *  unless `predecessor` is the market's settings sequence when it is
+ *  proposed, and fails it with 155 at execution if another settings change
+ *  landed in between. */
+export interface QuorumUpdateMarketFees {
+  /** The market's `MarketSettingsSequence` when proposed: `settingsSequence`
+   *  in the version 2 markets snapshot (`MarketView`). */
+  predecessor: bigint;
+  change: MarketSettingsChange;
+}
+
 /** Voids an event (inner tag 29): every binary and conditional on it
  *  settles in cash at `yesPrice`. */
 export interface VoidEvent {
@@ -1331,6 +1350,7 @@ export type AdminAction =
   | { kind: "VoidEvent"; value: VoidEvent }
   | { kind: "SettleEvent"; value: SettleEvent }
   | { kind: "SetMarketStatus"; value: SetMarketStatus }
+  | { kind: "UpdateMarketFees"; value: QuorumUpdateMarketFees }
   | { kind: "SetOracleGuards"; value: SetOracleGuards }
   | { kind: "CancelAllOrdersForAccount"; value: CancelAllOrdersForAccount }
   | { kind: "ConfigureOraclePolicy"; value: ConfigureOraclePolicy }

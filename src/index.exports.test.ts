@@ -26,6 +26,8 @@ import {
   type GovernanceAction,
   type AdminAction,
   type SetDepositLimit,
+  type QuorumUpdateMarketFees,
+  type MarketSettingsChange,
   type EmergencyAction,
   type UpdateAdminSignerRegistry,
   type ProposeAdminAction,
@@ -241,6 +243,16 @@ describe("public barrel: governance surface", () => {
       value: depositLimit,
     };
     expect(depositAction.value).toBe(depositLimit);
+    const change: MarketSettingsChange = {
+      market: 1,
+      maxOpenInterest: 35_000n,
+    };
+    const quorum: QuorumUpdateMarketFees = { predecessor: 0n, change };
+    const settingsAction: AdminAction = {
+      kind: "UpdateMarketFees",
+      value: quorum,
+    };
+    expect(settingsAction.value).toBe(quorum);
     const registry: UpdateAdminSignerRegistry = {
       newThreshold: 2,
       newMembers: [new Uint8Array(20)],

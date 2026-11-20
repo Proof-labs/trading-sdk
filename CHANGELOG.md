@@ -14,6 +14,47 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `query_v2` view (`market_snapshot::MarketsSnapshotView`). A record that is
   not a map keyed by field name, or a name that is not a string (a status
   sent as the integer 0, for example), refuses the whole read.
+- **All SDKs:** the admin quorum's `UpdateMarketFees` (inner tag 35), which
+  changes a live market's settings. A `ProposeAdminAction` carries
+  `QuorumUpdateMarketFees`: `predecessor`, the market's settings sequence
+  (`MarketSettingsSequence`) when proposed, and `change`, a
+  `MarketSettingsChange` (the `UpdateMarketFees` fields without `signer`).
+  The engine refuses the proposal with code 155 unless `predecessor` is the
+  market's current sequence, and fails it with 155 at execution if another
+  settings change landed in between.
+  - TypeScript (MINOR): `AdminAction` gains the `UpdateMarketFees` variant,
+    with the `QuorumUpdateMarketFees` and `MarketSettingsChange` types, and a
+    tag-35 proposal reads back under that kind in `decodeAdminAction`,
+    `decodeProposalDisplayInfo` and `decodeProposalPage`. An exhaustive
+    `switch` on `action.kind` (one that assigns the remainder to `never`) or
+    a `Record<AdminAction["kind"], …>` table needs a new entry.
+  - Rust: the crate re-exports proof-wire's `market_settings`, and
+    `governance` re-exports `QuorumUpdateMarketFees`, `MarketSettingsChange`
+    and `MarketSettingsSequence`.
+  - Python: `ProposeAdminAction` takes it in the wire form,
+    `{"UpdateMarketFees": {"predecessor": 0, "change": {"market": 1, …}}}`.
+  - Every SDK builds the engine's frozen proposal
+    (`crates/spec/golden-vectors/propose_update_market_fees.hex`, DevNet BTC's
+    open-interest cap to 35,000 at sequence 0) byte for byte and decodes it
+    back.
+
+### Changed
+
+- **proof-wire pin.** It moves from the `v12.0.0` release commit `27ac6ac` to
+  wire `dev` at `b5e2121`, proof-wire 12.1.0 as mirrored from exchange `dev`
+  at `b459eccd1`, still pinned by commit. No release tag carries that commit
+  yet; the pin moves to the tag of the exchange release that publishes it.
+  No existing action bytes change, and every existing row of
+  `conformance/codec.ndjson` regenerates unchanged. The commit also carries
+  wire changes the SDK does not name yet: error codes 136 to 143, the
+  `ReduceOnlyNoPosition` refusal on code 35, the `WorkCap` enum, the
+  `UserMarketLeverage` view and the wider meaning of
+  `PositionUpdated.realized_pnl`. The Rust crate re-exports proof-wire 12.1.0
+  types: `AdminAction` and `ExecError` gain variants, and `query_v2::Market`
+  gains a field, so an exhaustive `match` or a struct literal of them no
+  longer compiles. The next `proof-trading-sdk` crate release is MAJOR; the
+  npm package and the Python distribution only add names, so this change
+  alone is MINOR for them.
 
 ## [13.2.0] — 2026-11-20
 
