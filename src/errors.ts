@@ -201,6 +201,8 @@ export enum ExecErrorCode {
   AccountPositionCapReached = 140,
   SubAccountCapReached = 141,
   WorkCapReached = 142,
+  // 143 (UserImAboveNotional) is not named yet; 144-154 are reserved on
+  // the wire for the bridge vote errors.
   MarketSettingsChanged = 155,
   InternalError = 255,
 }
