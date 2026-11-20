@@ -46,8 +46,9 @@ witness; the node refuses one on this route. `queryMarkets()`,
 
 `gateway-v2-markets-snapshot.json`, next to the engine fixtures below, is a
 byte-identical copy of the gateway's frozen example: BTC trading, ETH
-reduce-only, TEST delisted and the prediction binary of event 7 halted. The
-Rust and TypeScript tests decode it.
+reduce-only, TEST delisted and the prediction binary of event 7 halted, with
+ETH at settings sequence 1 and every other market at 0. The Rust and
+TypeScript tests decode it.
 
 ## TypeScript
 

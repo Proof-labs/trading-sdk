@@ -181,6 +181,7 @@ mod tests {
     /// Byte-identical copy of the API gateway's frozen example (api-gateway
     /// `tests/fixtures/v2-markets-snapshot.json`): BTC trading, ETH
     /// reduce-only, TEST delisted and the prediction binary of event 7 halted.
+    /// ETH is at settings sequence 1, every other market at 0.
     const GATEWAY_EXAMPLE: &str = include_str!("gateway-v2-markets-snapshot.json");
 
     fn chain() -> ChainBinding {
@@ -296,21 +297,27 @@ mod tests {
 
     #[test]
     fn each_market_reads_its_settings_sequence_and_zero_without_one() {
-        // The gateway's example carries no settings_sequence.
-        assert!(example()
-            .markets
-            .iter()
-            .all(|m| m.settings_sequence == MarketSettingsSequence(0)));
-        let mut named = tree(&example());
-        *at(&mut named, "markets/1/settings_sequence") = Value::from(3);
-        let snapshot = decode(&tree_body(&named)).expect("a settings sequence decodes");
-        assert_eq!(
+        let sequences = |snapshot: &MarketsSnapshotView| {
             snapshot
                 .markets
                 .iter()
                 .map(|m| m.settings_sequence)
-                .collect::<Vec<_>>(),
-            [0, 3, 0, 0].map(MarketSettingsSequence)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            sequences(&example()),
+            [0, 1, 0, 0].map(MarketSettingsSequence)
+        );
+        // A node that does not serve the field sends no key: the market reads 0.
+        let mut older = tree(&example());
+        let Value::Map(eth) = at(&mut older, "markets/1") else {
+            panic!("a market is a map");
+        };
+        eth.retain(|(key, _)| key.as_str() != Some("settings_sequence"));
+        let snapshot = decode(&tree_body(&older)).expect("a market without the key decodes");
+        assert_eq!(
+            sequences(&snapshot),
+            [0, 0, 0, 0].map(MarketSettingsSequence)
         );
     }
 

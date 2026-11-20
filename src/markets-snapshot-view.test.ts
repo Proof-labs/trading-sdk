@@ -7,11 +7,13 @@ import { decode, encode } from "@msgpack/msgpack";
 import { describe, expect, it, vi } from "vitest";
 import { ExchangeClient } from "./client.js";
 import { GatewayHttpError, GatewayReadError } from "./errors.js";
+import type { MarketsSnapshotView } from "./markets-snapshot-view.js";
 
 /** Byte-identical copy of the API gateway's frozen example (api-gateway
  *  `tests/fixtures/v2-markets-snapshot.json`): BTC trading, ETH reduce-only,
  *  TEST delisted and the prediction binary of event 7 halted, at height
- *  12816657 of this chain. */
+ *  12816657 of this chain. ETH is at settings sequence 1, every other market
+ *  at 0. */
 const EXAMPLE = readFileSync(
   new URL(
     "../crates/proof-trading-sdk/src/market_snapshot/gateway-v2-markets-snapshot.json",
@@ -137,25 +139,33 @@ describe("reads().marketsSnapshotView", () => {
   });
 
   it("reads each market's settings sequence, 0 for a market served without one", async () => {
-    // The gateway's example carries no settings_sequence; serve one for ETH.
-    const view = decode(Buffer.from(JSON.parse(EXAMPLE).data, "base64")) as {
-      markets: Record<string, unknown>[];
-    };
-    view.markets[1].settings_sequence = 3;
-    const body = JSON.stringify({
-      data: Buffer.from(encode(view)).toString("base64"),
-    });
-    const snapshot = await clientServing(body)
-      .client.reads()
-      .marketsSnapshotView();
-    expect(
+    const sequences = (snapshot: MarketsSnapshotView) =>
       snapshot.markets.map(({ market, settingsSequence }) => [
         market,
         settingsSequence,
-      ]),
-    ).toEqual([
+      ]);
+    const snapshot = await clientServing(EXAMPLE)
+      .client.reads()
+      .marketsSnapshotView();
+    expect(sequences(snapshot)).toEqual([
       [1, 0n],
-      [2, 3n],
+      [2, 1n],
+      [3, 0n],
+      [100, 0n],
+    ]);
+    // A node that does not serve the field sends no key: the market reads 0.
+    const view = decode(Buffer.from(JSON.parse(EXAMPLE).data, "base64")) as {
+      markets: Record<string, unknown>[];
+    };
+    delete view.markets[1].settings_sequence;
+    const older = await clientServing(
+      JSON.stringify({ data: Buffer.from(encode(view)).toString("base64") }),
+    )
+      .client.reads()
+      .marketsSnapshotView();
+    expect(sequences(older)).toEqual([
+      [1, 0n],
+      [2, 0n],
       [3, 0n],
       [100, 0n],
     ]);
