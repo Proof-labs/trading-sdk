@@ -42,12 +42,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and the `predecessor` a quorum `UpdateMarketFees` names. It reads 0 for a
   market with none, and from a node that does not serve the field. In Rust it
   is `settings_sequence` on proof-wire's `query_v2::Market`. `MarketView`
-  gains it as a required field, so a hand-built `MarketView` (a mock or
-  fixture) must add it. The next npm release is MAJOR already, for the
-  code-35 rename below.
+  gains it as a required field, which breaks code that builds a `MarketView`
+  by hand (a mock or fixture): it must add the field.
 - Error code 155 `MarketSettingsChanged` (proof-wire 12.2.0): a quorum
   `UpdateMarketFees` names a settings sequence its market is not at. Named in
   Rust, TypeScript and Python.
+
+## [14.0.0] — 2026-11-20
+
+npm only: a MAJOR for exchange 2.27.0 (proof-wire 12.2.0). Code 35 is renamed
+`ReduceOnlyRefused` and codes 136-142 are named. The Rust core entry above
+stays under [Unreleased].
+
+### Added
+
 - Error codes 136-142 (proof-wire 12.2.0), named in
   Rust, TypeScript and Python: 136 `PositionEpochMismatch`, 137 `TriggerBracketNotFound`, 138
   `TriggerAlreadyCrossed`, 139 `PositionNotFound`, 140
@@ -67,16 +75,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   names which. The trigger outcome reason `ReduceOnlyWouldIncrease` keeps its
   name.
 - The Rust core pins proof-wire 12.2.0 (tag `v12.2.0`), the wire of exchange
-  2.27.0. Besides codes 136-142, `ReduceOnlyNoPosition` and the admin
-  quorum's `UpdateMarketFees` above, it carries wire changes the SDK does not
-  name yet: error code 143, the `UserMarketLeverage` view, and the
-  `oracle_price_certified`, `oracle_price_uncertified` and
-  `oracle_policy_activated` events. No existing bytes change, and every
-  existing row of `conformance/codec.ndjson` regenerates unchanged. The Rust
-  crate re-exports proof-wire's types: `AdminAction`, `ExecError` and `Event`
-  gain variants and `query_v2::Market` gains a field, so an exhaustive `match`
-  or a struct literal of them no longer compiles, and the next
-  `proof-trading-sdk` crate release is MAJOR.
+  2.27.0, which adds codes 136-142 and `ReduceOnlyNoPosition`. No bytes
+  change.
   `PositionUpdated.realizedPnl` now also carries the gross PnL of a partial
   close and of an insurance-fund takeover netting; its closed funding debt
   stays in `FundingSettled`. Do not add it to PnL derived from
