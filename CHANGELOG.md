@@ -9,6 +9,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Rust core:** `market_snapshot::decode_snapshot_view` decodes a complete
+  `GET /v2/markets-snapshot` body, bound to a chain, into proof-wire's
+  `query_v2` view (`market_snapshot::MarketsSnapshotView`). A record that is
+  not a map keyed by field name, or a name that is not a string (a status
+  sent as the integer 0, for example), refuses the whole read.
+
+## [14.1.0] — 2026-11-20
+
+npm only: a MINOR on proof-wire 12.2.0, as 14.0.0: the admin quorum's
+`UpdateMarketFees`, `MarketView.settingsSequence`, code 155 and the positions
+history `interval`. `MarketView` gains the required `settingsSequence`, which
+breaks code that builds a `MarketView` by hand; it ships in 14.1.0 by decision
+rather than in a MAJOR. The Rust core entry above stays under [Unreleased].
+
+### Added
+
 - **Positions history `interval`, all three SDKs:** a bucket width for
   `GET /v1/history/positions` (indexer `/v1/positions?interval=`, the values
   `/v1/portfolio` takes: a positive count and `s`, `m`, `h` or `d`, up to
@@ -28,11 +44,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **Python:** keywords `interval`, `from_ms`, `to_ms` and `market` on
     `ExchangeClient.history_positions`; invalid inputs raise `ValueError`
     before fetching.
-- **Rust core:** `market_snapshot::decode_snapshot_view` decodes a complete
-  `GET /v2/markets-snapshot` body, bound to a chain, into proof-wire's
-  `query_v2` view (`market_snapshot::MarketsSnapshotView`). A record that is
-  not a map keyed by field name, or a name that is not a string (a status
-  sent as the integer 0, for example), refuses the whole read.
 - **All SDKs:** the admin quorum's `UpdateMarketFees` (inner tag 35), which
   changes a live market's settings. A `ProposeAdminAction` carries
   `QuorumUpdateMarketFees`: `predecessor`, the market's settings sequence
