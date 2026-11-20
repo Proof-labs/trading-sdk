@@ -194,6 +194,7 @@ export enum ExecErrorCode {
   MarketBacksLiveEvent = 133,
   MarketHalted = 134,
   OffCurveWithdrawalDestination = 135,
+  MarketSettingsChanged = 155,
   InternalError = 255,
 }
 
@@ -679,6 +680,11 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "OffCurveWithdrawalDestination",
     description:
       "Withdrawal destination must be an on-curve Solana wallet owner; no funds were debited.",
+  },
+  155: {
+    name: "MarketSettingsChanged",
+    description:
+      "A quorum UpdateMarketFees names a settings sequence its market is not at, as when the settings changed after the proposal was made. Re-read the market's settings_sequence and propose the change again.",
   },
   255: { name: "InternalError", description: "unexpected runtime failure" },
 };

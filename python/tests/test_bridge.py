@@ -209,6 +209,11 @@ class TestErrors:
         assert pts.EngineError(52, "").name == "AdminGovernanceInactive"
         assert pts.EngineError(53, "").name == "NotAdminSigner"
 
+    def test_market_settings_changed_code_155(self):
+        # A quorum UpdateMarketFees whose market's settings sequence moved.
+        assert pts.get_error_name(155) == "MarketSettingsChanged"
+        assert pts.EngineError(155, "").name == "MarketSettingsChanged"
+
     def test_proposal_lifecycle_codes_54_71(self):
         # Endpoints of the mirrored proposal-lifecycle family; the full range is
         # pinned by the errors.ndjson conformance manifest.

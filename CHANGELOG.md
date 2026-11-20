@@ -42,6 +42,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   market, and the `predecessor` a quorum `UpdateMarketFees` names. It reads 0
   for a market with none, and from a node that does not serve the field. In
   Rust it is `settings_sequence` on proof-wire's `query_v2::Market`.
+- Error code 155 `MarketSettingsChanged` (proof-wire 12.1.0): a quorum
+  `UpdateMarketFees` names a settings sequence its market is not at. Named in
+  Rust, TypeScript and Python.
 
 ### Changed
 

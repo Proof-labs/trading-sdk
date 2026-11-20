@@ -66,6 +66,14 @@ describe("decodeExecError", () => {
     expect(e32?.description).toContain("net-delta margin grouping");
   });
 
+  it("names code 155, a quorum UpdateMarketFees against a moved settings sequence", () => {
+    expect(ExecErrorCode.MarketSettingsChanged).toBe(155);
+    expect(execErrorName(155)).toBe("MarketSettingsChanged");
+    expect(decodeExecError(155)?.description).toContain(
+      "Re-read the market's settings_sequence",
+    );
+  });
+
   it("decodes the unavailable-mark rejection (97)", () => {
     expect(ExecErrorCode.UnpricedNoMark).toBe(97);
     const e97 = decodeExecError(97);

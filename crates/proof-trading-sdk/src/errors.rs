@@ -191,7 +191,8 @@ define_error_kinds! {
     133 => MarketBacksLiveEvent ~ "The perpetual backs a Conditional on an unresolved event and cannot wind down until the event resolves.",
     134 => MarketHalted ~ "The market is halted and takes no orders or fills; cancels still work.",
     135 => OffCurveWithdrawalDestination ~ "Withdrawal destination must be an on-curve Solana wallet owner; no funds were debited.",
-    255 => InternalError                ~ "Catch-all for unexpected runtime failures (panics caught by the FFI boundary, etc.). Treat as a server bug.",
+    155 => MarketSettingsChanged ~ "A quorum UpdateMarketFees names a settings sequence its market is not at, as when the settings changed after the proposal was made. Re-read the market's settings_sequence and propose the change again.",
+    255 => InternalError               ~ "Catch-all for unexpected runtime failures (panics caught by the FFI boundary, etc.). Treat as a server bug.",
 }
 
 /// Classification of an engine result code plus its DeliverTx log. Code 50 is
@@ -263,6 +264,7 @@ pub fn error_code_manifest() -> &'static [ErrorKind] {
 #[cfg(test)]
 mod exec_error_meaning_tests {
     use super::*;
+    use proof_wire::market_settings::MarketSettingsSequence;
     use proof_wire::types::{ExecError, UnpricedReason};
 
     #[test]
@@ -290,6 +292,26 @@ mod exec_error_meaning_tests {
         assert_eq!(not_signer.code(), 53);
         assert_eq!(ExecError::AdminGovernanceInactive.code(), 52);
         assert_eq!(ExecError::NotAdminSigner.code(), 53);
+    }
+
+    /// A quorum `UpdateMarketFees` whose market's settings sequence moved:
+    /// the code, name and meaning the wire gives it.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn market_settings_changed_code_155_decodes_as_the_wire_names_it() {
+        let refusal = ExecError::MarketSettingsChanged {
+            market: 1,
+            predecessor: MarketSettingsSequence(0),
+            stored: MarketSettingsSequence(1),
+        };
+        assert_eq!(refusal.code(), 155);
+        let kind = decode_exec_error_kind(155, None).unwrap();
+        assert_eq!(
+            kind,
+            DecodedExecErrorKind::Known(ErrorKind::MarketSettingsChanged)
+        );
+        assert_eq!(kind.name(), "MarketSettingsChanged");
+        assert_eq!(kind.meaning(), refusal.meaning());
     }
 
     #[test]
@@ -519,6 +541,11 @@ mod exec_error_meaning_tests {
             },
             ExecError::MarketHalted { market: 1 },
             ExecError::OffCurveWithdrawalDestination,
+            ExecError::MarketSettingsChanged {
+                market: 1,
+                predecessor: MarketSettingsSequence(0),
+                stored: MarketSettingsSequence(1),
+            },
         ]
     }
 
@@ -582,7 +609,7 @@ mod exec_error_meaning_tests {
     /// RunFundingTick), 78-81 (reserved for oracle errors), 90 (the retired
     /// sub-account switch), 101 (unassigned), 112 (the retired PLP
     /// configuration), 117-122 and 126-127 (claimed elsewhere, unassigned on the
-    /// wire).
+    /// wire). Above 135 it names 155 (`MarketSettingsChanged`) and 255.
     /// Catches the case where a code is reserved by the mirrored engine error
     /// enum but no SDK classification maps to it.
     #[test]
@@ -592,7 +619,7 @@ mod exec_error_meaning_tests {
         codes.dedup();
         let expected: Vec<u32> = (1u32..=135)
             .filter(|c| !matches!(c, 24 | 25 | 30 | 31 | 36 | 41 | 78..=81 | 90 | 101 | 112 | 117..=122 | 126..=127))
-            .chain(std::iter::once(255))
+            .chain([155, 255])
             .collect();
         assert_eq!(
             codes, expected,
