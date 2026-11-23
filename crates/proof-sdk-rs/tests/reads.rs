@@ -893,3 +893,34 @@ async fn candles_and_bbo_read_bars_for_the_asked_market() {
     assert_eq!(targets[0], format!("GET /v1/history/candles?{query}"));
     assert_eq!(targets[1], format!("GET /v1/history/bbo?{query}"));
 }
+
+#[tokio::test]
+async fn account_v2_requests_the_version_and_preserves_valuation() {
+    let raw: Vec<u8> = include_str!("../../../conformance/account-v2.hex")
+        .trim()
+        .as_bytes()
+        .chunks_exact(2)
+        .map(|pair| {
+            u8::from_str_radix(std::str::from_utf8(pair).expect("fixture hex is ASCII"), 16)
+                .expect("fixture hex is valid")
+        })
+        .collect();
+    let envelope = json!({"data": base64::engine::general_purpose::STANDARD.encode(raw)});
+    let (info, log) = fixture(vec![(200, envelope)]).await;
+    let view = info.account_v2(mm()).await.expect("v2 fixture must decode");
+    assert_eq!(view.positions[0].settle_price, Some(55));
+    assert_eq!(view.positions[0].book_restricted, Some(true));
+    let calls = requests(&log);
+    assert_eq!(calls[0].0, "POST /info");
+    assert_eq!(
+        serde_json::from_str::<Value>(&calls[0].1).expect("request body is JSON"),
+        json!({"type": "clearinghouseState", "user": MM, "version": 2})
+    );
+}
+
+#[tokio::test]
+async fn account_v2_refuses_an_old_gateways_positional_answer() {
+    let (info, log) = fixture(vec![(200, data(&json!([0, [], 0, 0, 0, 0, [], 0, 0])))]).await;
+    assert!(matches!(info.account_v2(mm()).await, Err(Error::Decode(_))));
+    assert_eq!(requests(&log).len(), 1);
+}

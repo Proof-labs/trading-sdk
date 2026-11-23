@@ -2897,6 +2897,43 @@ export interface HistoryFillsPage {
   nextCursor: string;
 }
 
+/** One position valued at its own reference; margins do not sum to account margins. */
+export interface PositionSummary {
+  market: number;
+  side: "buy" | "sell" | "unknown";
+  entryPrice: bigint;
+  size: bigint;
+  positionEpoch: bigint | null;
+  /** Null for prediction binaries, which have no current mark. */
+  upnlNow: bigint | null;
+  mmNow: bigint;
+  imNow: bigint;
+  pnlIfFires: bigint;
+  pnlIfDies: bigint;
+  fundingSince: bigint;
+  adlScore: bigint;
+  /** Exact micro-USDC valuation reference; binary firing payout, not trading mark.
+   * Null when absent from older v2 responses. */
+  settlePrice: bigint | null;
+  /** Conditional taker/trigger restriction; null for other kinds or older responses. */
+  bookRestricted: boolean | null;
+}
+
+/** Map-encoded v2 valuation. Amounts are exact micro-USDC; this is not a state witness. */
+export interface AccountView {
+  balance: bigint;
+  equity: bigint;
+  totalMm: bigint;
+  totalIm: bigint;
+  /** Binding-scenario equity over maintenance margin; null when no scenario carries risk. */
+  marginRatioBps: bigint | null;
+  bindingScenario: { eventId: number; branch: "yes" | "no" | "unknown" }[];
+  feesAccrued: bigint;
+  volume30dMicroUsdc: bigint;
+  cashoutEquity: bigint;
+  positions: PositionSummary[];
+}
+
 /** Full account information including balance, positions, and margin state. */
 export interface AccountInfo {
   /** [0] Available USDC balance in microUSDC (6 dp, e.g., 100_000_000_000 = $100,000). */

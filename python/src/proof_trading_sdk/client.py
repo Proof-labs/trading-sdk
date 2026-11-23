@@ -23,6 +23,7 @@ from proof_trading_sdk._native import (
     SigningHandle,
     chain_id_from_string,
     decode_open_orders,
+    decode_account_view,
     generate_keypair,
     pubkey_to_owner,
     reject_floats,
@@ -969,6 +970,33 @@ class ExchangeClient:
             },
             raw={"tuple": list(raw)},
         )
+
+    def account_v2(self, owner: bytes | str | None = None) -> dict[str, t.Any]:
+        """Map-encoded account valuation via gateway version 2.
+
+        Returns snake_case wire fields with exact integers. ``settle_price``
+        is the valuation reference (binary firing payout, not trading mark).
+        Missing references/restrictions remain None. A v1 response is refused.
+        This read does not verify a finalized-state witness.
+        """
+        owner_hex = canonical_owner(self._own_owner() if owner is None else owner)
+        resp = self._request(
+            "POST", "/info",
+            content=json.dumps({
+                "type": "clearinghouseState", "user": owner_hex, "version": 2,
+            }).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        payload = _response_object(resp)
+        if payload.get("error") is not None:
+            raise ProofTradingSdkError(f"gateway error for account v2: {payload['error']}")
+        encoded = payload.get("data")
+        if not isinstance(encoded, str):
+            raise CodecError("invalid account v2 data envelope")
+        try:
+            return decode_account_view(base64.b64decode(encoded, validate=True))
+        except (ValueError, binascii.Error) as exc:
+            raise CodecError("invalid account v2 response") from exc
 
     def open_orders(self, owner: bytes | str) -> list[dict[str, t.Any]]:
         """Open orders for *owner* via ``POST /info`` (``openOrders``).

@@ -98,6 +98,8 @@ pub enum ReadKind {
     InsuranceFundDirectory = 6,
     /// `query_v2::InsuranceFundState` (`GET /v2/insurance-fund/{pool}?witness=1`).
     InsuranceFundState = 7,
+    /// Map-encoded account valuation (`clearinghouseState`, version 2).
+    AccountV2 = 8,
 }
 
 fn decode_as<T: serde::de::DeserializeOwned + serde::Serialize>(
@@ -145,6 +147,11 @@ pub fn decode_read(kind: ReadKind, bytes: &[u8]) -> Result<JsValue, JsError> {
             &Shape::Optional(&EVENT_INFO),
         ),
         ReadKind::Account => decode_records::<core_sdk::query::AccountInfo>(bytes, &ACCOUNT_INFO),
+        ReadKind::AccountV2 => {
+            let view = core_sdk::query::decode_account_view(bytes)
+                .map_err(|error| JsError::new(&error))?;
+            to_bigint_js(&view)
+        }
         ReadKind::AdminAction => decode_as::<governance::AdminAction>(bytes),
         ReadKind::AuthorizedAgents => {
             if !matches!(bytes.first(), Some(0x80..=0x8f | 0xde | 0xdf)) {

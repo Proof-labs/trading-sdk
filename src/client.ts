@@ -63,6 +63,7 @@ import {
 } from "./liquidation-history.js";
 import {
   accountInfoFromWasm,
+  accountViewFromWasm,
   openOrdersFromWasm,
   eventInfoFromWasm,
   marketConfigFromWasm,
@@ -109,6 +110,7 @@ import type {
   PlaceOrder,
   MarketOrder,
   AccountInfo,
+  AccountView,
   HistoryCashFlow,
   HistoryFillsPage,
   HistoryPositionSnapshot,
@@ -2014,6 +2016,26 @@ export class ExchangeClient {
     );
     return accountInfoFromWasm(
       await this.decodeRead("Account", fromBase64(json.data as string)),
+    );
+  }
+
+  /** Account valuation with exact settlement prices. Requires v2 gateway routing. */
+  async queryAccountV2(addressHex?: string): Promise<AccountView | null> {
+    const hex = addressHex ?? this.addressHex;
+    if (!hex) return null;
+    if (!/^[0-9a-fA-F]{40}$/.test(hex)) {
+      throw new Error("account owner must be a 40-character hex address");
+    }
+    const owner = hex.toLowerCase();
+    const json = await this.queryOwnerScoped(
+      { type: "clearinghouseState", user: owner, version: 2 },
+      `/v2/account/${owner}`,
+    );
+    return accountViewFromWasm(
+      await this.decodeRead(
+        "AccountV2",
+        fromBase64(requireEncodedData(json, "account v2")),
+      ),
     );
   }
 

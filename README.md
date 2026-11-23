@@ -21,6 +21,10 @@ actual PLP cash is only its account balance. Do not double-count either field.
 Other endpoints must be bracketed at the same `finalizedHeight` for cross-read
 comparisons; the method does not claim a historical-height query parameter.
 
+`queryAccountV2(ownerHex?)` reads map-encoded valuation, including exact
+`settlePrice` and nullable `bookRestricted`. See [account valuation](docs/account-valuation.md)
+for compatibility and Python/Rust equivalents.
+
 `queryAccountState(ownerHex?)` reads exact finalized settled balance and raw
 positions through the gateway, without oracle valuation. Its bigint values are
 not equity, accrued funding, available collateral or authorization. When
@@ -222,6 +226,7 @@ class ExchangeClient {
   queryEventListing(): Promise<EventListing>; // events row by row, with refused rows
   queryMarketsSnapshot(): Promise<MarketsSnapshot>;
   queryAccount(addressHex?: string): Promise<AccountInfo | null>;
+  queryAccountV2(addressHex?: string): Promise<AccountView | null>;
   queryHealth(): Promise<{ status: string; height: number }>;
   queryOraclePermissions(market: number): Promise<OraclePermissions>;
   queryWithdrawal(id: bigint): Promise<WithdrawalRecord | null>;

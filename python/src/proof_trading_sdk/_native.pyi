@@ -152,6 +152,8 @@ def get_error_code_table() -> list[dict[str, object]]:
 MAX_BOOK_BYTES: int
 MAX_ACCOUNT_STATE_BYTES: int
 
+def decode_account_view(bytes: bytes) -> dict: ...
+
 def decode_account_state(bytes: bytes, owner: bytes) -> dict:
     """Canonical raw account state with owner binding and strict record widths."""
     ...

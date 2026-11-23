@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use proof_trading_sdk::gateway::{GatewayClient, GatewayOptions};
-use proof_trading_sdk::query::{AccountInfo, AccountStateInfo};
+use proof_trading_sdk::query::{AccountInfo, AccountStateInfo, AccountView};
 use proof_trading_sdk::reads::{self, Shape};
 use proof_trading_sdk::types::{EventId, EventInfo, MarketConfig, MarketId, Order, Position, Side};
 use reqwest::StatusCode;
@@ -377,6 +377,19 @@ impl InfoClient {
     pub async fn account(&self, owner: Address) -> Result<AccountInfo> {
         let bytes = self.post_info_data("clearinghouseState", owner).await?;
         decode(&bytes, &reads::ACCOUNT_INFO, "account")
+    }
+
+    /// Map-encoded valuation including exact settlement references, via gateway v2.
+    ///
+    /// # Errors
+    /// Returns a read or decode error, including when a gateway returns v1.
+    pub async fn account_v2(&self, owner: Address) -> Result<AccountView> {
+        let body = serde_json::json!({
+            "type": "clearinghouseState", "user": owner.to_string(), "version": 2,
+        });
+        let env: DataEnvelope = self.post_info(&body).await?;
+        let bytes = unbase64(&env.data)?;
+        proof_trading_sdk::query::decode_account_view(&bytes).map_err(Error::Decode)
     }
 
     /// `GET /v1/account/{owner}/state`: balance and positions as of a

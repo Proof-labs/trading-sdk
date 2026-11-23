@@ -6,8 +6,21 @@ pub use proof_wire::query::{
     AccountInfo, AccountStateInfo, BindingScenario, FundingInfo, LevelSummary, OrderbookSnapshot,
     PositionBrief,
 };
+pub use proof_wire::query_v2::{Account as AccountView, PositionSummary};
 pub use proof_wire::query_v2::{AuthorizedAgents, AUTHORIZED_AGENTS_LIMIT};
 pub use proof_wire::query_v2::{InsuranceFundDirectory, InsuranceFundLedger, InsuranceFundState};
+
+/// Decode the map-encoded account valuation; positional v1 responses are refused.
+///
+/// # Errors
+/// Returns an error for malformed MessagePack or an incompatible account shape.
+pub fn decode_account_view(bytes: &[u8]) -> Result<AccountView, String> {
+    crate::msgpack::reject_floats(bytes).map_err(|error| error.to_string())?;
+    if !matches!(bytes.first(), Some(0x80..=0x8f | 0xde | 0xdf)) {
+        return Err("account v2 must be a MessagePack map".into());
+    }
+    rmp_serde::from_slice(bytes).map_err(|error| error.to_string())
+}
 
 /// Validate the canonical account binding using the wire's sole address derivation.
 pub fn insurance_fund_owner_matches(fund: &InsuranceFundLedger) -> bool {
