@@ -25,3 +25,19 @@ The original `queryAccount` / `account` methods retain their v1 response.
 A gateway that ignores `version: 2` and returns a v1 array causes a decode error;
 there is no fallback. Missing/malformed responses fail rather than becoming empty
 accounts. This read does not verify a finalized-state witness.
+
+Rust exposes v2 response enums through `proof_sdk_rs::query_v2` (also
+`proof_trading_sdk::query_v2`). Use these enums for v2 reads; the root `Side`
+remains the order/legacy-position type.
+
+```rust
+use proof_sdk_rs::{query_v2::{Branch, Side}, AccountView};
+
+fn has_long_position(account: &AccountView) -> bool {
+    account.positions.iter().any(|position| position.side == Side::Buy)
+}
+
+fn has_yes_outcome(account: &AccountView) -> bool {
+    account.binding_scenario.iter().any(|outcome| outcome.branch == Branch::Yes)
+}
+```

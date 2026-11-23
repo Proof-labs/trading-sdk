@@ -104,6 +104,7 @@ pub use proof_trading_sdk as core;
 pub use proof_trading_sdk::bridge::WithdrawalId;
 pub use proof_trading_sdk::gateway::{TxAttribute, TxEvent, TxHash};
 pub use proof_trading_sdk::query::{AccountInfo, AccountView, PositionBrief, PositionSummary};
+pub use proof_trading_sdk::query_v2;
 pub use proof_trading_sdk::types::{
     Action, AtomicBasketLeg, CancelReplaceOrder, ClientTriggerGroupId, ClientTriggerId, EventId,
     EventInfo, FundingRate, MarketConfig, MarketId, MarketOrder, Order, OrderId, Outcome,
