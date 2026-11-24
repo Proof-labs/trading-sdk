@@ -587,18 +587,19 @@ client.cancel_client_orders([7, 8])
 ```
 
 A single `PlaceOrder`, `MarketOrder`, `CancelOrder` or `CancelClientOrder` is
-sent as a list of one, and `client.submit` still raises `EngineError` with its
-code when that one entry is refused. An executed order whose list event does
-not read, or does not report one entry per order sent, raises
-`OrderResultUnreadable` with its `tx_hash`: it executed, so reconcile and
-never re-submit (the list methods raise it too). After `SubmissionPending`,
-read the reconciled transaction with
+sent as a list of one and read like any list: a refused entry is reported in
+`order_placements(response)` / `order_cancellations(response)` and the response
+keeps code 0. An executed order whose list event does not read, or does not
+report one entry per order sent, raises `OrderResultUnreadable` with its
+`tx_hash`: it executed, so reconcile and never re-submit (the list methods
+raise it too). After `SubmissionPending`, check the reconciled transaction with
 `check_order_result(evidence.hash, evidence.events)` (for example from
-`client.transaction_evidence(...)`): a list of one whose entry was refused
-raises the same `EngineError`. `MarketOrder` takes an optional
+`client.transaction_evidence(...)`). `MarketOrder` takes an optional
 `worst_price` and `reduce_only`. `client.close_position(market)` reads the
 position and sends a reduce-only market order on the opposite side for its
-size, returning `Closed(tx)`; a refused close raises `EngineError`. On a flat
+size, returning `Closed(tx)`; a refused close is its entry in
+`order_placements(tx)`. The size and `NothingToClose()` come from the account
+read, which can trail a fill made just before. On a flat
 account it sends nothing and returns `NothingToClose()`. There is no close
 action: to close by hand, send a `MarketOrder` with `reduce_only=True`.
 Entries out of range raise `ValueError` before signing.

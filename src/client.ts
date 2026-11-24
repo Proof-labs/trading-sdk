@@ -1252,10 +1252,9 @@ export class ExchangeClient {
    * Never resubmits writes. Use setUnsafeFastSubmit(true) to avoid a second poller.
    * `opts.action` labels the confirmation polls with that action's transport
    * priority, as on `submitSignedTx`; it is never checked against the hash.
-   * The executed result's order list is read as `submitTx` reads it: a list
-   * of one whose entry was refused returns as its engine error, with or
-   * without `opts.action` (pass a list action to keep the entry instead), and
-   * an unreadable list returns `unreadable`.
+   * The executed result's order list is read as `submitTx` reads it: refused
+   * entries are reported in their list, and an unreadable list returns
+   * `unreadable`.
    */
   async waitForDelivery(
     sync: TxResult,
@@ -1346,9 +1345,10 @@ export class ExchangeClient {
   /**
    * Place a limit order for the loaded signer. `owner` is supplied
    * automatically. Equivalent to
-   * `submitTx({ type: "PlaceOrder", data: { ...params, owner } })`. A refused
-   * order returns its engine error; an executed one whose result does not
-   * read returns `unreadable` (reconcile by hash, never resubmit). The other
+   * `submitTx({ type: "PlaceOrder", data: { ...params, owner } })`, a list of
+   * one: a refused order is its entry in {@link orderPlacements} and the
+   * transaction stays `ok`; an executed one whose result does not read
+   * returns `unreadable` (reconcile by hash, never resubmit). The other
    * single-order methods return the same way.
    * Optional `stopLoss`/`takeProfit` limbs attach a pre-fill bracket that
    * installs on the order's first fill (validated client-side here and in
@@ -1516,8 +1516,11 @@ export class ExchangeClient {
    * Close the loaded signer's entire position on `market`: a reduce-only
    * market order on the opposite side for the position's size, read first
    * with {@link ExchangeClient.queryAccount}. A flat account sends nothing
-   * and returns `nothingToClose`. A refusal is the engine error, including
-   * code 35 when the position went flat before the close ran.
+   * and returns `nothingToClose`. A refused close is its entry in
+   * {@link orderPlacements} of `tx`, code 35 when the position went flat
+   * before the close ran. The size and `nothingToClose` come from the account
+   * read, which can trail a fill made just before; the close never sends more
+   * than the position read.
    */
   async closePosition(market: number): Promise<CloseOutcome> {
     const owner = this.requireOwner();

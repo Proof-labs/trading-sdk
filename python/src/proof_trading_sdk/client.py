@@ -192,15 +192,15 @@ def _submission_may_have_been_admitted(exc: TransportError) -> bool:
 def _sent_list(action: Action) -> SentList | None:
     """What an order action sent as a list; ``None`` for any other action."""
     if isinstance(action, (PlaceOrder, MarketOrder)):
-        return SentList(ORDERS_PLACED, 1, True)
+        return SentList(ORDERS_PLACED, 1)
     if isinstance(action, (CancelOrder, CancelClientOrder)):
-        return SentList(ORDERS_CANCELLED, 1, True)
+        return SentList(ORDERS_CANCELLED, 1)
     if isinstance(action, PlaceOrders):
-        return SentList(ORDERS_PLACED, len(action.orders), False)
+        return SentList(ORDERS_PLACED, len(action.orders))
     if isinstance(action, CancelOrders):
-        return SentList(ORDERS_CANCELLED, len(action.order_ids), False)
+        return SentList(ORDERS_CANCELLED, len(action.order_ids))
     if isinstance(action, CancelClientOrders):
-        return SentList(ORDERS_CANCELLED, len(action.client_order_ids), False)
+        return SentList(ORDERS_CANCELLED, len(action.client_order_ids))
     return None
 
 
@@ -218,7 +218,6 @@ def _read_order_result(
         hashlib.sha256(envelope).hexdigest().upper(),
         data.get("events"),
         sent,
-        log=str(data.get("message") or data.get("log") or data.get("error") or ""),
     )
     return data
 
@@ -695,10 +694,9 @@ class ExchangeClient:
     def submit(self, action: Action) -> dict[str, t.Any]:
         """Encode + sign + submit a typed action in one call.
 
-        A refused :class:`PlaceOrder`, :class:`MarketOrder`,
-        :class:`CancelOrder` or :class:`CancelClientOrder` raises
-        :class:`EngineError` with its code, although the engine reports it as
-        a list of one with code 0. An executed order action whose list event
+        Every order action is a list, a single order a list of one: a refused
+        order or cancel is its entry in :func:`order_placements` /
+        :func:`order_cancellations`, and the response keeps code 0. An executed order action whose list event
         does not read, or is missing, or has the wrong number of entries,
         raises :class:`OrderResultUnreadable`: reconcile by hash, never
         re-submit.
@@ -712,9 +710,11 @@ class ExchangeClient:
         :meth:`account`. ``owner`` defaults to the signer.
 
         A flat account sends nothing and returns :class:`NothingToClose`. A
-        refused close raises :class:`EngineError`, including code 35 when the
-        position went flat before the close ran, and an executed close whose
-        result does not read raises :class:`OrderResultUnreadable`.
+        refused close is its entry in :func:`order_placements` of ``tx``,
+        code 35 when the position went flat before the close ran; an executed
+        close whose result does not read raises :class:`OrderResultUnreadable`. The size and ``NothingToClose`` come from the account read, which can
+        trail a fill made just before; the close never sends more than the
+        position read.
         """
         selected_owner = self._own_owner() if owner is None else owner
         position = next(
@@ -882,8 +882,7 @@ class ExchangeClient:
                 envelope.
             OrderResultUnreadable: the transaction executed but an order
                 list event in it does not read; reconcile by hash, never
-                re-submit. A list of one whose entry was refused raises its
-                ``EngineError``, as a single order does.
+                re-submit. Refused entries are reported in their lists.
         """
         return _read_order_result(envelope, self._post_envelope(envelope), None)
 

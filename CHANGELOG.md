@@ -55,18 +55,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- The single-order calls keep their signatures and error behaviour:
+- **Breaking:** every order call is a list and reads like one. The
+  single-order calls keep their signatures and send a list of one:
   `placeOrder`, `marketOrder`, `cancelOrder`, `cancelClientOrder`
   (TypeScript), `submit` of `PlaceOrder` / `MarketOrder` / `CancelOrder` /
   `CancelClientOrder` (Python) and `place_order`, `market_order`,
   `cancel_order`, `cancel_order_by_client_id`, `buy_no`, `sell_no` (Rust).
-  They send a list of one; when that entry is refused they return or raise
-  the same engine error as before, though the transaction itself now
-  succeeds. A pending result reconciled later (`waitForDelivery` with or
-  without its action, Python `check_order_result`, Rust `wait_for_receipt`)
-  maps a refused list of one to the same error. The single names stay as
-  aliases of the list bytes (`ActionType.PlaceOrder` / `MarketOrder` on 0x01,
-  `CancelOrder` on 0x02, `CancelClientOrder` on 0x18).
+  A refused entry no longer returns or raises an engine error: the
+  transaction succeeds and the refusal is its entry in `orderPlacements` /
+  `orderCancellations` (`order_placements` / `order_cancellations`,
+  `Receipt::placements` / `cancellations`), read the same at once or
+  reconciled by hash. The single names stay aliases of the list bytes
+  (`ActionType.PlaceOrder` / `MarketOrder` on 0x35, `CancelOrder` on 0x36,
+  `CancelClientOrder` on 0x37). Python's list decoder refuses unknown sides,
+  times in force and booleans, and resting or executed entries without an
+  order id, as Rust and TypeScript do.
 - Close position (`closePosition` in TypeScript, `close_position` in Rust,
   and the new `ExchangeClient.close_position` in Python) reads the account's
   position and sends a reduce-only market order on the opposite side for its
@@ -74,9 +77,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with the transaction (TypeScript `{ kind: "closed", tx }`, Python
   `Closed(tx)`, Rust `CloseOutcome::Closed(submitted)`), or nothing to close on
   a flat account, sent without a transaction (`{ kind: "nothingToClose" }`,
-  `NothingToClose()`, `CloseOutcome::NothingToClose`). A refused close is the
-  engine error: code 12 when the account cannot afford it, code 35 when the
-  position went flat before the close ran.
+  `NothingToClose()`, `CloseOutcome::NothingToClose`). A refused close is its
+  entry (code 12 when the account cannot afford it, code 35 when the position
+  went flat before the close ran). The size and nothing-to-close come from the
+  account read, which can trail a fill made just before; the close never sends
+  more than the position read.
 - `AtomicBasketOrder` leg outcomes are read from `orders_placed`
   (`orderPlacements` / `order_placements` / `Receipt::placements`); a failed
   basket reports every leg rejected with the transaction's code.
@@ -90,7 +95,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Action bytes 0x01 (`PlaceOrder`), 0x02 (`CancelOrder`), 0x04
   (`MarketOrder`), 0x17 (`ClosePosition`) and 0x18 (`CancelClientOrder`) are
-  retired by the wire and no longer encode or decode in any SDK; the stale
+  retired by the wire (the lists are on 0x35-0x37) and no longer encode or decode in any SDK; the stale
   `crates/spec/golden-vectors/place_order.hex` and `cancel_order.hex` go
   with them.
 - The raw `ClosePosition` action is removed from every SDK; close with

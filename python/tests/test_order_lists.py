@@ -7,7 +7,6 @@ import pytest
 
 from proof_trading_sdk import (
     Closed,
-    EngineError,
     ExchangeClient,
     NothingToClose,
     OrderResultUnreadable,
@@ -26,7 +25,12 @@ from proof_trading_sdk.actions import (
 )
 from proof_trading_sdk.chain_evidence import TransactionEvidenceEvent
 from proof_trading_sdk.client import AccountState
-from proof_trading_sdk.order_lists import OrderCancellation, OrderPlacement, order_placements
+from proof_trading_sdk.order_lists import (
+    OrderCancellation,
+    OrderPlacement,
+    order_cancellations,
+    order_placements,
+)
 
 SEED = bytes([7]) * 32
 OWNER = bytes([1]) * 20
@@ -105,10 +109,12 @@ def answer():
     (CancelOrder(order_id=42, owner=OWNER), _cancelled(REFUSED_ID), 2),
     (CancelClientOrder(owner=OWNER, client_order_id=11), _cancelled(REFUSED_CLOID), 44),
 ])
-def test_a_refused_single_raises_its_old_engine_error(answer, action, event, code):
-    with pytest.raises(EngineError) as raised:
-        answer(event).submit(action)
-    assert raised.value.code == code
+def test_a_refused_single_is_reported_in_its_entry(answer, action, event, code):
+    # A single order or cancel is a list of one: its refusal is its entry.
+    data = answer(event).submit(action)
+    assert data["code"] == 0
+    [entry] = order_placements(data) or order_cancellations(data)
+    assert entry.code == code
 
 
 @pytest.mark.parametrize("action, event", [
@@ -179,6 +185,11 @@ PLACE = PlaceOrder(market=1, owner=OWNER, side="Buy", price=1, quantity=1)
     (PLACE, [{"type": "orders_placed", "attributes": [{"key": "owner", "value": OWNER.hex()}]}]),
     (PLACE, [_placed(REJECTED, REJECTED)]),
     (PLACE, [_placed({"outcome": "rejected", "market": "1"})]),
+    # Values Rust and TypeScript refuse are refused here too.
+    (PLACE, [_placed({**RESTING, "side": "BUY"})]),
+    (PLACE, [_placed({**RESTING, "post_only": "1"})]),
+    (PLACE, [_placed({**RESTING, "time_in_force": "day"})]),
+    (PLACE, [_placed({k: v for k, v in RESTING.items() if k != "order_id"})]),
     (CancelOrder(order_id=42, owner=OWNER), [_event("orders_cancelled", [REFUSED_ID], reason="self_trade")]),
     (CancelOrder(order_id=42, owner=OWNER), [_cancelled({"outcome": "refused", "order_id": "42"})]),
 ])
@@ -199,12 +210,11 @@ def test_an_unreadable_list_raises_instead_of_returning_entries(answer):
         answer(_placed(RESTING, {"outcome": "lost", "market": "1"})).place_orders([entry, entry])
 
 
-def test_a_refused_list_of_one_sent_as_bytes_raises_its_engine_error(answer):
-    # Without the action, a list of one is read as a single order.
+def test_a_refused_list_of_one_sent_as_bytes_reads_as_a_list(answer):
     client = answer(_placed(REJECTED))
-    with pytest.raises(EngineError) as raised:
-        client.submit_action(client.sign_action(PLACE))
-    assert raised.value.code == 12
+    data = client.submit_action(client.sign_action(PLACE))
+    assert data["code"] == 0
+    assert order_placements(data)[0].code == 12
 
 
 def _evidence(*events):
@@ -213,13 +223,9 @@ def _evidence(*events):
     )
 
 
-def test_a_reconciled_list_of_one_raises_its_engine_error():
-    with pytest.raises(EngineError) as raised:
-        check_order_result("A" * 64, _evidence(_placed(REJECTED)))
-    assert raised.value.code == 12
-    with pytest.raises(EngineError) as raised:
-        check_order_result("A" * 64, _evidence(_cancelled(REFUSED_CLOID)))
-    assert raised.value.code == 44
+def test_a_reconciled_list_of_one_does_not_raise():
+    check_order_result("A" * 64, _evidence(_placed(REJECTED)))
+    check_order_result("A" * 64, _evidence(_cancelled(REFUSED_CLOID)))
 
 
 def test_a_reconciled_result_reads_like_the_synchronous_one():
@@ -298,11 +304,11 @@ def test_an_unreadable_close_raises_unreadable(answer, monkeypatch):
 
 
 @pytest.mark.parametrize("code", [12, 35])
-def test_a_refused_close_raises_its_engine_error(answer, monkeypatch, code):
+def test_a_refused_close_is_reported_in_its_entry(answer, monkeypatch, code):
     # 35: the position went flat between the read and the close.
     positions = [{"market": 2, "side": "Buy", "size": 4}]
     refused = {**REFUSED_CLOSE, "code": str(code)}
     client, _ = _closing(answer, monkeypatch, positions, _placed(refused))
-    with pytest.raises(EngineError) as raised:
-        client.close_position(2, owner=OWNER)
-    assert raised.value.code == code
+    closed = client.close_position(2, owner=OWNER)
+    assert closed.tx["code"] == 0
+    assert order_placements(closed.tx)[0].code == code

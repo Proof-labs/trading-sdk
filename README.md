@@ -706,17 +706,18 @@ const cancels = await client.cancelOrders([42n, 43n]); // or cancelClientOrders
 
 `placeOrder`, `marketOrder`, `cancelOrder` and `cancelClientOrder` (and
 `PlaceOrder`, `MarketOrder`, `CancelOrder`, `CancelClientOrder` through
-`submitTx`) keep their signatures and send a list of one. When that one entry
-is refused, the result is the same engine error the single action always
-returned. `waitForDelivery` reads a reconciled result the same way, with or
-without its `action`: a list of one whose entry was refused is that engine
-error (pass a list `action` to keep the entry). An executed result whose list
+`submitTx`) keep their signatures and send a list of one, read like any list:
+a refused entry is reported in `orderPlacements` / `orderCancellations` and
+the transaction stays `ok`, whether read at once or reconciled later with
+`waitForDelivery`. An executed result whose list
 event does not read, or does not report one entry per order sent, is
 `outcome: "unreadable"` (`ok: false`, `code: -1`) with its hash and height:
 it executed, so reconcile by hash and never resubmit. `marketOrder` takes an optional `worstPrice` and `reduceOnly`.
 `closePosition(market)` reads the position and sends a reduce-only market
 order on the opposite side for its size, returning `{ kind: "closed", tx }`;
-a refusal is `tx`'s engine error (code 12 when the account cannot afford it).
+a refusal is its entry in `orderPlacements(tx, owner)` (code 12 when the
+account cannot afford it). Its size and `nothingToClose` come from the account
+read, which can trail a fill made just before.
 On a flat account it sends nothing and returns `{ kind: "nothingToClose" }`.
 There is no close action: to close by hand, send a `MarketOrder` with
 `reduceOnly: true`. `orders` is empty

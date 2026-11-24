@@ -197,69 +197,43 @@ describe("list events", () => {
 });
 
 describe("single-order methods", () => {
-  it("report a refused order as the engine error a single order carried", async () => {
-    const r = await clientAnswering([
-      placed(
-        '[{"outcome":"rejected","market":"1","client_order_id":"","code":"12"}]',
-      ),
-    ]).placeOrder(order);
-    expect(r).toMatchObject({
-      ok: false,
-      outcome: "engine",
-      code: 12,
-      height: 42,
-    });
-    expect(r.error).not.toBeNull();
-  });
+  it("report a refused order in its entry; the transaction succeeds", async () => {
+    const r = await clientAnswering([placed(rejected(12))]).placeOrder(order);
+    expect(r).toMatchObject({ ok: true, code: 0, height: 42 });
+    expect(orderPlacements(r, pubkeyToOwner(getPublicKey(key)))).toMatchObject([
+      { outcome: "rejected", code: 12 },
+    ]);
 
-  it("report a refused market order as the engine error", async () => {
-    const r = await clientAnswering([placed(rejected(12))]).marketOrder({
+    const market = await clientAnswering([placed(rejected(12))]).marketOrder({
       market: 9,
       side: Side.Buy,
       quantity: 5n,
       worstPrice: 101n,
     });
-    expect(r).toMatchObject({ ok: false, outcome: "engine", code: 12 });
+    expect(market).toMatchObject({ ok: true, code: 0 });
   });
 
-  it("report a close refused because the position went flat as the engine error", async () => {
-    const client = clientAnswering([placed(rejected(35))]);
-    vi.spyOn(client, "queryAccount").mockResolvedValue({
-      positions: [{ market: 9, side: "Sell", size: 3n }],
-    } as unknown as AccountInfo);
-    const r = await client.closePosition(9);
-    expect(r).toMatchObject({
-      kind: "closed",
-      tx: { ok: false, outcome: "engine", code: 35 },
-    });
+  it("report a refused close in its entry", async () => {
+    for (const code of [35, 12]) {
+      const client = clientAnswering([placed(rejected(code))]);
+      vi.spyOn(client, "queryAccount").mockResolvedValue({
+        positions: [{ market: 9, side: "Sell", size: 3n }],
+      } as unknown as AccountInfo);
+      const r = await client.closePosition(9);
+      expect(r).toMatchObject({ kind: "closed", tx: { ok: true, code: 0 } });
+    }
   });
 
-  it("report a close the account cannot afford as the engine error", async () => {
-    const client = clientAnswering([placed(rejected(12))]);
-    vi.spyOn(client, "queryAccount").mockResolvedValue({
-      positions: [{ market: 9, side: "Buy", size: 3n }],
-    } as unknown as AccountInfo);
-    const r = await client.closePosition(9);
-    expect(r).toMatchObject({
-      kind: "closed",
-      tx: { ok: false, outcome: "engine", code: 12 },
-    });
-  });
-
-  it("report refused cancels of either kind as the engine error", async () => {
+  it("report refused cancels of either kind in their entries", async () => {
     const byId = await clientAnswering([
       cancelled('[{"outcome":"refused","order_id":"10","code":"2"}]'),
     ]).cancelOrder(10n);
-    expect(byId).toMatchObject({ ok: false, outcome: "engine", code: 2 });
+    expect(byId).toMatchObject({ ok: true, code: 0 });
 
     const byClientId = await clientAnswering([
       cancelled('[{"outcome":"refused","client_order_id":"11","code":"44"}]'),
     ]).cancelClientOrder(11n);
-    expect(byClientId).toMatchObject({
-      ok: false,
-      outcome: "engine",
-      code: 44,
-    });
+    expect(byClientId).toMatchObject({ ok: true, code: 0 });
   });
 
   it("stay successful when the order rests or the cancel lands", async () => {
@@ -318,27 +292,24 @@ describe("single-order methods", () => {
 });
 
 describe("pending results reconciled later", () => {
-  it("map a refused list of one to its engine error without the action", async () => {
+  it("read a reconciled list of one as a list, with or without the action", async () => {
     const client = clientReconciling([placed(rejected(12))]);
     const pending = await client.placeOrder(order);
     expect(pending.outcome).toBe("timeout");
     expect(await client.waitForDelivery(pending)).toMatchObject({
-      ok: false,
-      outcome: "engine",
-      code: 12,
+      ok: true,
+      code: 0,
       height: 43,
       hash: pending.hash,
     });
-  });
 
-  it("map a refused cancel of one to its engine error without the action", async () => {
-    const client = clientReconciling([
+    const cancels = clientReconciling([
       cancelled('[{"outcome":"refused","order_id":"10","code":"2"}]'),
     ]);
-    const pending = await client.cancelOrder(10n);
-    expect(await client.waitForDelivery(pending)).toMatchObject({
-      outcome: "engine",
-      code: 2,
+    const cancel = await cancels.cancelOrder(10n);
+    expect(await cancels.waitForDelivery(cancel)).toMatchObject({
+      ok: true,
+      code: 0,
     });
   });
 

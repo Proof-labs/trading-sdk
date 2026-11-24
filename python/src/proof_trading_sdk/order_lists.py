@@ -17,7 +17,6 @@ from typing import Optional
 from proof_trading_sdk.actions import Side, TimeInForce
 from proof_trading_sdk.errors import (
     CodecError,
-    EngineError,
     OrderResultUnreadable,
     get_error_name,
 )
@@ -111,7 +110,21 @@ def _outcome(entry: dict[str, t.Any], known: tuple[str, ...]) -> str:
 
 def _bool(entry: dict[str, t.Any], key: str) -> Optional[bool]:
     value = entry.get(key)
-    return None if value is None else value == "true"
+    if value is None:
+        return None
+    if value not in ("true", "false"):
+        raise CodecError(f"list event entry: {key} is not true or false: {value!r}")
+    return value == "true"
+
+
+def _named(entry: dict[str, t.Any], key: str, names: dict[str, t.Any]) -> t.Any:
+    value = entry.get(key)
+    if value is None:
+        return None
+    try:
+        return names[value]
+    except (KeyError, TypeError) as e:
+        raise CodecError(f"list event entry: unknown {key}: {value!r}") from e
 
 
 def _code(entry: dict[str, t.Any]) -> tuple[Optional[int], Optional[str]]:
@@ -160,20 +173,20 @@ def _own_entries(events: t.Any, event_type: str) -> Optional[list[dict[str, t.An
 
 def _placement(entry: dict[str, t.Any]) -> OrderPlacement:
     code, error_name = _code(entry)
-    side = entry.get("side")
-    tif = entry.get("time_in_force")
     outcome = _outcome(entry, ("resting", "executed", "rejected"))
     if outcome == "rejected" and code is None:
         raise CodecError("list event entry: code is missing")
+    if outcome in ("resting", "executed") and _int(entry, "order_id") is None:
+        raise CodecError("list event entry: order_id is missing")
     return OrderPlacement(
         outcome=outcome,
         market=_required(entry, "market"),
         client_order_id=_int(entry, "client_order_id"),
         order_id=_int(entry, "order_id"),
-        side=_SIDES.get(side) if side is not None else None,
+        side=_named(entry, "side", _SIDES),
         price=_int(entry, "price"),
         quantity=_int(entry, "quantity"),
-        time_in_force=_TIME_IN_FORCE.get(tif) if tif is not None else None,
+        time_in_force=_named(entry, "time_in_force", _TIME_IN_FORCE),
         post_only=_bool(entry, "post_only"),
         reduce_only=_bool(entry, "reduce_only"),
         code=code,
@@ -218,56 +231,40 @@ def order_cancellations(response: dict[str, t.Any]) -> list[OrderCancellation]:
 
 @dataclass(frozen=True)
 class SentList:
-    """What an order-list action sent: the event reporting it, its entry
-    count, and whether it is a single order sent as a list of one."""
+    """What an order-list action sent: the event reporting it and its entry
+    count. A single order or cancel is a list of one."""
 
     event_type: str
     entries: int
-    single: bool
 
 
-def check_order_result(
-    tx_hash: str, events: t.Any, sent: Optional[SentList] = None, *, log: str = ""
-) -> None:
-    """Raise what an executed, code-0 transaction's order list says.
+def check_order_result(tx_hash: str, events: t.Any, sent: Optional[SentList] = None) -> None:
+    """Check an executed, code-0 transaction's order list.
 
-    A single order or cancel is a list of one whose refusal arrives as a
-    refused entry: raise it as the :class:`EngineError` the single action
-    always carried. The rule reads the receipt, so a result reconciled
-    without its action (``sent`` is ``None``, e.g. the events of
-    :meth:`ExchangeClient.transaction_evidence` after
-    :class:`SubmissionPending`) gets it too: there a list of one whose entry
-    was refused is that error. The transaction's list is its
-    ``orders_placed``, else its user-requested ``orders_cancelled``.
+    Every order action is a list, a single order a list of one, so a refused
+    entry is reported in :func:`order_placements` /
+    :func:`order_cancellations` and never raises.
 
     Raises :class:`OrderResultUnreadable` when a list event does not read, or
     when ``sent`` says what was sent and the list is missing or has the wrong
     number of entries: the transaction executed, so never re-submit it.
     ``events`` are gateway event dicts or :class:`TransactionEvidenceEvent`
-    values; ``log`` is the engine log the error carries.
+    values.
     """
     try:
         placed = _own_entries(events, ORDERS_PLACED)
         cancelled = _own_entries(events, ORDERS_CANCELLED)
-        entries = placed if placed is not None else cancelled
-        if sent is not None:
-            entries = placed if sent.event_type == ORDERS_PLACED else cancelled
-            read = "no list event" if entries is None else f"{len(entries)} reported"
-            if entries is None or len(entries) != sent.entries:
-                raise OrderResultUnreadable(tx_hash, f"{sent.entries} sent, {read}")
-        parsed: list[OrderPlacement | OrderCancellation] = (
-            [_placement(e) for e in entries or []]
-            if entries is placed
-            else [_cancellation(e) for e in entries or []]
-        )
+        for entry in placed or []:
+            _placement(entry)
+        for entry in cancelled or []:
+            _cancellation(entry)
     except CodecError as e:
         raise OrderResultUnreadable(tx_hash, str(e)) from e
-    if sent is not None and not sent.single:
-        return
-    if len(parsed) == 1 and parsed[0].outcome in ("rejected", "refused"):
-        refused = parsed[0]
-        raise EngineError(t.cast(int, refused.code), log or refused.error_name or "")
-
+    if sent is not None:
+        entries = placed if sent.event_type == ORDERS_PLACED else cancelled
+        if entries is None or len(entries) != sent.entries:
+            read = "no list event" if entries is None else f"{len(entries)} reported"
+            raise OrderResultUnreadable(tx_hash, f"{sent.entries} sent, {read}")
 
 __all__ = [
     "OrderPlacement",

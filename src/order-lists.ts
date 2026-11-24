@@ -11,7 +11,7 @@
 import { Attributes, type AbciEventInput } from "./abci-event.js";
 import { bytesToHex } from "./crypto.js";
 import { decodeExecError, type ExecErrorInfo } from "./errors.js";
-import { txEngineError, txUnreadable } from "./tx-result.js";
+import { txUnreadable } from "./tx-result.js";
 import {
   Side,
   TimeInForce,
@@ -287,34 +287,27 @@ export function orderCancellations(
   return event?.type === "OrdersCancelled" ? event.orders : [];
 }
 
-/** What an order-list action sent: the event that reports it, its entry
- *  count, and whether it is a single order sent as a list of one. */
+/** What an order-list action sent: the event that reports it and its entry
+ *  count. A single order or cancel is a list of one. */
 interface SentList {
   event: OrderListEvent["type"];
   entries: number;
-  single: boolean;
   owner: Address;
 }
 
 function sentList(action: Action): SentList | null {
-  const single = (event: SentList["event"], owner: Address): SentList => ({
-    event,
-    entries: 1,
-    single: true,
-    owner,
-  });
   const list = (
     event: SentList["event"],
     entries: number,
     owner: Address,
-  ): SentList => ({ event, entries, single: false, owner });
+  ): SentList => ({ event, entries, owner });
   switch (action.type) {
     case "PlaceOrder":
     case "MarketOrder":
-      return single("OrdersPlaced", action.data.owner);
+      return list("OrdersPlaced", 1, action.data.owner);
     case "CancelOrder":
     case "CancelClientOrder":
-      return single("OrdersCancelled", action.data.owner);
+      return list("OrdersCancelled", 1, action.data.owner);
     case "PlaceOrders":
       return list("OrdersPlaced", action.data.orders.length, action.data.owner);
     case "CancelOrders":
@@ -335,13 +328,10 @@ function sentList(action: Action): SentList | null {
 }
 
 /**
- * Read an executed code-0 transaction's order list. A single order or cancel
- * is a list of one whose refusal arrives as a refused entry: report it as the
- * engine error the single action always carried. The rule reads the receipt,
- * so a result reconciled without its action gets it too: there a list of one
- * whose entry was refused is that error (lists of one are how singles are
- * sent). The transaction's list is its `orders_placed`, else its
- * user-requested `orders_cancelled`.
+ * Check an executed code-0 transaction's order list. Every order action is a
+ * list, a single order a list of one, so a refused entry is reported in
+ * {@link orderPlacements} / {@link orderCancellations} and never fails the
+ * transaction.
  *
  * A list event that does not read, or (when `action` says what was sent) a
  * missing list or one with the wrong number of entries, returns `unreadable`:
@@ -367,32 +357,19 @@ export function readOrderLists(tx: TxResult, action?: Action): TxResult {
       `order list unreadable (${why}); reconcile by hash`,
     );
   }
-  const placed = events.find((e) => e.type === "OrdersPlaced")?.orders;
-  const cancelled = events.find(
-    (e) => e.type === "OrdersCancelled" && e.reason === "user_requested",
-  )?.orders;
-  let entries: (OrderPlacement | OrderCancellation)[] | undefined =
-    placed ?? cancelled;
-  if (sent) {
-    entries = sent.event === "OrdersPlaced" ? placed : cancelled;
-    if (entries?.length !== sent.entries) {
-      const read = entries ? `${entries.length} reported` : "no list event";
-      return txUnreadable(
-        tx,
-        `order list unreadable (${sent.entries} sent, ${read}); reconcile by hash`,
-      );
-    }
-    if (!sent.single) return tx;
+  if (!sent) return tx;
+  const entries =
+    sent.event === "OrdersPlaced"
+      ? events.find((e) => e.type === "OrdersPlaced")?.orders
+      : events.find(
+          (e) => e.type === "OrdersCancelled" && e.reason === "user_requested",
+        )?.orders;
+  if (entries?.length !== sent.entries) {
+    const read = entries ? `${entries.length} reported` : "no list event";
+    return txUnreadable(
+      tx,
+      `order list unreadable (${sent.entries} sent, ${read}); reconcile by hash`,
+    );
   }
-  const only = entries?.length === 1 ? entries[0] : undefined;
-  if (!only || (only.outcome !== "rejected" && only.outcome !== "refused")) {
-    return tx;
-  }
-  return txEngineError(only.code, {
-    hash: tx.hash,
-    height: tx.height,
-    log: tx.log,
-    info: tx.info,
-    events: tx.events,
-  });
+  return tx;
 }
