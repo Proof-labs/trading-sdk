@@ -5,9 +5,10 @@ import {
   Side,
   TimeInForce,
   bytesToHex,
-  decodeOrderListEvent,
+  decodeOrdersEvent,
   getPublicKey,
   orderPlacements,
+  placementsOf,
   pubkeyToOwner,
   type AccountInfo,
   type TxEvent,
@@ -104,7 +105,7 @@ afterEach(() => {
 
 describe("list events", () => {
   it("decode every placement outcome", () => {
-    expect(decodeOrderListEvent(placed(PLACED))).toEqual({
+    expect(decodeOrdersEvent(placed(PLACED))).toEqual({
       type: "OrdersPlaced",
       owner,
       orders: [
@@ -132,7 +133,7 @@ describe("list events", () => {
   });
 
   it("decode executed orders with their fill and unfilled reason", () => {
-    expect(decodeOrderListEvent(placed(EXECUTED))?.orders).toEqual([
+    expect(decodeOrdersEvent(placed(EXECUTED))?.orders).toEqual([
       {
         outcome: "executed",
         market: 3,
@@ -155,7 +156,7 @@ describe("list events", () => {
   });
 
   it("decode every cancel entry", () => {
-    const event = decodeOrderListEvent(cancelled(CANCELLED));
+    const event = decodeOrdersEvent(cancelled(CANCELLED));
     expect(event?.type).toBe("OrdersCancelled");
     expect(event?.type === "OrdersCancelled" && event.reason).toBe(
       "user_requested",
@@ -185,24 +186,22 @@ describe("list events", () => {
 
   it("leave other events to other decoders and refuse malformed lists", () => {
     expect(
-      decodeOrderListEvent({ type: "order_placed", attributes: [] }),
+      decodeOrdersEvent({ type: "order_placed", attributes: [] }),
     ).toBeNull();
-    expect(() => decodeOrderListEvent(placed("{}"))).toThrow(
+    expect(() => decodeOrdersEvent(placed("{}"))).toThrow(
       "is not a JSON array",
     );
     expect(() =>
-      decodeOrderListEvent(placed('[{"outcome":"resting","market":"1"}]')),
+      decodeOrdersEvent(placed('[{"outcome":"resting","market":"1"}]')),
     ).toThrow("orders_placed.orders[0] decode");
   });
 });
 
 describe("single-order methods", () => {
-  it("report a refused order in its entry; the transaction succeeds", async () => {
+  it("return the transaction and the order's outcome; a rejection does not fail it", async () => {
     const r = await clientAnswering([placed(rejected(12))]).placeOrder(order);
-    expect(r).toMatchObject({ ok: true, code: 0, height: 42 });
-    expect(orderPlacements(r, pubkeyToOwner(getPublicKey(key)))).toMatchObject([
-      { outcome: "rejected", code: 12 },
-    ]);
+    expect(r.tx).toMatchObject({ ok: true, code: 0, height: 42 });
+    expect(r.order).toMatchObject({ outcome: "rejected", code: 12 });
 
     const market = await clientAnswering([placed(rejected(12))]).marketOrder({
       market: 9,
@@ -210,59 +209,78 @@ describe("single-order methods", () => {
       quantity: 5n,
       worstPrice: 101n,
     });
-    expect(market).toMatchObject({ ok: true, code: 0 });
+    expect(market).toMatchObject({
+      tx: { ok: true, code: 0 },
+      order: { outcome: "rejected", code: 12 },
+    });
   });
 
-  it("report a refused close in its entry", async () => {
+  it("report a refused close as sent, with its order rejected", async () => {
     for (const code of [35, 12]) {
       const client = clientAnswering([placed(rejected(code))]);
       vi.spyOn(client, "queryAccount").mockResolvedValue({
         positions: [{ market: 9, side: "Sell", size: 3n }],
       } as unknown as AccountInfo);
-      const r = await client.closePosition(9);
-      expect(r).toMatchObject({ kind: "closed", tx: { ok: true, code: 0 } });
+      expect(await client.closePosition(9)).toMatchObject({
+        kind: "sent",
+        tx: { ok: true, code: 0 },
+        order: { outcome: "rejected", code },
+      });
     }
   });
 
-  it("report refused cancels of either kind in their entries", async () => {
+  it("report refused cancels of either kind in their cancellation", async () => {
     const byId = await clientAnswering([
       cancelled('[{"outcome":"refused","order_id":"10","code":"2"}]'),
     ]).cancelOrder(10n);
-    expect(byId).toMatchObject({ ok: true, code: 0 });
+    expect(byId).toMatchObject({
+      tx: { ok: true, code: 0 },
+      cancellation: { outcome: "refused", code: 2 },
+    });
 
     const byClientId = await clientAnswering([
       cancelled('[{"outcome":"refused","client_order_id":"11","code":"44"}]'),
     ]).cancelClientOrder(11n);
-    expect(byClientId).toMatchObject({ ok: true, code: 0 });
+    expect(byClientId).toMatchObject({
+      tx: { ok: true, code: 0 },
+      cancellation: { outcome: "refused", code: 44 },
+    });
   });
 
-  it("stay successful when the order rests or the cancel lands", async () => {
+  it("report a resting order and a landed cancel", async () => {
     const rested = await clientAnswering([
       placed(
         '[{"outcome":"resting","market":"1","client_order_id":"","order_id":"9","side":"buy","price":"100","quantity":"5","time_in_force":"gtc","post_only":"false","reduce_only":"false"}]',
       ),
     ]).placeOrder(order);
-    expect(rested).toMatchObject({ ok: true, code: 0 });
+    expect(rested).toMatchObject({
+      tx: { ok: true },
+      order: { outcome: "resting", orderId: 9n },
+    });
 
     const landed = await clientAnswering([
       cancelled(
         '[{"outcome":"cancelled","order_id":"9","market":"1","client_order_id":"","original_quantity":"5","remaining_quantity":"5","filled_quantity":"0"}]',
       ),
     ]).cancelOrder(9n);
-    expect(landed).toMatchObject({ ok: true, code: 0 });
+    expect(landed).toMatchObject({
+      tx: { ok: true },
+      cancellation: { outcome: "cancelled", orderId: 9n },
+    });
   });
 
-  it("report an executed single whose result does not read as unreadable", async () => {
-    const twoEntries = `[${rejected(12).slice(1, -1)},${rejected(12).slice(1, -1)}]`;
+  it("report an executed single whose result does not read as unreadable, with no order", async () => {
+    const twoOrders = `[${rejected(12).slice(1, -1)},${rejected(12).slice(1, -1)}]`;
     for (const events of [
       [],
       [placed("{}")],
-      [placed(twoEntries)],
-      // Another account's list is not this order's result.
+      [placed(twoOrders)],
+      // Another account's event is not this order's result.
       [placed(rejected(12), "ab".repeat(20))],
     ]) {
       const r = await clientAnswering(events).placeOrder(order);
-      expect(r).toMatchObject({
+      expect(r.order).toBeNull();
+      expect(r.tx).toMatchObject({
         ok: false,
         outcome: "unreadable",
         code: -1,
@@ -270,50 +288,59 @@ describe("single-order methods", () => {
         height: 42,
         hash: expect.stringMatching(/^[0-9A-F]{64}$/),
       });
-      expect(r.log).toContain("reconcile by hash");
+      expect(r.tx.log).toContain("reconcile by hash");
     }
 
     const cancel = await clientAnswering([
       cancelled('[{"outcome":"refused","order_id":"10"}]'),
     ]).cancelOrder(10n);
-    expect(cancel).toMatchObject({ ok: false, outcome: "unreadable" });
+    expect(cancel).toMatchObject({
+      tx: { ok: false, outcome: "unreadable" },
+      cancellation: null,
+    });
   });
 
-  it("report an unreadable close as unreadable, not closed successfully", async () => {
+  it("report an unreadable close as sent with no order, never closed", async () => {
     const client = clientAnswering([]);
     vi.spyOn(client, "queryAccount").mockResolvedValue({
       positions: [{ market: 9, side: "Buy", size: 3n }],
     } as unknown as AccountInfo);
     expect(await client.closePosition(9)).toMatchObject({
-      kind: "closed",
+      kind: "sent",
       tx: { ok: false, outcome: "unreadable", height: 42 },
+      order: null,
     });
   });
 });
 
 describe("pending results reconciled later", () => {
-  it("read a reconciled list of one as a list, with or without the action", async () => {
+  it("have no order until reconciled, then read like any batch", async () => {
     const client = clientReconciling([placed(rejected(12))]);
     const pending = await client.placeOrder(order);
-    expect(pending.outcome).toBe("timeout");
-    expect(await client.waitForDelivery(pending)).toMatchObject({
+    expect(pending.tx.outcome).toBe("timeout");
+    expect(pending.order).toBeNull();
+    const delivered = await client.waitForDelivery(pending.tx);
+    expect(delivered).toMatchObject({
       ok: true,
       code: 0,
       height: 43,
-      hash: pending.hash,
+      hash: pending.tx.hash,
     });
+    expect(
+      placementsOf(delivered, pubkeyToOwner(getPublicKey(key))),
+    ).toMatchObject([{ outcome: "rejected", code: 12 }]);
 
     const cancels = clientReconciling([
       cancelled('[{"outcome":"refused","order_id":"10","code":"2"}]'),
     ]);
     const cancel = await cancels.cancelOrder(10n);
-    expect(await cancels.waitForDelivery(cancel)).toMatchObject({
+    expect(await cancels.waitForDelivery(cancel.tx)).toMatchObject({
       ok: true,
       code: 0,
     });
   });
 
-  it("keep the entry when the action says it was a list", async () => {
+  it("read a reconciled batch the same with its action", async () => {
     const client = clientReconciling([
       cancelled('[{"outcome":"refused","order_id":"10","code":"2"}]'),
     ]);
@@ -328,14 +355,14 @@ describe("pending results reconciled later", () => {
     });
   });
 
-  it("report an unreadable list as unreadable, never success", async () => {
+  it("report an unreadable result as unreadable, never success", async () => {
     const client = clientReconciling([placed("{}")]);
     const pending = await client.placeOrder(order);
-    expect(await client.waitForDelivery(pending)).toMatchObject({
+    expect(await client.waitForDelivery(pending.tx)).toMatchObject({
       ok: false,
       outcome: "unreadable",
       height: 43,
-      hash: pending.hash,
+      hash: pending.tx.hash,
     });
   });
 
@@ -349,14 +376,14 @@ describe("pending results reconciled later", () => {
   });
 });
 
-describe("list methods", () => {
+describe("batch methods", () => {
   it("return each order's outcome and keep the transaction successful", async () => {
     const { tx, orders } = await clientAnswering([placed(PLACED)]).placeOrders([
       { ...order, clientOrderId: 4n },
       { ...order, market: 2 },
     ]);
     expect(tx).toMatchObject({ ok: true, code: 0 });
-    expect(orders.map((o) => o.outcome)).toEqual(["resting", "rejected"]);
+    expect(orders?.map((o) => o.outcome)).toEqual(["resting", "rejected"]);
   });
 
   it("place market entries and report what they filled", async () => {
@@ -399,7 +426,7 @@ describe("list methods", () => {
     ]);
   });
 
-  it("keep a refused list of one as an entry, not a transaction error", async () => {
+  it("keep a refused batch of one as its cancel, not a transaction error", async () => {
     const { tx, orders } = await clientAnswering([
       cancelled('[{"outcome":"refused","order_id":"10","code":"2"}]'),
     ]).cancelOrders([10n]);
@@ -409,18 +436,18 @@ describe("list methods", () => {
     ]);
   });
 
-  it("read cancels by client order id entry by entry", async () => {
+  it("read cancels by client order id one by one", async () => {
     const { orders } = await clientAnswering([
       cancelled(CANCELLED),
     ]).cancelClientOrders([9n, 10n, 11n]);
-    expect(orders.map((o) => o.outcome)).toEqual([
+    expect(orders?.map((o) => o.outcome)).toEqual([
       "cancelled",
       "refused",
       "refused",
     ]);
   });
 
-  it("report a list whose result does not read as unreadable with no entries", async () => {
+  it("report a batch whose result does not read as unreadable with no orders", async () => {
     for (const events of [[], [placed("{}")], [placed(rejected(12))]]) {
       const { tx, orders } = await clientAnswering(events).placeOrders([
         order,
@@ -431,17 +458,17 @@ describe("list methods", () => {
         outcome: "unreadable",
         height: 42,
       });
-      expect(orders).toEqual([]);
+      expect(orders).toBeNull();
     }
   });
 
-  it("refuse 0 or 101 entries before signing", async () => {
+  it("refuse 0 or 101 orders before signing", async () => {
     const client = clientAnswering([]);
     await expect(client.placeOrders([])).rejects.toThrow(
-      "list carries 0 entries",
+      "1 to 100 orders per call, got 0",
     );
     await expect(
       client.cancelOrders(Array.from({ length: 101 }, (_, i) => BigInt(i + 1))),
-    ).rejects.toThrow("list carries 101 entries");
+    ).rejects.toThrow("1 to 100 orders per call, got 101");
   });
 });

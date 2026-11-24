@@ -1,5 +1,5 @@
 /**
- * The list events of `PlaceOrders`, `CancelOrders` and `CancelClientOrders`,
+ * The order events of `PlaceOrders`, `CancelOrders` and `CancelClientOrders`,
  * decoded from the string attributes of one ABCI event: `orders_placed`
  * reports every placement outcome (each order of a `PlaceOrders`, each leg of
  * an `AtomicBasketOrder`, a cancel-replace's replacement), `orders_cancelled`
@@ -64,7 +64,7 @@ export type OrderPlacement =
       outcome: "rejected";
       market: number;
       clientOrderId: bigint | null;
-      /** The `ExecError` code, as a single order's transaction carried it. */
+      /** The `ExecError` code. */
       code: number;
       error: ExecErrorInfo | null;
     };
@@ -116,20 +116,57 @@ export interface OrdersCancelledEvent {
   orders: OrderCancellation[];
 }
 
-export type OrderListEvent = OrdersPlacedEvent | OrdersCancelledEvent;
+export type OrdersEvent = OrdersPlacedEvent | OrdersCancelledEvent;
 
 /** What a `placeOrders` call did: the transaction, and each order's outcome
- *  in the order sent. `orders` is empty until the transaction has executed. */
+ *  in the order sent. `orders` is `null` when `tx` has no executed verdict
+ *  (pending, refused as a whole, or unreadable): read `tx`. */
 export interface PlaceOrdersResult {
   tx: TxResult;
-  orders: OrderPlacement[];
+  orders: OrderPlacement[] | null;
 }
 
-/** What a `cancelOrders` or `cancelClientOrders` call did, entry by entry.
- *  `orders` is empty until the transaction has executed. */
+/** What a `cancelOrders` or `cancelClientOrders` call did, cancel by cancel.
+ *  `orders` is `null` when `tx` has no executed verdict: read `tx`. */
 export interface CancelOrdersResult {
   tx: TxResult;
-  orders: OrderCancellation[];
+  orders: OrderCancellation[] | null;
+}
+
+/** What a single order call did: the transaction, and the order's outcome.
+ *  `order` is `null` when `tx` has no executed verdict: read `tx`. */
+export interface PlaceOrderResult {
+  tx: TxResult;
+  order: OrderPlacement | null;
+}
+
+/** What a single cancel did. `cancellation` is `null` when `tx` has no
+ *  executed verdict: read `tx`. */
+export interface CancelOrderResult {
+  tx: TxResult;
+  cancellation: OrderCancellation | null;
+}
+
+/** Executed in a block with code 0, so its order events are its result. */
+function executed(tx: TxResult): boolean {
+  return tx.outcome === "ok" && tx.height !== undefined;
+}
+
+/** `tx`'s placements for `owner`, or `null` without an executed verdict. */
+export function placementsOf(
+  tx: TxResult,
+  owner: Address,
+): OrderPlacement[] | null {
+  return executed(tx) ? orderPlacements(tx, owner) : null;
+}
+
+/** `tx`'s user-requested cancellations for `owner`, or `null` without an
+ *  executed verdict. */
+export function cancellationsOf(
+  tx: TxResult,
+  owner: Address,
+): OrderCancellation[] | null {
+  return executed(tx) ? orderCancellations(tx, owner) : null;
 }
 
 const SIDES: Record<string, Side> = { buy: Side.Buy, sell: Side.Sell };
@@ -228,9 +265,7 @@ function cancellation(e: Attributes): OrderCancellation {
 
 /** Decode an `orders_placed` or `orders_cancelled` event; `null` for any
  *  other type. */
-export function decodeOrderListEvent(
-  event: AbciEventInput,
-): OrderListEvent | null {
+export function decodeOrdersEvent(event: AbciEventInput): OrdersEvent | null {
   if (event.type === "orders_placed") {
     const a = new Attributes(event.type, event.attributes);
     return {
@@ -251,15 +286,14 @@ export function decodeOrderListEvent(
   return null;
 }
 
-/** The list events of `tx`, only `owner`'s when given; throws on one that
+/** The order events of `tx`, only `owner`'s when given; throws on one that
  *  does not decode. */
-function listEvents(tx: TxResult, owner?: Address): OrderListEvent[] {
+function listEvents(tx: TxResult, owner?: Address): OrdersEvent[] {
   const hex = owner ? bytesToHex(owner) : null;
   return (tx.events ?? [])
-    .map(decodeOrderListEvent)
+    .map(decodeOrdersEvent)
     .filter(
-      (e): e is OrderListEvent =>
-        e !== null && (hex === null || e.owner === hex),
+      (e): e is OrdersEvent => e !== null && (hex === null || e.owner === hex),
     );
 }
 
@@ -287,10 +321,10 @@ export function orderCancellations(
   return event?.type === "OrdersCancelled" ? event.orders : [];
 }
 
-/** What an order-list action sent: the event that reports it and its entry
- *  count. A single order or cancel is a list of one. */
+/** What an order action sent: the event that reports it and how many
+ *  orders. A single order or cancel is a batch of one. */
 interface SentList {
-  event: OrderListEvent["type"];
+  event: OrdersEvent["type"];
   entries: number;
   owner: Address;
 }
@@ -328,13 +362,13 @@ function sentList(action: Action): SentList | null {
 }
 
 /**
- * Check an executed code-0 transaction's order list. Every order action is a
- * list, a single order a list of one, so a refused entry is reported in
+ * Check an executed code-0 transaction's order results. Every order action is
+ * a batch, a single order a batch of one, so a rejected order is reported in
  * {@link orderPlacements} / {@link orderCancellations} and never fails the
  * transaction.
  *
- * A list event that does not read, or (when `action` says what was sent) a
- * missing list or one with the wrong number of entries, returns `unreadable`:
+ * An order event that does not read, or (when `action` says what was sent) a
+ * missing event or one with the wrong number of orders, returns `unreadable`:
  * the transaction executed, so it is never reported as success and never
  * resubmitted. Every other result passes through.
  */
@@ -347,14 +381,14 @@ export function readOrderLists(tx: TxResult, action?: Action): TxResult {
     return tx;
   }
   const sent = action ? sentList(action) : null;
-  let events: OrderListEvent[];
+  let events: OrdersEvent[];
   try {
     events = listEvents(tx, sent?.owner);
   } catch (err) {
     const why = err instanceof Error ? err.message : String(err);
     return txUnreadable(
       tx,
-      `order list unreadable (${why}); reconcile by hash`,
+      `order results unreadable (${why}); reconcile by hash`,
     );
   }
   if (!sent) return tx;
@@ -365,10 +399,10 @@ export function readOrderLists(tx: TxResult, action?: Action): TxResult {
           (e) => e.type === "OrdersCancelled" && e.reason === "user_requested",
         )?.orders;
   if (entries?.length !== sent.entries) {
-    const read = entries ? `${entries.length} reported` : "no list event";
+    const read = entries ? `${entries.length} reported` : "no order event";
     return txUnreadable(
       tx,
-      `order list unreadable (${sent.entries} sent, ${read}); reconcile by hash`,
+      `order results unreadable (${sent.entries} sent, ${read}); reconcile by hash`,
     );
   }
   return tx;

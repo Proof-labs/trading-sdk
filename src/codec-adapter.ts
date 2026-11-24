@@ -13,7 +13,7 @@
 
 import {
   ActionType,
-  MAX_LIST_ENTRIES,
+  MAX_ORDERS_PER_BATCH,
   Outcome,
   Side,
   TimeInForce,
@@ -337,12 +337,12 @@ function validateCreateMarketTickers(action: DecodedAction): void {
   }
 }
 
-/** The wire refuses a list action with no entries or more than the cap; say
- *  so here, by count, rather than as an untagged-enum mismatch. */
-function validateListSize(entries: number): void {
-  if (entries < 1 || entries > MAX_LIST_ENTRIES) {
+/** The wire refuses a batch with no orders or more than the cap; say so
+ *  here, by count, rather than as an untagged-enum mismatch. */
+function validateListSize(orders: number): void {
+  if (orders < 1 || orders > MAX_ORDERS_PER_BATCH) {
     throw new Error(
-      `list carries ${entries} entries, must carry 1..=${MAX_LIST_ENTRIES}`,
+      `1 to ${MAX_ORDERS_PER_BATCH} orders per call, got ${orders}`,
     );
   }
 }

@@ -25,7 +25,7 @@ import {
 } from "./crypto.js";
 import {
   ActionType,
-  MAX_LIST_ENTRIES,
+  MAX_ORDERS_PER_BATCH,
   Outcome,
   Side,
   TimeInForce,
@@ -938,24 +938,24 @@ describe("codec v1 all action types", () => {
     });
 
     it("round-trips a full PlaceOrders and refuses 0 or 101 orders", () => {
-      const action = placeOrders(MAX_LIST_ENTRIES);
+      const action = placeOrders(MAX_ORDERS_PER_BATCH);
       expect(decodeTx(encodeTx(action, 1n)).action).toEqual(action);
-      for (const n of [0, MAX_LIST_ENTRIES + 1]) {
+      for (const n of [0, MAX_ORDERS_PER_BATCH + 1]) {
         expect(() => encodeTx(placeOrders(n), 1n)).toThrow(
-          `list carries ${n} entries, must carry 1..=${MAX_LIST_ENTRIES}`,
+          `1 to ${MAX_ORDERS_PER_BATCH} orders per call, got ${n}`,
         );
       }
     });
 
     it("refuses 0 or 101 cancels of either kind", () => {
-      for (const n of [0, MAX_LIST_ENTRIES + 1]) {
+      for (const n of [0, MAX_ORDERS_PER_BATCH + 1]) {
         const ids = Array.from({ length: n }, (_, i) => BigInt(i + 1));
         expect(() =>
           encodeTx(
             { type: "CancelOrders", data: { owner: SIGNER, orderIds: ids } },
             1n,
           ),
-        ).toThrow("list carries");
+        ).toThrow("orders per call");
         expect(() =>
           encodeTx(
             {
@@ -964,11 +964,11 @@ describe("codec v1 all action types", () => {
             },
             1n,
           ),
-        ).toThrow("list carries");
+        ).toThrow("orders per call");
       }
     });
 
-    it("round-trips two cancels of either kind as lists", () => {
+    it("round-trips two cancels of either kind as batches", () => {
       const byId: Action = {
         type: "CancelOrders",
         data: { owner: SIGNER, orderIds: [42n, 43n] },

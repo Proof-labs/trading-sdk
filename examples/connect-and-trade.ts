@@ -122,28 +122,29 @@ if (FAUCET_TOKEN && account && account.balance > 0n) {
   const orderPrice = 50_000_000_000n; // $50,000.00 in micro-USDC (6 dp)
   info(`  Placing bid: market=1  side=Buy  price=$${fmt(orderPrice)}  qty=1`);
 
-  const result = await client.submitTxCommit({
-    type: "PlaceOrder",
-    data: {
-      market: 1,
-      owner: address,
-      side: Side.Buy,
-      price: orderPrice,
-      quantity: 1n,
-    },
+  const { tx, order } = await client.placeOrder({
+    market: 1,
+    side: Side.Buy,
+    price: orderPrice,
+    quantity: 1n,
   });
   info(
-    `  Result: code=${result.code}  height=${result.height ?? "?"}  hash=${result.hash}`,
+    `  Result: code=${tx.code}  height=${tx.height ?? "?"}  hash=${tx.hash}`,
   );
-  if (result.ok) {
-    info("  Order landed on chain ✓");
+  if (order?.outcome === "resting") {
+    info(`  Order ${order.orderId} resting ✓`);
+  } else if (order?.outcome === "executed") {
+    info(`  Filled ${order.filledQuantity} of ${order.requestedQuantity} ✓`);
+  } else if (order?.outcome === "rejected") {
+    // A rejected order does not fail the transaction: read its own code.
+    info(`  Rejected: ${order.error?.name ?? order.code}`);
   } else {
-    // `error` is the auto-decoded engine ExecError (null for transport/timeout);
-    // `outcome` tells engine rejections apart from transport failures.
-    const detail = result.error
-      ? `${result.error.name} — ${result.error.description}`
-      : (result.log ?? result.outcome);
-    info(`  Rejected (${result.outcome}): ${detail}`);
+    // No order result: the transaction itself was refused, is pending
+    // (reconcile by hash) or failed in transport; `outcome` says which.
+    const detail = tx.error
+      ? `${tx.error.name} — ${tx.error.description}`
+      : (tx.log ?? tx.outcome);
+    info(`  Not executed (${tx.outcome}): ${detail}`);
   }
   info("");
 

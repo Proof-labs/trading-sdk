@@ -1,5 +1,9 @@
 import type { ExecErrorInfo } from "./errors.js";
-import type { OrdersCancelledEvent, OrdersPlacedEvent } from "./order-lists.js";
+import type {
+  OrderPlacement,
+  OrdersCancelledEvent,
+  OrdersPlacedEvent,
+} from "./order-lists.js";
 
 /** 20-byte account address (derived from Ed25519 public key). */
 export type Address = Uint8Array;
@@ -36,22 +40,22 @@ export enum TimeInForce {
  * Retired, never reassigned: 0x01 `PlaceOrder`, 0x02 `CancelOrder`, 0x03
  * `OracleUpdate`, 0x04 `MarketOrder`, 0x12 `RunFundingTick`, 0x14
  * `OracleUpdateComposite`, 0x17 `ClosePosition`, 0x18 `CancelClientOrder`.
- * The order lists are on 0x35-0x37; the single-order names stay as aliases
- * of the list byte they encode on.
+ * Order batches are on 0x35-0x37; the single-order names stay as aliases
+ * of the batch byte they encode on.
  */
 export const ActionType = {
-  /** Place 1 to {@link MAX_LIST_ENTRIES} limit or market orders for one
+  /** Place 1 to {@link MAX_ORDERS_PER_BATCH} limit or market orders for one
    *  account. */
   PlaceOrders: 0x35,
   /** One limit order: a `PlaceOrders` of one. */
   PlaceOrder: 0x35,
   /** One market order: a `PlaceOrders` of one market entry. */
   MarketOrder: 0x35,
-  /** Cancel 1 to {@link MAX_LIST_ENTRIES} resting orders by order ID. */
+  /** Cancel 1 to {@link MAX_ORDERS_PER_BATCH} resting orders by order ID. */
   CancelOrders: 0x36,
   /** One cancel by order ID: a `CancelOrders` of one. */
   CancelOrder: 0x36,
-  /** Cancel 1 to {@link MAX_LIST_ENTRIES} resting orders by client order ID. */
+  /** Cancel 1 to {@link MAX_ORDERS_PER_BATCH} resting orders by client order ID. */
   CancelClientOrders: 0x37,
   /** One cancel by client order ID: a `CancelClientOrders` of one. */
   CancelClientOrder: 0x37,
@@ -196,23 +200,23 @@ export interface CancelClientOrder {
   clientOrderId: bigint;
 }
 
-/** Most entries one list action (`PlaceOrders`, `CancelOrders`,
+/** Most orders one batch (`PlaceOrders`, `CancelOrders`,
  *  `CancelClientOrders`) carries; the wire refuses 0 or more than this. */
-export const MAX_LIST_ENTRIES = 100;
+export const MAX_ORDERS_PER_BATCH = 100;
 
-/** A limit entry of a {@link PlaceOrders}: a {@link PlaceOrder} without its
+/** A limit order of a {@link PlaceOrders}: a {@link PlaceOrder} without its
  *  owner. `kind` may be omitted. */
 export type LimitOrderEntry = Omit<PlaceOrder, "owner"> & { kind?: "limit" };
 
-/** A market entry of a {@link PlaceOrders}: a {@link MarketOrder} without its
+/** A market order of a {@link PlaceOrders}: a {@link MarketOrder} without its
  *  owner. */
 export type MarketOrderEntry = Omit<MarketOrder, "owner"> & { kind: "market" };
 
 /** One order of a {@link PlaceOrders}, limit or market. */
 export type OrderEntry = LimitOrderEntry | MarketOrderEntry;
 
-/** 1 to {@link MAX_LIST_ENTRIES} limit or market orders for one account
- *  under one signature and nonce (action `0x01`). Each runs in turn as its
+/** 1 to {@link MAX_ORDERS_PER_BATCH} limit or market orders for one account
+ *  under one signature and nonce (action `0x35`). Each runs in turn as its
  *  own order would and stands or is refused on its own; the transaction
  *  succeeds and `orders_placed` reports every order. */
 export interface PlaceOrders {
@@ -222,7 +226,7 @@ export interface PlaceOrders {
   orders: OrderEntry[];
 }
 
-/** Cancel 1 to {@link MAX_LIST_ENTRIES} resting orders by order ID (action
+/** Cancel 1 to {@link MAX_ORDERS_PER_BATCH} resting orders by order ID (action
  *  `0x36`); each cancel stands or is refused on its own. */
 export interface CancelOrders {
   /** Account address of the orders' owner (20 bytes). */
@@ -231,7 +235,7 @@ export interface CancelOrders {
   orderIds: bigint[];
 }
 
-/** Cancel 1 to {@link MAX_LIST_ENTRIES} resting orders by client order ID
+/** Cancel 1 to {@link MAX_ORDERS_PER_BATCH} resting orders by client order ID
  *  (action `0x37`); each cancel stands or is refused on its own. */
 export interface CancelClientOrders {
   /** Account address of the orders' owner (20 bytes). */
@@ -2110,8 +2114,8 @@ export type ExchangeEvent =
  *                   either the gateway returned a hash-only ambiguous response
  *                   or inclusion polling expired. The tx may still land.
  * - `"unreadable"`: the tx executed with code 0 (`height` set), but its order
- *                   list event did not read: malformed, missing, or not one
- *                   entry per order sent (`code === -1`). What each order did
+ *                   results did not read: malformed, missing, or not one
+ *                   result per order sent (`code === -1`). What each order did
  *                   is unknown; reconcile by `hash` and never resubmit.
  */
 export type TxOutcome =
@@ -2182,11 +2186,12 @@ export interface TxResult {
   events?: TxEvent[];
 }
 
-/** What `ExchangeClient.closePosition` did: `closed` carries the sent
- *  close's result; `nothingToClose` means the account held no position on the
+/** What `ExchangeClient.closePosition` did: `sent` carries the close's
+ *  transaction and its order's outcome; `nothingToClose` means the account held no position on the
  *  market, so nothing was sent. */
 export type CloseOutcome =
-  { kind: "closed"; tx: TxResult } | { kind: "nothingToClose" };
+  | { kind: "sent"; tx: TxResult; order: OrderPlacement | null }
+  | { kind: "nothingToClose" };
 
 /** A single ABCI event with key-value attributes. */
 export interface TxEvent {

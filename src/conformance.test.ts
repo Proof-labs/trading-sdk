@@ -26,7 +26,7 @@ import { bytesToHex, pubkeyToOwner, ownerToHex } from "./crypto.js";
 import { ExecErrorCode, execErrorName } from "./errors.js";
 import { BinaryPriceError, binaryPositionView, yesOrder } from "./binary.js";
 import { decodeLiquidationEvent } from "./liquidation-events.js";
-import { decodeOrderListEvent, type OrderListEvent } from "./order-lists.js";
+import { decodeOrdersEvent, type OrdersEvent } from "./order-lists.js";
 import { decodeMarginOffsetEvent } from "./margin-offsets.js";
 import { decodeVoidSettlementEvent } from "./void-events.js";
 import { decodeResolutionBalanceSnapshotEvent } from "./resolution-balance-events.js";
@@ -97,7 +97,7 @@ const UNFILLED: Record<string, string> = {
 
 /** A decoded list event in the engine's serde shape, so the events vectors
  *  compare it field by field. */
-function orderListAsEngine(event: OrderListEvent): unknown {
+function ordersEventAsEngine(event: OrdersEvent): unknown {
   if (event.type === "OrdersPlaced") {
     return {
       owner: event.owner,
@@ -1176,14 +1176,14 @@ describe("conformance vectors (TypeScript)", () => {
         decodeVoidSettlementEvent(input) ??
         decodeResolutionBalanceSnapshotEvent(input) ??
         decodeMarginOffsetEvent(input) ??
-        decodeOrderListEvent(input);
+        decodeOrdersEvent(input);
       const [[variant, fields]] = Object.entries(
         c.event as Record<string, unknown>,
       );
       expect(decoded?.type, c.case).toBe(variant);
       const flat =
         decoded?.type === "OrdersPlaced" || decoded?.type === "OrdersCancelled"
-          ? orderListAsEngine(decoded)
+          ? ordersEventAsEngine(decoded)
           : decoded?.type === "MarginOffsetPairConfigured"
             ? {
                 sequence: decoded.sequence,

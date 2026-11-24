@@ -666,17 +666,16 @@ Trading integrations use `TraderAction` and can type their calls against it to
 keep operator actions out of autocomplete. `submitTx` still accepts the full
 `Action` union.
 
-#### Order and cancel lists
+#### Placing and cancelling orders
 
-`PlaceOrders` (0x01), `CancelOrders` (0x02) and `CancelClientOrders` (0x18)
-carry 1 to `MAX_LIST_ENTRIES` (100) entries for one account under one
-signature, like Hyperliquid's `order` and `cancel`. A `PlaceOrders` entry is a
-limit order, or a market order with `kind: "market"` (optional `worstPrice`
-stops the walk through the book at that price). Each entry runs on its own:
-the transaction succeeds and its `orders_placed` or `orders_cancelled` event
-reports every entry: `resting`, `executed` (with `requestedQuantity`,
+Orders and cancels are sent in batches of 1 to `MAX_ORDERS_PER_BATCH` (100)
+for one account under one signature, like Hyperliquid's `order` and `cancel`;
+`placeOrder` is a batch of one. Each order gets its own result, and a rejected
+order does not fail the batch. An order is a limit order, or a market order
+with `kind: "market"` (optional `worstPrice` stops the walk through the book at
+that price). Its outcome is `resting`, `executed` (with `requestedQuantity`,
 `filledQuantity` and the `unfilled` reason) or `rejected` with its engine
-code.
+code; a cancel's is `cancelled` or `refused` with its code.
 
 ```typescript
 const { tx, orders } = await client.placeOrders([
@@ -695,39 +694,46 @@ const { tx, orders } = await client.placeOrders([
     worstPrice: 66_500_000_000n,
   },
 ]);
-for (const o of orders) {
+for (const o of orders ?? []) {
   if (o.outcome === "rejected")
     console.log(o.clientOrderId, o.code, o.error?.name);
   if (o.outcome === "executed")
     console.log(o.filledQuantity, "of", o.requestedQuantity, o.unfilled);
 }
 const cancels = await client.cancelOrders([42n, 43n]); // or cancelClientOrders
+
+const { order } = await client.placeOrder({
+  market: 1,
+  side: Side.Buy,
+  price: 66_740_000_000n,
+  quantity: 50n,
+});
+if (order?.outcome === "rejected") console.log(order.error?.name);
 ```
 
-`placeOrder`, `marketOrder`, `cancelOrder` and `cancelClientOrder` (and
-`PlaceOrder`, `MarketOrder`, `CancelOrder`, `CancelClientOrder` through
-`submitTx`) keep their signatures and send a list of one, read like any list:
-a refused entry is reported in `orderPlacements` / `orderCancellations` and
-the transaction stays `ok`, whether read at once or reconciled later with
-`waitForDelivery`. An executed result whose list
-event does not read, or does not report one entry per order sent, is
-`outcome: "unreadable"` (`ok: false`, `code: -1`) with its hash and height:
-it executed, so reconcile by hash and never resubmit. `marketOrder` takes an optional `worstPrice` and `reduceOnly`.
+`placeOrder`, `marketOrder`, `buyNo` and `sellNo` return `{ tx, order }`;
+`cancelOrder` and `cancelClientOrder` return `{ tx, cancellation }`. `orders`,
+`order` and `cancellation` are `null` when `tx` has no executed verdict: the
+transaction was refused as a whole (`tx.error`), is pending (reconcile with
+`waitForDelivery(tx)`, then `placementsOf` / `cancellationsOf`), or is
+`outcome: "unreadable"` (`ok: false`, `code: -1`): it executed but its results
+did not read, so reconcile by hash and never resubmit. `marketOrder` takes an
+optional `worstPrice` and `reduceOnly`.
+
 `closePosition(market)` reads the position and sends a reduce-only market
-order on the opposite side for its size, returning `{ kind: "closed", tx }`;
-a refusal is its entry in `orderPlacements(tx, owner)` (code 12 when the
-account cannot afford it). Its size and `nothingToClose` come from the account
-read, which can trail a fill made just before.
-On a flat account it sends nothing and returns `{ kind: "nothingToClose" }`.
-There is no close action: to close by hand, send a `MarketOrder` with
-`reduceOnly: true`. `orders` is empty
-while `tx` has no executed verdict; read it later with
-`orderPlacements(await client.waitForDelivery(tx), owner)` or
-`orderCancellations(...)`. `orderPlacements` reads an `AtomicBasketOrder`'s
-legs the same way. `decodeOrderListEvent` decodes either event from its ABCI
-attributes; the retired `order_placed`, `order_cancelled`, `order_rejected`
-and `market_order_processed` are no longer emitted but still read from
-history.
+order on the opposite side for its size, returning
+`{ kind: "sent", tx, order }`; the close can still be `rejected` (code 12 when
+the account cannot afford it, 35 when the position went flat first). Its size
+and `nothingToClose` come from the account read, which can trail a fill made
+just before. On a flat account it sends nothing and returns
+`{ kind: "nothingToClose" }`. To close by hand, send a `MarketOrder` with
+`reduceOnly: true`.
+
+`orderPlacements(tx, owner)` also reads an `AtomicBasketOrder`'s legs.
+`decodeOrdersEvent` decodes `orders_placed` / `orders_cancelled` from their
+ABCI attributes; the retired `order_placed`, `order_cancelled`,
+`order_rejected` and `market_order_processed` are no longer emitted but still
+read from history.
 
 #### SetUserMarketLeverage availability
 

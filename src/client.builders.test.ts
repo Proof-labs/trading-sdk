@@ -158,7 +158,7 @@ describe("convenience action builders", () => {
       ],
     } as unknown as AccountInfo);
     const closed = await client.closePosition(9);
-    expect(closed.kind).toBe("closed");
+    expect(closed.kind).toBe("sent");
     expect(spy.mock.calls[0][0]).toEqual({
       type: "MarketOrder",
       data: {

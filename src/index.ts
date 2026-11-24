@@ -100,7 +100,7 @@ export {
   type OrderEntry,
   type LimitOrderEntry,
   type MarketOrderEntry,
-  MAX_LIST_ENTRIES,
+  MAX_ORDERS_PER_BATCH,
   type CancelAllOrders,
   type CancelReplaceOrder,
   type AmendOrder,
@@ -338,16 +338,20 @@ export {
 } from "./liquidation-events.js";
 export type { AbciEventInput } from "./abci-event.js";
 export {
-  decodeOrderListEvent,
+  cancellationsOf,
+  decodeOrdersEvent,
   orderCancellations,
   orderPlacements,
+  placementsOf,
+  type CancelOrderResult,
   type CancelOrdersResult,
   type CancelTarget,
   type OrderCancellation,
-  type OrderListEvent,
+  type OrdersEvent,
   type OrderPlacement,
   type OrdersCancelledEvent,
   type OrdersPlacedEvent,
+  type PlaceOrderResult,
   type PlaceOrdersResult,
   type UnfilledReason,
 } from "./order-lists.js";
