@@ -236,8 +236,8 @@ const NONCES = [
 // is pinned by conformance/signing.ndjson (`place_order_no_triggers@seq2`)
 // and the decode-compat test in triggers.test.ts.
 const PAYLOADS: Record<string, readonly [string, string]> = {
-  // The single orders and cancels are lists of one on 0x35 and 0x36 since
-  // exchange#1513/#1514 (market orders, once 0x04, are entries on 0x35).
+  // A single order or cancel is a list of one on 0x35 / 0x36; a market
+  // order is an entry on 0x35.
   "PlaceOrder (limit, GTC)": [
     "35",
     "c43892dc00140303030303030303030303030303030303030303919803a3427579cd019081a54c696d697493ce04ad14f0a3477463c2c2c0c0c0",
