@@ -111,8 +111,12 @@ pub use proof_trading_sdk::types::{
     ClientTriggerGroupId, ClientTriggerId, EventId, EventInfo, FundingRate, MarketConfig, MarketId,
     Order, OrderEntry, OrderId, OrderKind, Outcome, PlaceOrder, PlaceOrders, Position,
     PositionEpoch, Side, TimeInForce, TriggerLimb, TriggerSlippageBps, UnfilledReason,
-    WithdrawalStatus, MAX_LIST_ENTRIES,
+    WithdrawalStatus,
 };
+
+/// Most orders one batch (`PlaceOrders`, `CancelOrders`,
+/// `CancelClientOrders`) carries; the wire refuses 0 or more than this.
+pub const MAX_ORDERS_PER_BATCH: usize = proof_trading_sdk::types::MAX_LIST_ENTRIES;
 pub use proof_trading_sdk::ErrorKind;
 pub use proof_trading_sdk::{LocalSigner, Signer, SignerError};
 

@@ -89,14 +89,13 @@ On devnet, fund a new address with the faucet first:
 | `connect(&config, signer)`                      | reads `GET /v1/status` and `recent-nonces`, binds signatures to the chain |
 | `new(&config, signer)`                          | no request; signs for the config's chain id                               |
 | `limit_order(market, side, price, qty)`         | builds a GTC order for this account                                       |
-| `place_order(order)`                            | `PlaceOrders` of one; a refused order is its entry in `placements()`      |
-| `place_orders(Vec<OrderEntry>)`                 | `PlaceOrders`: 1 to 100 limit or market orders, one signature, each placed or refused on its own (entries from `actions::order_entry` / `actions::market_entry`) |
-| `market_order(market, side, qty)`               | `PlaceOrders` of one market entry (IOC); a refused order is its entry in `placements()` |
-| `place_entry(entry)`                            | `PlaceOrders` of one entry of any kind, e.g. `actions::market_entry(market, side, qty, Some(worst_price))` |
-| `cancel_order(order_id)`                        | `CancelOrders` of one; nothing to cancel is its entry in `cancellations()` |
-| `cancel_order_by_client_id(client_order_id)`    | `CancelClientOrders` of one, same                                         |
-| `cancel_orders(Vec<OrderId>)`                   | `CancelOrders`: 1 to 100 order ids, each cancelled or refused on its own  |
-| `cancel_client_orders(Vec<u64>)`                | `CancelClientOrders`: 1 to 100 client order ids, the same                 |
+| `place_order(order)`                            | one limit or market order (a batch of one); its outcome is `placement()` |
+| `place_orders(Vec<OrderEntry>)`                 | 1 to 100 limit or market orders in one batch, one signature, each placed or rejected on its own (orders from `actions::order_entry` / `actions::market_entry`) |
+| `market_order(market, side, qty)`               | one market order (IOC); its outcome is `placement()`                     |
+| `cancel_order(order_id)`                        | one cancel; its outcome is `cancellation()` (refused, code 2, if nothing rests) |
+| `cancel_order_by_client_id(client_order_id)`    | one cancel by client order id, the same                                   |
+| `cancel_orders(Vec<OrderId>)`                   | 1 to 100 cancels by order id in one batch, each cancelled or refused on its own |
+| `cancel_client_orders(Vec<u64>)`                | 1 to 100 cancels by client order id, the same                             |
 | `cancel_all_orders(Option<market>)`             | `CancelAllOrders`                                                         |
 | `amend_order(order_id, new_price, new_qty)`     | `AmendOrder` (same-price size cuts keep priority)                         |
 | `cancel_replace_order(order_id, order)`         | `CancelReplaceOrder`                                                      |
@@ -145,20 +144,22 @@ computed hash, a `TxStatus`, and `retry_after: Option<Duration>`:
 | `Pending`            | Admitted without a verdict yet; call `wait_for_receipt`.                                                             |
 | `Refused(reason)`    | Turned away by the gateway (`Unauthorized`, `RateLimited`, `Paused`, `CancelOnly`, `Unavailable`, `InvalidRequest`). |
 
-A list (`place_orders`, `cancel_orders`, `cancel_client_orders`) commits with
-no error whatever its entries did: `receipt.placements()` and
-`receipt.cancellations()` say what each entry did, in the order sent, with
-the code of each one refused. An order done without resting is `Executed`
-with its `requested_quantity`, `filled_quantity` and `unfilled` reason. The
-single helpers (`place_order`, `place_entry`, `market_order`, `cancel_order`,
-`cancel_order_by_client_id`, `buy_no`, `sell_no`) send a list of one and
-report its refusal as `receipt.error`, as before lists. `close_position`
-returns `CloseOutcome::Closed(submitted)` with the same refusal reporting, or
+Orders and cancels are sent in batches of 1 to `MAX_ORDERS_PER_BATCH` (100)
+under one signature; `place_order` is a batch of one. Each order gets its own
+result, and a rejected order does not fail the batch: the transaction commits
+with no error and `submitted.placements()` / `submitted.cancellations()` give
+each outcome in the order sent (`placement()` / `cancellation()` for a single
+call). They are `None` without an executed verdict (pending, or refused as a
+whole). An order is `Resting`, `Executed` (with its `requested_quantity`,
+`filled_quantity` and `unfilled` reason) or `Rejected` with its code; a cancel
+is `Cancelled` or `Refused`. `close_position` returns
+`CloseOutcome::Sent(submitted)`, whose `placement()` can still be rejected
+(code 12 when unaffordable, 35 when the position went flat first), or
 `CloseOutcome::NothingToClose` when the account holds no position on the
-market (nothing is sent). `wait_for_receipt` reads a reconciled receipt the
-same way without knowing what was sent: a list of one whose entry was
-refused is `receipt.error`. An executed transaction whose list event does
-not parse, or (from a helper) does not report one entry per order sent, is
+market (nothing is sent); its size comes from the account read, which can
+trail a fill made just before. `wait_for_receipt` reads a reconciled receipt
+the same way. An executed transaction whose order results do not parse, or do
+not report one result per order sent, is
 `Error::OrderResultUnreadable { receipt, reason }`: it executed, so reconcile
 `receipt.hash` and never sign it again. A basket's legs are
 `receipt.placements()` too, in order; a failed basket is `receipt.error` with

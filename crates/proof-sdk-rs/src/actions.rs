@@ -42,7 +42,7 @@ pub fn limit_order(
 /// `PlaceOrders` of one market order for `owner`: immediate-or-cancel at the
 /// best available prices, no worst price. For a client order id, brackets or
 /// a worst price, build it with [`market_entry`] and send it with
-/// [`place_entry`].
+/// [`place_entry`] or [`ExchangeClient::place_order`](crate::ExchangeClient::place_order).
 #[must_use]
 pub fn market_order(owner: Address, market: MarketId, side: Side, quantity: u64) -> Action {
     place_entry(owner, market_entry(market, side, quantity, None))
@@ -54,7 +54,7 @@ pub fn place_order(order: PlaceOrder) -> Action {
     Action::PlaceOrders(PlaceOrders::one(order))
 }
 
-/// `PlaceOrders` of one entry of any kind for `owner`.
+/// `PlaceOrders` of one order of either kind ([`OrderEntry`]) for `owner`.
 #[must_use]
 pub fn place_entry(owner: Address, entry: OrderEntry) -> Action {
     Action::PlaceOrders(PlaceOrders::entry(owner.to_bytes(), entry))
@@ -78,7 +78,7 @@ pub fn cancel_order_by_client_id(owner: Address, client_order_id: u64) -> Action
     }))
 }
 
-/// One limit order of a [`place_orders`] list, GTC. Set `client_order_id`,
+/// One limit order of a [`place_orders`] batch, GTC. Set `client_order_id`,
 /// `reduce_only` or brackets on it, or `kind` for `post_only` and
 /// `time_in_force`, as needed.
 #[must_use]
@@ -86,7 +86,7 @@ pub fn order_entry(market: MarketId, side: Side, price: u64, quantity: u64) -> O
     OrderEntry::limit(market, side, price, quantity)
 }
 
-/// One market order of a [`place_orders`] list: immediate-or-cancel at the
+/// One market order of a [`place_orders`] batch: immediate-or-cancel at the
 /// best available prices, sized to what the account can afford.
 /// `worst_price`, when set, stops the fills at that price. A close is one with
 /// `reduce_only: true` on the other side for the position's size;
@@ -148,8 +148,14 @@ pub fn cancel_client_orders(owner: Address, client_order_ids: Vec<u64>) -> Resul
     }))
 }
 
-fn entries<T>(list: Vec<T>) -> Result<EntryList<T>> {
-    EntryList::try_from(list).map_err(|e| Error::InvalidInput(e.to_string()))
+fn entries<T>(orders: Vec<T>) -> Result<EntryList<T>> {
+    let count = orders.len();
+    EntryList::try_from(orders).map_err(|_| {
+        Error::InvalidInput(format!(
+            "1 to {} orders per call, got {count}",
+            crate::MAX_ORDERS_PER_BATCH
+        ))
+    })
 }
 
 /// `CancelAllOrders`: every resting order, or only those on `market`.
@@ -446,7 +452,7 @@ fn replace(
 mod tests {
     #![allow(clippy::unwrap_used, clippy::panic)]
     use super::*;
-    use crate::MAX_LIST_ENTRIES;
+    use crate::MAX_ORDERS_PER_BATCH;
     use proof_trading_sdk::types::{ClientTriggerId, TriggerSlippageBps, BINARY_PRICE_MAX};
     use proof_trading_sdk::{codec, crypto, sign_action, LocalSigner};
 
@@ -779,7 +785,7 @@ mod tests {
         };
         assert_eq!(c.client_order_ids.as_slice(), &[6, 7]);
 
-        let over = MAX_LIST_ENTRIES + 1;
+        let over = MAX_ORDERS_PER_BATCH + 1;
         for refused in [
             place_orders(OWNER, Vec::new()),
             place_orders(OWNER, vec![order_entry(1, Side::Buy, 1, 1); over]),

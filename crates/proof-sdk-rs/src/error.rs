@@ -68,7 +68,7 @@ pub enum Error {
     /// A submission got no verdict and may have landed. `tx` is exactly what
     /// was sent; `source` is why no verdict came back.
     Unconfirmed { tx: SignedTx, source: Box<Error> },
-    /// The transaction executed with code 0, but its order list did not read:
+    /// The transaction executed with code 0, but its order results did not read:
     /// an `orders_placed` or `orders_cancelled` that does not parse, or (from
     /// a helper that knows what it sent) none, or not one entry per order
     /// sent. What each order did is unknown. Not a rejection: reconcile
