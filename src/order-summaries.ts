@@ -15,13 +15,13 @@ export interface OrderSummaryFilters {
   markets?: readonly number[];
   /** Inclusive lower bound on fill time, Unix epoch milliseconds. */
   fromMs?: number;
-  /** Exclusive upper bound on fill time, Unix epoch milliseconds. A cursor
-   *  walk is pinned to its first page's height, so fills arriving mid-walk
-   *  cannot skip an order. */
+  /** Exclusive upper bound on fill time, Unix epoch milliseconds. */
   toMs?: number;
   /** Page size, 1 to 5000. */
   limit?: number;
-  /** A previous page's non-empty `nextCursor`. */
+  /** A previous page's non-empty `nextCursor`. A cursor walk is pinned to
+   *  its first page's height, so fills arriving mid-walk cannot skip an
+   *  order. */
   cursor?: string;
 }
 
@@ -34,7 +34,8 @@ export interface OrderSummary {
   /** Summed fill quantity, integer lots. */
   filledQuantity: bigint;
   /** `notional / filledQuantity` in micro-USDC, a decimal string rounded to
-   *  six places; `null` when nothing filled. */
+   *  at most six places with trailing zeros dropped (`"550000"`,
+   *  `"550000.5"`); `null` when nothing filled. */
   avgPrice: string | null;
   /** Σ price × quantity (micro-USDC × lots), an exact decimal string. */
   notional: string;
