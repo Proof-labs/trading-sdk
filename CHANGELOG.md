@@ -15,8 +15,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the engine's six-slot response is still checked in full and the two retired
   slots are dropped. `AuthorityDomain` no longer offers `CexComposite` or
   `ScheduledOps`; an `UpdateAuthoritySet` naming either decodes as
-  `RetiredAuthoritySetUpdate` and `isSubmittableAdminAction` rejects it. The
-  wire format is unchanged.
+  `RetiredAuthoritySetUpdate` and `isSubmittableAdminAction` rejects it; Python's
+  `is_submittable_admin_action` and the proposal builders refuse it too. The
+  wire format is unchanged, and the Rust crates keep proof-wire's six-field
+  `AuthoritiesSnapshot` until proof-wire changes.
 
 ### Added
 

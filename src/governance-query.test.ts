@@ -894,7 +894,8 @@ describe("decodeAuthoritiesSnapshot", () => {
 
   it("checks all six engine slots and drops the two retired lists", () => {
     // Wire order: relayer, oracle, cex_composite, custody, market_params,
-    // scheduled_ops. The retired slots carry leftovers an older state may hold.
+    // scheduled_ops. The engine keeps the retired slots empty; they are
+    // non-empty here only to prove the slots are dropped.
     const got = decodeAuthoritiesSnapshot([
       [addr(0xaa)],
       [addr(0xbb)],
