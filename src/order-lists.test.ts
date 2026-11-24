@@ -184,7 +184,6 @@ describe("order methods", () => {
           ),
         ],
       },
-      pubkeyToOwner(getPublicKey(key)),
     );
     expect(legs.map((l) => [l.outcome, l.market])).toEqual([
       ["rejected", 1],
@@ -239,7 +238,7 @@ describe("pending results reconciled later", () => {
       hash: pending.tx.hash,
     });
     expect(
-      placementsOf(delivered, pubkeyToOwner(getPublicKey(key))),
+      placementsOf(delivered),
     ).toMatchObject([{ outcome: "rejected", code: 12 }]);
   });
 

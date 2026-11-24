@@ -9,13 +9,11 @@
  */
 
 import { Attributes, type AbciEventInput } from "./abci-event.js";
-import { bytesToHex } from "./crypto.js";
 import { decodeExecError, type ExecErrorInfo } from "./errors.js";
 import { txUnreadable } from "./tx-result.js";
 import {
   Side,
   TimeInForce,
-  type Address,
   type CancelReason,
   type TxResult,
 } from "./types.js";
@@ -137,21 +135,15 @@ function executed(tx: TxResult): boolean {
   return tx.outcome === "ok" && tx.height !== undefined;
 }
 
-/** `tx`'s placements for `owner`, or `null` without an executed verdict. */
-export function placementsOf(
-  tx: TxResult,
-  owner: Address,
-): OrderPlacement[] | null {
-  return executed(tx) ? orderPlacements(tx, owner) : null;
+/** `tx`'s placements, or `null` without an executed verdict. */
+export function placementsOf(tx: TxResult): OrderPlacement[] | null {
+  return executed(tx) ? orderPlacements(tx) : null;
 }
 
-/** `tx`'s user-requested cancellations for `owner`, or `null` without an
- *  executed verdict. */
-export function cancellationsOf(
-  tx: TxResult,
-  owner: Address,
-): OrderCancellation[] | null {
-  return executed(tx) ? orderCancellations(tx, owner) : null;
+/** `tx`'s user-requested cancellations, or `null` without an executed
+ *  verdict. */
+export function cancellationsOf(tx: TxResult): OrderCancellation[] | null {
+  return executed(tx) ? orderCancellations(tx) : null;
 }
 
 const SIDES: Record<string, Side> = { buy: Side.Buy, sell: Side.Sell };
@@ -271,36 +263,28 @@ export function decodeOrdersEvent(event: AbciEventInput): OrdersEvent | null {
   return null;
 }
 
-/** The order events of `tx`, only `owner`'s when given; throws on one that
- *  does not decode. */
-function listEvents(tx: TxResult, owner?: Address): OrdersEvent[] {
-  const hex = owner ? bytesToHex(owner) : null;
+/** The order events of `tx`; throws on one that does not decode. */
+function listEvents(tx: TxResult): OrdersEvent[] {
   return (tx.events ?? [])
     .map(decodeOrdersEvent)
-    .filter(
-      (e): e is OrdersEvent => e !== null && (hex === null || e.owner === hex),
-    );
+    .filter((e): e is OrdersEvent => e !== null);
 }
 
-/** Each order's outcome from the `orders_placed` event `owner`'s placement
- *  emitted in `tx`, in the order sent; empty when `tx` carries none. Reads an
- *  `AtomicBasketOrder`'s legs the same way, also when the basket failed (each
- *  leg `rejected` with the transaction's code). */
-export function orderPlacements(
-  tx: TxResult,
-  owner: Address,
-): OrderPlacement[] {
-  const event = listEvents(tx, owner).find((e) => e.type === "OrdersPlaced");
+/** Each order's outcome from the `orders_placed` event of `tx`, in the order
+ *  sent; empty when `tx` carries none. Reads an `AtomicBasketOrder`'s legs the
+ *  same way, also when the basket failed (each leg `rejected` with the
+ *  transaction's code). Reads a transaction you submitted; for another
+ *  transaction, match the event's `owner` (`decodeOrdersEvent`). */
+export function orderPlacements(tx: TxResult): OrderPlacement[] {
+  const event = listEvents(tx).find((e) => e.type === "OrdersPlaced");
   return event?.type === "OrdersPlaced" ? event.orders : [];
 }
 
-/** Each entry's outcome from the user-requested `orders_cancelled` event
- *  `owner`'s cancel emitted in `tx`; empty when `tx` carries none. */
-export function orderCancellations(
-  tx: TxResult,
-  owner: Address,
-): OrderCancellation[] {
-  const event = listEvents(tx, owner).find(
+/** Each entry's outcome from the user-requested `orders_cancelled` event of
+ *  `tx`; empty when `tx` carries none. Reads a transaction you submitted; for
+ *  another transaction, match the event's `owner` (`decodeOrdersEvent`). */
+export function orderCancellations(tx: TxResult): OrderCancellation[] {
+  const event = listEvents(tx).find(
     (e) => e.type === "OrdersCancelled" && e.reason === "user_requested",
   );
   return event?.type === "OrdersCancelled" ? event.orders : [];

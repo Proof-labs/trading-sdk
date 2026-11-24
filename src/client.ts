@@ -1361,7 +1361,7 @@ export class ExchangeClient {
       type: "PlaceOrder",
       data: { ...params, owner },
     });
-    return { tx, orders: placementsOf(tx, owner) };
+    return { tx, orders: placementsOf(tx) };
   }
 
   /**
@@ -1380,7 +1380,7 @@ export class ExchangeClient {
       type: "MarketOrder",
       data: { ...params, owner },
     });
-    return { tx, orders: placementsOf(tx, owner) };
+    return { tx, orders: placementsOf(tx) };
   }
 
   /**
@@ -1413,7 +1413,7 @@ export class ExchangeClient {
       type: "CancelOrder",
       data: { orderId, owner },
     });
-    return { tx, orders: cancellationsOf(tx, owner) };
+    return { tx, orders: cancellationsOf(tx) };
   }
 
   /** Cancel a resting order by the owner-scoped client order ID; read as
@@ -1424,7 +1424,7 @@ export class ExchangeClient {
       type: "CancelClientOrder",
       data: { clientOrderId, owner },
     });
-    return { tx, orders: cancellationsOf(tx, owner) };
+    return { tx, orders: cancellationsOf(tx) };
   }
 
   /**
@@ -1433,7 +1433,7 @@ export class ExchangeClient {
    * Each order stands or is rejected on its own: `tx` succeeds and `orders`
    * gives each order's outcome in the order sent. `orders` is `null` while
    * `tx` has no executed verdict; read them later with
-   * `placementsOf(await waitForDelivery(tx), owner)`. An executed `tx` whose
+   * `placementsOf(await waitForDelivery(tx))`. An executed `tx` whose
    * results do not read is `unreadable`: reconcile by hash, never resubmit.
    */
   async placeOrders(orders: OrderEntry[]): Promise<PlaceOrdersResult> {
@@ -1442,7 +1442,7 @@ export class ExchangeClient {
       type: "PlaceOrders",
       data: { owner, orders },
     });
-    return { tx, orders: placementsOf(tx, owner) };
+    return { tx, orders: placementsOf(tx) };
   }
 
   /** Cancel 1 to `MAX_ORDERS_PER_BATCH` resting orders by order ID
@@ -1453,7 +1453,7 @@ export class ExchangeClient {
       type: "CancelOrders",
       data: { owner, orderIds },
     });
-    return { tx, orders: cancellationsOf(tx, owner) };
+    return { tx, orders: cancellationsOf(tx) };
   }
 
   /** Cancel 1 to `MAX_ORDERS_PER_BATCH` resting orders by client order ID
@@ -1466,7 +1466,7 @@ export class ExchangeClient {
       type: "CancelClientOrders",
       data: { owner, clientOrderIds },
     });
-    return { tx, orders: cancellationsOf(tx, owner) };
+    return { tx, orders: cancellationsOf(tx) };
   }
 
   /**
@@ -1543,7 +1543,7 @@ export class ExchangeClient {
         reduceOnly: true,
       },
     });
-    return { kind: "sent", tx, order: placementsOf(tx, owner)?.[0] ?? null };
+    return { kind: "sent", tx, order: placementsOf(tx)?.[0] ?? null };
   }
 
   /** Atomically replace a complete SL/TP bracket. When `owner` is omitted,
