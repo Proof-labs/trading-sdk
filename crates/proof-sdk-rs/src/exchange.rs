@@ -153,51 +153,12 @@ impl Receipt {
     }
 }
 
-/// The event that reports an order action's results.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ListKind {
-    Placed,
-    Cancelled,
-}
-
-/// What an order action sent: the event reporting it and how many orders.
-#[derive(Clone, Copy, Debug)]
-struct Sent {
-    list: ListKind,
-    entries: usize,
-}
-
-impl Sent {
-    const PLACE: Self = Self::list(ListKind::Placed, 1);
-    const CANCEL: Self = Self::list(ListKind::Cancelled, 1);
-
-    const fn list(list: ListKind, entries: usize) -> Self {
-        Self { list, entries }
-    }
-
-    /// What `action` sends, if it is a list action.
-    fn of(action: &Action) -> Option<Self> {
-        let (list, entries) = match action {
-            Action::PlaceOrders(p) => (ListKind::Placed, p.orders.as_slice().len()),
-            Action::CancelOrders(c) => (ListKind::Cancelled, c.order_ids.as_slice().len()),
-            Action::CancelClientOrders(c) => {
-                (ListKind::Cancelled, c.client_order_ids.as_slice().len())
-            }
-            _ => return None,
-        };
-        Some(Self::list(list, entries))
-    }
-}
-
-/// Check an executed code-0 receipt's order results. Every order action is a
-/// batch, a single order a batch of one, so a rejected order is reported in
-/// [`Receipt::placements`] / [`Receipt::cancellations`] and never fails the
-/// transaction.
-///
-/// An order event that does not parse, or (when `sent` says what was sent) a
-/// list with the wrong number of entries, is [`Error::OrderResultUnreadable`]:
-/// the transaction executed, so it is never read as success or re-signed.
-fn read_order_lists(receipt: Receipt, sent: Option<Sent>) -> Result<Receipt> {
+/// Check an executed code-0 receipt's order events. A rejected order is
+/// reported in [`Receipt::placements`] / [`Receipt::cancellations`] and never
+/// fails the transaction; an order event that does not parse is
+/// [`Error::OrderResultUnreadable`]: the transaction executed, so it is never
+/// read as success or re-signed.
+fn read_order_lists(receipt: Receipt) -> Result<Receipt> {
     if receipt.error.is_some() {
         return Ok(receipt);
     }
@@ -207,29 +168,12 @@ fn read_order_lists(receipt: Receipt, sent: Option<Sent>) -> Result<Receipt> {
         }
         _ => None,
     });
-    if let Some(kind) = malformed {
-        return Err(unreadable(
-            receipt,
-            format!("its {kind} event does not parse"),
-        ));
-    }
-    if let Some(sent) = sent {
-        let reported = match sent.list {
-            ListKind::Placed => receipt.placements().len(),
-            ListKind::Cancelled => receipt.cancellations().len(),
-        };
-        if reported != sent.entries {
-            let reason = format!("{} sent, {reported} reported", sent.entries);
-            return Err(unreadable(receipt, reason));
-        }
-    }
-    Ok(receipt)
-}
-
-fn unreadable(receipt: Receipt, reason: String) -> Error {
-    Error::OrderResultUnreadable {
-        receipt: Box::new(receipt),
-        reason,
+    match malformed {
+        Some(kind) => Err(Error::OrderResultUnreadable {
+            receipt: Box::new(receipt),
+            reason: format!("its {kind} event does not parse"),
+        }),
+        None => Ok(receipt),
     }
 }
 
@@ -250,8 +194,8 @@ fn close_entry(market: MarketId, side: Side, size: u64) -> OrderEntry {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[must_use]
 pub enum CloseOutcome {
-    /// The close was sent. [`Submitted::placement`] is its outcome, which can
-    /// be rejected (code 12 when unaffordable, 35 when the position went flat
+    /// The close was sent. [`Submitted::placements`] holds its outcome, which
+    /// can be rejected (code 12 when unaffordable, 35 when the position went flat
     /// first).
     Sent(Submitted),
     /// The account held no position on the market, so nothing was sent.
@@ -380,24 +324,12 @@ impl Submitted {
             .map(Receipt::placements)
     }
 
-    /// The outcome of a single order call ([`Self::placements`]).
-    #[must_use]
-    pub fn placement(&self) -> Option<&OrderPlacement> {
-        self.placements()?.first()
-    }
-
     /// Each cancel's outcome, in order; `None` without an executed verdict.
     #[must_use]
     pub fn cancellations(&self) -> Option<&[OrderCancellation]> {
         self.receipt()
             .filter(|r| r.is_success())
             .map(Receipt::cancellations)
-    }
-
-    /// The outcome of a single cancel ([`Self::cancellations`]).
-    #[must_use]
-    pub fn cancellation(&self) -> Option<&OrderCancellation> {
-        self.cancellations()?.first()
     }
 }
 
@@ -651,12 +583,6 @@ impl ExchangeClient {
     /// executed but its order results did not read: reconcile, never re-sign.
     /// Other errors mean it was not sent.
     pub async fn send(&self, tx: &SignedTx) -> Result<Submitted> {
-        self.send_orders(tx, None).await
-    }
-
-    /// [`Self::send`], reading an executed result's order results as `sent`
-    /// says ([`read_order_lists`]).
-    async fn send_orders(&self, tx: &SignedTx, sent: Option<Sent>) -> Result<Submitted> {
         let s = self
             .inner
             .info
@@ -675,7 +601,7 @@ impl ExchangeClient {
             })?;
         let wait = retry_after(s.retry_after);
         let status = match status(s.outcome) {
-            TxStatus::Committed(receipt) => TxStatus::Committed(read_order_lists(receipt, sent)?),
+            TxStatus::Committed(receipt) => TxStatus::Committed(read_order_lists(receipt)?),
             other => other,
         };
         Ok(Submitted {
@@ -685,11 +611,6 @@ impl ExchangeClient {
         })
     }
 
-    /// Sign and send an order action, reading its result as `sent`.
-    async fn submit_orders(&self, action: &Action, sent: Sent) -> Result<Submitted> {
-        self.send_orders(&self.sign(action)?, Some(sent)).await
-    }
-
     /// Sign `action` with a fresh nonce and submit it.
     ///
     /// # Errors
@@ -697,8 +618,7 @@ impl ExchangeClient {
     /// [`Error::NonceWindow`], [`Error::Encode`] or [`Error::Signer`] before
     /// anything is sent, then whatever [`Self::send`] returns.
     pub async fn submit(&self, action: &Action) -> Result<Submitted> {
-        self.send_orders(&self.sign(action)?, Sent::of(action))
-            .await
+        self.send(&self.sign(action)?).await
     }
 
     /// [`Self::submit`], then wait up to `timeout` for a pending result to
@@ -741,17 +661,14 @@ impl ExchangeClient {
     /// [`Error::ReceiptTimeout`] at the deadline, including one that passes
     /// mid-request. A 404, a 5xx or a transport
     /// failure is retried until then; any other failure is returned at once.
-    /// The receipt's order results are read as [`Self::send`] reads them,
-    /// without knowing what was sent: rejected orders are reported in their
-    /// results, and an order event that does not parse is
-    /// [`Error::OrderResultUnreadable`].
+    /// An order event that does not parse is [`Error::OrderResultUnreadable`].
     pub async fn wait_for_receipt(&self, hash: TxHash, timeout: Duration) -> Result<Receipt> {
         let deadline = tokio::time::Instant::now() + timeout;
         let mut delay = RECEIPT_POLL_START;
         loop {
             let poll = self.inner.info.gateway().committed_receipt(hash);
             match tokio::time::timeout_at(deadline, poll).await {
-                Ok(Ok(receipt)) => return read_order_lists(receipt.into(), None),
+                Ok(Ok(receipt)) => return read_order_lists(receipt.into()),
                 // Not found yet, not indexed yet, or transient: keep polling.
                 Ok(Err(e)) if still_pending(e.kind) => {}
                 Ok(Err(e)) => return Err(e.into()),
@@ -783,15 +700,14 @@ impl ExchangeClient {
 
     /// Place one order for this account, limit ([`Self::limit_order`],
     /// [`actions::order_entry`]) or market ([`actions::market_entry`]): a
-    /// batch of one. [`Submitted::placement`] is its outcome; a rejected order
-    /// does not fail the transaction.
+    /// batch of one, read as [`Self::place_orders`].
     ///
     /// # Errors
     ///
     /// As [`Self::submit`].
     pub async fn place_order(&self, order: impl Into<OrderEntry>) -> Result<Submitted> {
-        let action = actions::place_entry(self.address(), order.into());
-        self.submit_orders(&action, Sent::PLACE).await
+        self.submit(&actions::place_entry(self.address(), order.into()))
+            .await
     }
 
     /// Place 1 to 100 limit or market orders under one signature, each placed
@@ -803,8 +719,7 @@ impl ExchangeClient {
     /// [`Error::InvalidInput`] for no orders or more than 100, else as
     /// [`Self::submit`].
     pub async fn place_orders(&self, orders: Vec<OrderEntry>) -> Result<Submitted> {
-        let sent = Sent::list(ListKind::Placed, orders.len());
-        self.submit_orders(&actions::place_orders(self.address(), orders)?, sent)
+        self.submit(&actions::place_orders(self.address(), orders)?)
             .await
     }
 
@@ -817,8 +732,7 @@ impl ExchangeClient {
     /// [`Error::InvalidInput`] for no ids or more than 100, else as
     /// [`Self::submit`].
     pub async fn cancel_orders(&self, order_ids: Vec<OrderId>) -> Result<Submitted> {
-        let sent = Sent::list(ListKind::Cancelled, order_ids.len());
-        self.submit_orders(&actions::cancel_orders(self.address(), order_ids)?, sent)
+        self.submit(&actions::cancel_orders(self.address(), order_ids)?)
             .await
     }
 
@@ -831,19 +745,17 @@ impl ExchangeClient {
     /// [`Error::InvalidInput`] for no ids or more than 100, else as
     /// [`Self::submit`].
     pub async fn cancel_client_orders(&self, client_order_ids: Vec<u64>) -> Result<Submitted> {
-        let sent = Sent::list(ListKind::Cancelled, client_order_ids.len());
-        self.submit_orders(
-            &actions::cancel_client_orders(self.address(), client_order_ids)?,
-            sent,
-        )
+        self.submit(&actions::cancel_client_orders(
+            self.address(),
+            client_order_ids,
+        )?)
         .await
     }
 
     /// Immediate-or-cancel at the best available prices
-    /// ([`actions::market_order`]), a batch of one: a rejected order is its outcome
-    /// ([`Submitted::placement`]).
-    /// For a worst price, pass [`actions::market_entry`] to
-    /// [`Self::place_order`].
+    /// ([`actions::market_order`]), a batch of one read as
+    /// [`Self::place_orders`]. For a worst price, pass
+    /// [`actions::market_entry`] to [`Self::place_order`].
     ///
     /// # Errors
     ///
@@ -854,10 +766,12 @@ impl ExchangeClient {
         side: Side,
         quantity: u64,
     ) -> Result<Submitted> {
-        self.submit_orders(
-            &actions::market_order(self.address(), market, side, quantity),
-            Sent::PLACE,
-        )
+        self.submit(&actions::market_order(
+            self.address(),
+            market,
+            side,
+            quantity,
+        ))
         .await
     }
 
@@ -867,11 +781,8 @@ impl ExchangeClient {
     ///
     /// As [`Self::submit`].
     pub async fn cancel_order(&self, order_id: OrderId) -> Result<Submitted> {
-        self.submit_orders(
-            &actions::cancel_order(self.address(), order_id),
-            Sent::CANCEL,
-        )
-        .await
+        self.submit(&actions::cancel_order(self.address(), order_id))
+            .await
     }
 
     /// Cancel by client order id ([`actions::cancel_order_by_client_id`]).
@@ -880,10 +791,10 @@ impl ExchangeClient {
     ///
     /// As [`Self::submit`].
     pub async fn cancel_order_by_client_id(&self, client_order_id: u64) -> Result<Submitted> {
-        self.submit_orders(
-            &actions::cancel_order_by_client_id(self.address(), client_order_id),
-            Sent::CANCEL,
-        )
+        self.submit(&actions::cancel_order_by_client_id(
+            self.address(),
+            client_order_id,
+        ))
         .await
     }
 
@@ -1232,8 +1143,8 @@ mod tests {
         }
     }
 
-    fn read(events: Vec<Event>, sent: Option<Sent>) -> Result<Receipt> {
-        read_order_lists(receipt(events), sent)
+    fn read(events: Vec<Event>) -> Result<Receipt> {
+        read_order_lists(receipt(events))
     }
 
     fn placed(outcomes: &[PlacementOutcome]) -> Event {
@@ -1283,27 +1194,24 @@ mod tests {
     }
 
     #[test]
-    fn a_market_entry_reports_its_outcome_in_its_entry() {
+    fn a_rejected_entry_never_fails_the_list() {
         let no_liquidity = PlacementOutcome::Executed {
             order_id: 4,
             requested_quantity: 5,
             filled_quantity: 0,
             unfilled: Some(proof_trading_sdk::types::UnfilledReason::NoLiquidity),
         };
+        let margin = PlacementOutcome::Rejected(EngineError::new(12, None));
         // Nothing filled is still an executed order, not an error.
-        let filled_none = read(vec![placed(&[no_liquidity])], Some(Sent::PLACE)).unwrap();
-        assert!(filled_none.is_success());
-        let margin = EngineError::new(12, None);
-        let refused = read(
-            vec![placed(&[PlacementOutcome::Rejected(margin)])],
-            Some(Sent::PLACE),
-        )
-        .unwrap();
-        assert!(refused.is_success(), "a refused entry never fails the list");
-        assert_eq!(
-            refused.placements()[0].outcome,
-            PlacementOutcome::Rejected(margin)
-        );
+        let list = read(vec![placed(&[no_liquidity, margin])]).unwrap();
+        assert!(list.is_success());
+        assert_eq!(list.placements()[1].outcome, margin);
+
+        let not_found = refused_cancel(EngineError::new(2, None));
+        let cancel = cancelled(CancelReason::UserRequested, vec![not_found.clone()]);
+        let cancel = read(vec![cancel]).unwrap();
+        assert!(cancel.is_success());
+        assert_eq!(cancel.cancellations(), [not_found]);
     }
 
     #[test]
@@ -1319,18 +1227,6 @@ mod tests {
                 proof_trading_sdk::types::OrderKind::Market { worst_price: None }
             );
         }
-
-        // A position gone flat before the close ran is its entry's refusal.
-        let gone = EngineError::new(35, None);
-        let refused = read(
-            vec![placed(&[PlacementOutcome::Rejected(gone)])],
-            Some(Sent::PLACE),
-        )
-        .unwrap();
-        assert_eq!(
-            refused.placements()[0].outcome,
-            PlacementOutcome::Rejected(gone)
-        );
     }
 
     #[test]
@@ -1365,11 +1261,10 @@ mod tests {
         let margin = EngineError::new(12, None);
         let one = committed(vec![placed(&[PlacementOutcome::Rejected(margin)])]);
         assert_eq!(
-            one.placement().map(|p| p.outcome),
+            one.placements().map(|p| p[0].outcome),
             Some(PlacementOutcome::Rejected(margin))
         );
-        assert_eq!(one.placements().map(<[_]>::len), Some(1));
-        assert!(one.cancellation().is_none());
+        assert_eq!(one.cancellations(), Some(&[][..]));
 
         let mut refused = committed(Vec::new());
         if let TxStatus::Committed(r) = &mut refused.status {
@@ -1380,68 +1275,20 @@ mod tests {
             status: TxStatus::Pending,
             ..committed(Vec::new())
         };
-        assert!(pending.placement().is_none(), "no verdict yet");
+        assert!(pending.placements().is_none(), "no verdict yet");
     }
 
     #[test]
-    fn every_order_action_is_a_batch_its_orders_report() {
-        let margin = EngineError::new(12, None);
-        let one = read(
-            vec![placed(&[PlacementOutcome::Rejected(margin)])],
-            Some(Sent::PLACE),
-        )
-        .unwrap();
-        assert!(one.is_success(), "a batch of one keeps code 0");
-        assert_eq!(
-            one.placements()[0].outcome,
-            PlacementOutcome::Rejected(margin)
-        );
-
-        let not_found = EngineError::new(2, None);
-        let cancel = cancelled(CancelReason::UserRequested, vec![refused_cancel(not_found)]);
-        let cancel = read(vec![cancel], Some(Sent::CANCEL)).unwrap();
-        assert!(cancel.is_success());
-        assert_eq!(cancel.cancellations().len(), 1);
-
-        let entries = [PlacementOutcome::Rejected(margin), executed(3)];
-        let list = read(
-            vec![placed(&entries)],
-            Some(Sent::list(ListKind::Placed, 2)),
-        )
-        .unwrap();
-        assert!(list.is_success());
-        assert_eq!(list.placements().len(), 2);
-
-        // Reconciled by hash, without knowing what was sent, reads the same.
-        let reconciled = read(vec![placed(&[PlacementOutcome::Rejected(margin)])], None).unwrap();
-        assert!(reconciled.is_success());
-    }
-
-    #[test]
-    fn an_executed_result_that_does_not_read_is_never_success() {
-        let margin = EngineError::new(12, None);
+    fn an_order_event_that_does_not_parse_is_never_success() {
         let malformed = Event::Malformed(proof_trading_sdk::gateway::TxEvent {
             kind: "orders_placed".into(),
             attributes: Vec::new(),
         });
-        let two = placed(&[PlacementOutcome::Rejected(margin), executed(3)]);
-        let other_reason = cancelled(CancelReason::Liquidation, vec![refused_cancel(margin)]);
-        for (events, sent) in [
-            (vec![malformed.clone()], Sent::PLACE),
-            (Vec::new(), Sent::PLACE),
-            (vec![two.clone()], Sent::PLACE),
-            (vec![other_reason], Sent::CANCEL),
-            (vec![two], Sent::list(ListKind::Placed, 3)),
-        ] {
-            let receipt = unreadable_receipt(read(events, Some(sent)));
-            assert_eq!((receipt.height, receipt.error), (9, None));
-        }
-        // Without knowing what was sent, a list that does not parse still is.
-        unreadable_receipt(read(vec![malformed], None));
-
-        let err = read(Vec::new(), Some(Sent::CANCEL)).unwrap_err();
+        let err = read(vec![malformed]).unwrap_err();
         let shown = err.to_string();
         assert!(shown.contains("executed at height 9") && shown.contains("do not sign it again"));
+        let receipt = unreadable_receipt(Err(err));
+        assert_eq!((receipt.height, receipt.error), (9, None));
     }
 
     #[test]
