@@ -368,10 +368,10 @@ describe("F2 pre-fill order trigger validation", () => {
 
 describe("F2 pre-fill trigger wire contract", () => {
   // `place_orders/limit_with_triggers` in conformance/codec.ndjson: a
-  // `PlaceOrders` (0x01) list of one limit entry carrying both limbs.
+  // `PlaceOrders` (0x35) list of one limit entry carrying both limbs.
   const WITH_TRIGGERS_PAYLOAD =
     "92dc00140101010101010101010101010101010101010101919801a34275790a81a54c696d69749364a3477463c2c2c093ce000173184b0b93ce0001adb0320c";
-  // The frozen pre-list envelope: a single order on 0x01, the old layout.
+  // The frozen pre-list envelope: a single order on the retired 0x01.
   const OLD_LAYOUT_PLACE_ORDER_ENVELOPE =
     "96020101c4369b01dc00140101010101010101010101010101010101010101a3427579640ac0c2c2a347746393ce000173184b0b93ce0001adb0320cc4202152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12c440dc991c8b31063e6cd1d26cd61e3dcf91f6af2e1d9092db51ca49808316e7b3640c3f9622cb55036adbb39424508f56e1e5acdb59aa56088d2ecea3d309307e05";
 
@@ -387,7 +387,7 @@ describe("F2 pre-fill trigger wire contract", () => {
     ]);
 
   it("decodes an entry's limbs to typed values and re-encodes byte-exactly", () => {
-    const decoded = decodeTx(envelope(0x01, hexToBytes(WITH_TRIGGERS_PAYLOAD)));
+    const decoded = decodeTx(envelope(0x35, hexToBytes(WITH_TRIGGERS_PAYLOAD)));
     expect(decoded.action.type).toBe("PlaceOrder");
     const data = decoded.action.data as Record<string, unknown>;
     expect(data.stopLoss).toEqual({
@@ -405,10 +405,9 @@ describe("F2 pre-fill trigger wire contract", () => {
     );
   });
 
-  it("refuses the old single-order layout on 0x01", () => {
-    // Its first field is the market, where the list layout expects the owner.
-    expect(() => decodeTx(hexToBytes(OLD_LAYOUT_PLACE_ORDER_ENVELOPE))).toThrow(
-      /expected 20 bytes/,
-    );
+  it("refuses a single order on the retired 0x01", () => {
+    expect(() =>
+      decodeTx(hexToBytes(OLD_LAYOUT_PLACE_ORDER_ENVELOPE)),
+    ).toThrow();
   });
 });

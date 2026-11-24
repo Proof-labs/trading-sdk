@@ -192,8 +192,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Action-type bytes (kept inline; the runners read action_type from the
     // vectors, and Python/TS map names→bytes via the core's get_action_types).
     const PLACE_ORDERS: u8 = cv::PLACE_ORDERS;
-    const CANCEL_ORDERS: u8 = 0x02;
-    const CANCEL_CLIENT_ORDERS: u8 = 0x18;
+    const CANCEL_ORDERS: u8 = proof_trading_sdk::codec::ActionType::CancelOrders as u8;
+    const CANCEL_CLIENT_ORDERS: u8 =
+        proof_trading_sdk::codec::ActionType::CancelClientOrders as u8;
     // Retired bytes, kept only to sign the frozen envelopes below.
     const RETIRED_PLACE_ORDER: u8 = 0x01;
     const RETIRED_MARKET_ORDER: u8 = 0x04;
@@ -237,7 +238,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Cases pinned to the engine's frozen `exchange-wire/vectors/` payloads
     // name them in a comment; the rest are the core's own encodings.
     let codec = vec![
-        // Order lists (0x01, 0x02, 0x18): a single order is a list of one. A
+        // Order lists (0x35, 0x36, 0x37): a single order is a list of one. A
         // `PlaceOrders` entry carries its kind, limit or market.
         codec_case(
             "place_orders/limit_min",

@@ -620,7 +620,7 @@ class ExchangeClient:
         """Sign *action_payload* and encode it as a wire envelope.
 
         Args:
-            action_type: Action type byte (e.g. 0x01 for PlaceOrder).
+            action_type: Action type byte (e.g. 0x35 for PlaceOrders).
             action_payload: MessagePack-encoded action payload bytes.
 
         Returns:

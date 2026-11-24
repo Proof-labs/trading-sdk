@@ -14,6 +14,18 @@ import pytest
 import proof_trading_sdk as pts
 from proof_trading_sdk import actions
 
+_VECTORS = Path(__file__).resolve().parents[2] / "crates" / "spec" / "golden-vectors"
+_KEY = bytes([0x42] * 32)
+_UNBOUND = b"\x00" * 32
+
+
+def _golden(name: str) -> str:
+    return (_VECTORS / name).read_text().strip()
+
+
+def _sign(action_type: int, payload: bytes, seq: int) -> bytes:
+    return pts.sign_and_encode(_UNBOUND, action_type, payload, seq, _KEY)
+
 
 class TestGoldenVectors:
     def test_single_orders_encode_as_lists_of_one(self):
@@ -26,7 +38,7 @@ class TestGoldenVectors:
                 actions.PlaceOrder(
                     market=1, owner=owner, side=actions.Side.Buy, price=100, quantity=10
                 ),
-                0x01,
+                0x35,
                 "92dc00140101010101010101010101010101010101010101919801a3427579"
                 "0a81a54c696d69749364a3477463c2c2c0c0c0",
             ),
@@ -34,18 +46,18 @@ class TestGoldenVectors:
                 actions.MarketOrder(
                     market=3, owner=owner, side=actions.Side.Buy, quantity=250
                 ),
-                0x01,
+                0x35,
                 "92dc00140101010101010101010101010101010101010101919803a3427579ccfa"
                 "81a64d61726b657491c0c2c0c0c0",
             ),
             (
                 actions.CancelOrder(order_id=42, owner=bytes([0x02] * 20)),
-                0x02,
+                0x36,
                 "92dc00140202020202020202020202020202020202020202912a",
             ),
             (
                 actions.CancelClientOrder(owner=owner, client_order_id=99),
-                0x18,
+                0x37,
                 "92dc001401010101010101010101010101010101010101019163",
             ),
         ]
