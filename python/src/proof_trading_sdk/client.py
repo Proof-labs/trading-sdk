@@ -972,21 +972,15 @@ class ExchangeClient:
         )
 
     def account_v2(self, owner: bytes | str | None = None) -> dict[str, t.Any]:
-        """Map-encoded account valuation via gateway version 2.
+        """Map-encoded account valuation via ``GET /v2/account/{owner}``.
 
         Returns snake_case wire fields with exact integers. ``settle_price``
         is the valuation reference (binary firing payout, not trading mark).
-        Missing references/restrictions remain None. A v1 response is refused.
+        Missing references/restrictions remain None. A positional v1 account is refused.
         This read does not verify a finalized-state witness.
         """
         owner_hex = canonical_owner(self._own_owner() if owner is None else owner)
-        resp = self._request(
-            "POST", "/info",
-            content=json.dumps({
-                "type": "clearinghouseState", "user": owner_hex, "version": 2,
-            }).encode(),
-            headers={"Content-Type": "application/json"},
-        )
+        resp = self._request("GET", f"/v2/account/{owner_hex}")
         payload = _response_object(resp)
         if payload.get("error") is not None:
             raise ProofTradingSdkError(f"gateway error for account v2: {payload['error']}")

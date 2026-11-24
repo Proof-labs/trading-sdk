@@ -34,7 +34,7 @@ const packed = (value: unknown) => encode(value, { useBigInt64: true });
 beforeAll(ready);
 
 describe("account v2 valuation", () => {
-  it("requests v2 through the gateway and decodes the frozen engine vector", async () => {
+  it("reads the gateway v2 account route and decodes the frozen engine vector", async () => {
     const { client, transport } = clientFor();
     const view = await client.queryAccountV2(owner.toUpperCase());
     expect(view).toMatchObject({
@@ -49,12 +49,12 @@ describe("account v2 valuation", () => {
         },
       ],
     });
-    expect(transport.mock.calls[0][0]).toBe("https://gateway.example/info");
-    expect(JSON.parse(transport.mock.calls[0][1]?.body as string)).toEqual({
-      type: "clearinghouseState",
-      user: owner,
-      version: 2,
-    });
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect(transport.mock.calls[0][0]).toBe(
+      `https://gateway.example/v2/account/${owner}`,
+    );
+    expect(transport.mock.calls[0][1]?.method ?? "GET").toBe("GET");
+    expect(transport.mock.calls[0][1]?.body).toBeUndefined();
   });
   it("keeps missing data null and preserves zero, false and full-width integers", async () => {
     const value = raw();
@@ -85,14 +85,14 @@ describe("account v2 valuation", () => {
       pnlIfDies: -9223372036854775808n,
     });
   });
-  it("rejects a v1 fallback without retrying", async () => {
+  it("rejects a positional v1 account without retrying", async () => {
     const { client, transport } = clientFor(
       packed([0, [], 0, 0, 0, 0, [], 0, 0]),
     );
     await expect(client.queryAccountV2(owner)).rejects.toThrow(/map/);
     expect(transport).toHaveBeenCalledTimes(1);
   });
-  it.each([{}, { data: 123 }, { error: "unsupported version" }])(
+  it.each([{}, { data: 123 }, { error: "invalid address" }])(
     "rejects invalid envelopes %j",
     async (response) => {
       await expect(
@@ -111,7 +111,7 @@ describe("account v2 valuation", () => {
       clientFor(packed(value)).client.queryAccountV2(owner),
     ).rejects.toThrow();
   });
-  it("leaves the legacy account method versionless", async () => {
+  it("leaves the legacy account method on POST /info", async () => {
     const { client, transport } = clientFor(
       packed([0, [], 0, 0, 0, 0, [], 0, 0]),
     );
@@ -119,6 +119,7 @@ describe("account v2 valuation", () => {
       balance: 0n,
       positions: [],
     });
+    expect(transport.mock.calls[0][0]).toBe("https://gateway.example/info");
     expect(JSON.parse(transport.mock.calls[0][1]?.body as string)).toEqual({
       type: "clearinghouseState",
       user: owner,

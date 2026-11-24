@@ -379,16 +379,13 @@ impl InfoClient {
         decode(&bytes, &reads::ACCOUNT_INFO, "account")
     }
 
-    /// Map-encoded valuation including exact settlement references, via gateway v2.
+    /// `GET /v2/account/{owner}`: map-encoded valuation including exact
+    /// settlement references.
     ///
     /// # Errors
-    /// Returns a read or decode error, including when a gateway returns v1.
+    /// Returns a read or decode error, including for a positional v1 account.
     pub async fn account_v2(&self, owner: Address) -> Result<AccountView> {
-        let body = serde_json::json!({
-            "type": "clearinghouseState", "user": owner.to_string(), "version": 2,
-        });
-        let env: DataEnvelope = self.post_info(&body).await?;
-        let bytes = unbase64(&env.data)?;
+        let bytes = self.get_data(&format!("/v2/account/{owner}")).await?;
         proof_trading_sdk::query::decode_account_view(&bytes).map_err(Error::Decode)
     }
 

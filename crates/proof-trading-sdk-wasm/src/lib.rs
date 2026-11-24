@@ -98,7 +98,7 @@ pub enum ReadKind {
     InsuranceFundDirectory = 6,
     /// `query_v2::InsuranceFundState` (`GET /v2/insurance-fund/{pool}?witness=1`).
     InsuranceFundState = 7,
-    /// Map-encoded account valuation (`clearinghouseState`, version 2).
+    /// `query_v2::Account` (`GET /v2/account/{owner}`).
     AccountV2 = 8,
 }
 

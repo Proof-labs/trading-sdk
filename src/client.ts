@@ -2019,7 +2019,7 @@ export class ExchangeClient {
     );
   }
 
-  /** Account valuation with exact settlement prices. Requires v2 gateway routing. */
+  /** Account valuation with exact settlement prices, from `GET /v2/account/{owner}`. */
   async queryAccountV2(addressHex?: string): Promise<AccountView | null> {
     const hex = addressHex ?? this.addressHex;
     if (!hex) return null;
@@ -2027,9 +2027,9 @@ export class ExchangeClient {
       throw new Error("account owner must be a 40-character hex address");
     }
     const owner = hex.toLowerCase();
-    const json = await this.queryOwnerScoped(
-      { type: "clearinghouseState", user: owner, version: 2 },
-      `/v2/account/${owner}`,
+    const json = await this.apiJson(
+      `${this.readBaseUrl}/v2/account/${owner}`,
+      "account",
     );
     return accountViewFromWasm(
       await this.decodeRead(

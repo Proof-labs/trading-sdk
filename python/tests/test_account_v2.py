@@ -1,5 +1,4 @@
 import base64
-import json
 from pathlib import Path
 
 import httpx
@@ -29,14 +28,16 @@ def mock(client, raw=FIXTURE, envelope=None):
     return requests
 
 
-def test_engine_vector_and_versioned_gateway_request(client):
+def test_engine_vector_and_gateway_route(client):
     requests = mock(client)
     result = client.account_v2("0x" + OWNER.upper())
     assert result["cashout_equity"] == 1_000_090
     assert result["positions"][0]["settle_price"] == 55
     assert result["positions"][0]["book_restricted"] is True
-    assert requests[0].url == "https://gateway.example/info"
-    assert json.loads(requests[0].content) == {"type": "clearinghouseState", "user": OWNER, "version": 2}
+    assert len(requests) == 1
+    assert requests[0].method == "GET"
+    assert requests[0].url == f"https://gateway.example/v2/account/{OWNER}"
+    assert requests[0].content == b""
 
 
 def test_missing_null_false_zero_and_exact_integers(client):
@@ -70,7 +71,7 @@ def test_bad_valuation_fields_fail(client, field, bad):
         client.account_v2(OWNER)
 
 
-def test_v1_fallback_is_refused_without_retry(client):
+def test_positional_v1_account_is_refused_without_retry(client):
     requests = mock(client, msgpack.packb([0, [], 0, 0, 0, 0, [], 0, 0]))
     with pytest.raises(CodecError):
         client.account_v2(OWNER)

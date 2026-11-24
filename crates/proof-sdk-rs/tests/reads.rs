@@ -895,7 +895,7 @@ async fn candles_and_bbo_read_bars_for_the_asked_market() {
 }
 
 #[tokio::test]
-async fn account_v2_requests_the_version_and_preserves_valuation() {
+async fn account_v2_reads_the_v2_route_and_preserves_valuation() {
     let raw: Vec<u8> = include_str!("../../../conformance/account-v2.hex")
         .trim()
         .as_bytes()
@@ -911,15 +911,12 @@ async fn account_v2_requests_the_version_and_preserves_valuation() {
     assert_eq!(view.positions[0].settle_price, Some(55));
     assert_eq!(view.positions[0].book_restricted, Some(true));
     let calls = requests(&log);
-    assert_eq!(calls[0].0, "POST /info");
-    assert_eq!(
-        serde_json::from_str::<Value>(&calls[0].1).expect("request body is JSON"),
-        json!({"type": "clearinghouseState", "user": MM, "version": 2})
-    );
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0, format!("GET /v2/account/{MM}"));
 }
 
 #[tokio::test]
-async fn account_v2_refuses_an_old_gateways_positional_answer() {
+async fn account_v2_refuses_a_positional_v1_account() {
     let (info, log) = fixture(vec![(200, data(&json!([0, [], 0, 0, 0, 0, [], 0, 0])))]).await;
     assert!(matches!(info.account_v2(mm()).await, Err(Error::Decode(_))));
     assert_eq!(requests(&log).len(), 1);
