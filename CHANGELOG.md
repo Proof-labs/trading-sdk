@@ -9,43 +9,52 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Order placement and cancels as lists (exchange#1513, #1514): `PlaceOrders`
-  (0x01), `CancelOrders` (0x02) and `CancelClientOrders` (0x18) carry 1 to 100
-  entries for one account under one signature, each placed or cancelled on its
-  own; the transaction succeeds and one `orders_placed` / `orders_cancelled`
-  event reports every entry. A `PlaceOrders` entry is a limit or a market
-  order; a market entry takes an optional worst price that stops the walk
-  through the book.
-  - TypeScript: `client.placeOrders` / `cancelOrders` / `cancelClientOrders`
-    returning `{ tx, orders }` per entry; `OrderEntry` (`LimitOrderEntry` |
-    `MarketOrderEntry` with `kind: "market"`), `MAX_LIST_ENTRIES`,
-    `decodeOrderListEvent`, `orderPlacements`, `orderCancellations`,
-    `UnfilledReason`; `worstPrice` and `reduceOnly` on `MarketOrder`;
-    `CloseOutcome`.
+- Orders and cancels in batches (exchange#1513, #1514): `PlaceOrders`
+  (0x35), `CancelOrders` (0x36) and `CancelClientOrders` (0x37) carry 1 to
+  `MAX_ORDERS_PER_BATCH` (100) orders for one account under one signature,
+  like Hyperliquid's `order` and `cancel`. Each order gets its own result and
+  a rejected order does not fail the batch; a single order is a batch of one.
+  An order is a limit or a market order; a market order takes an optional
+  worst price that stops the walk through the book.
+  - TypeScript: `placeOrders` / `cancelOrders` / `cancelClientOrders` return
+    `{ tx, orders }`; `placeOrder` / `marketOrder` / `buyNo` / `sellNo` return
+    `{ tx, order }` and `cancelOrder` / `cancelClientOrder`
+    `{ tx, cancellation }` (`PlaceOrderResult`, `CancelOrderResult`); the
+    outcomes are `null` without an executed verdict (pending, refused as a
+    whole, unreadable). `OrderEntry` (`LimitOrderEntry` | `MarketOrderEntry`
+    with `kind: "market"`), `MAX_ORDERS_PER_BATCH`, `decodeOrdersEvent`,
+    `orderPlacements` / `orderCancellations`, `placementsOf` /
+    `cancellationsOf` for a reconciled tx, `UnfilledReason`; `worstPrice` and
+    `reduceOnly` on `MarketOrder`.
   - Python: `PlaceOrders` / `CancelOrders` / `CancelClientOrders` /
     `OrderEntry` (`OrderEntry.market_order(...)`, `kind`, `worst_price`),
-    `ExchangeClient.place_orders` / `cancel_orders` / `cancel_client_orders`
-    returning `OrderPlacement` / `OrderCancellation` lists, top-level
-    `order_placements` / `order_cancellations`; `worst_price` and
-    `reduce_only` on `MarketOrder`; `ExchangeClient.close_position` returning
-    `Closed` / `NothingToClose` (`CloseOutcome`).
+    `MAX_ORDERS_PER_BATCH`; `ExchangeClient.place_order` / `cancel_order` /
+    `cancel_client_order` (`PlaceOrderResult` / `CancelOrderResult`: `tx` and
+    the outcome) and `place_orders` / `cancel_orders` / `cancel_client_orders`
+    (`PlaceOrdersResult` / `CancelOrdersResult`: `tx` and `orders`); typed
+    outcomes `RestingOrder` / `ExecutedOrder` / `RejectedOrder` and
+    `CancelledOrder` / `RefusedCancel`, each with its `outcome` tag for
+    `match`; `order_placements` / `order_cancellations`; `worst_price` and
+    `reduce_only` on `MarketOrder`.
   - Rust (`proof-sdk-rs`): `ExchangeClient::place_orders` / `cancel_orders` /
-    `cancel_client_orders` / `place_entry`, `actions::place_orders` /
-    `cancel_orders` / `cancel_client_orders` / `order_entry` / `market_entry` /
-    `place_entry`, `Receipt::placements` / `cancellations`,
-    `Event::OrdersPlaced` / `OrdersCancelled`, `CloseOutcome`, `OrderKind`
-    and `UnfilledReason` re-exports.
-- An executed entry (done without resting) reports `requested_quantity`,
+    `cancel_client_orders`; `place_order` takes a limit or market order
+    (`impl Into<OrderEntry>`); `Submitted::placement` / `placements` /
+    `cancellation` / `cancellations` (`None` without an executed verdict);
+    `actions::place_orders` / `cancel_orders` / `cancel_client_orders` /
+    `order_entry` / `market_entry` / `place_entry`, `Receipt::placements` /
+    `cancellations`, `Event::OrdersPlaced` / `OrdersCancelled`,
+    `MAX_ORDERS_PER_BATCH`, `OrderKind` and `UnfilledReason` re-exports.
+- An order done without resting reports `requested_quantity`,
   `filled_quantity` and the `unfilled` reason in every SDK.
-- An executed order or list whose `orders_placed` / `orders_cancelled` event
+- An executed order or batch whose `orders_placed` / `orders_cancelled` event
   does not read (malformed, or from a call that knows what it sent, missing or
-  not one entry per order sent) is reported as executed and unreadable, never
+  not one result per order sent) is reported as executed and unreadable, never
   as success or as a retryable error: TypeScript `outcome: "unreadable"`
-  (`code: -1`, hash and height kept; a list method returns no `orders`),
+  (`code: -1`, hash and height kept, no outcomes),
   Python `OrderResultUnreadable(tx_hash)`, Rust
   `Error::OrderResultUnreadable { receipt, reason }`. Reconcile by hash.
-- Python `check_order_result(tx_hash, events)` reads a reconciled
-  transaction's order list (e.g. `transaction_evidence(...).events`) as
+- Python `check_order_result(tx_hash, events)` checks a reconciled
+  transaction's order results (e.g. `transaction_evidence(...).events`) as
   `submit` does.
 - **Rust core:** `market_snapshot::decode_snapshot_view` decodes a complete
   `GET /v2/markets-snapshot` body, bound to a chain, into proof-wire's
@@ -55,40 +64,35 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **Breaking:** every order call is a list and reads like one. The
-  single-order calls keep their signatures and send a list of one:
-  `placeOrder`, `marketOrder`, `cancelOrder`, `cancelClientOrder`
-  (TypeScript), `submit` of `PlaceOrder` / `MarketOrder` / `CancelOrder` /
-  `CancelClientOrder` (Python) and `place_order`, `market_order`,
-  `cancel_order`, `cancel_order_by_client_id`, `buy_no`, `sell_no` (Rust).
-  A refused entry no longer returns or raises an engine error: the
-  transaction succeeds and the refusal is its entry in `orderPlacements` /
-  `orderCancellations` (`order_placements` / `order_cancellations`,
-  `Receipt::placements` / `cancellations`), read the same at once or
-  reconciled by hash. The single names stay aliases of the list bytes
+- **Breaking:** every order call is a batch and reads like one; the
+  single-order calls send a batch of one. A rejected order or refused cancel
+  no longer returns or raises an engine error: the transaction succeeds and
+  the outcome says what happened, read the same at once or reconciled by hash.
+  TypeScript `placeOrder` / `marketOrder` / `buyNo` / `sellNo` /
+  `cancelOrder` / `cancelClientOrder` return their result object instead of a
+  bare `TxResult`. The single names stay aliases of the batch bytes
   (`ActionType.PlaceOrder` / `MarketOrder` on 0x35, `CancelOrder` on 0x36,
-  `CancelClientOrder` on 0x37). Python's list decoder refuses unknown sides,
-  times in force and booleans, and resting or executed entries without an
-  order id, as Rust and TypeScript do.
+  `CancelClientOrder` on 0x37). Python's order-result decoder refuses unknown
+  sides, times in force and booleans, and missing fields, as Rust and
+  TypeScript do.
 - **Breaking (Python):** the engine's answer is a value, as in TypeScript and
   Rust. `submit` / `submit_action` return a refused transaction's response
   with its non-zero `code` instead of raising `EngineError` (a legacy
   `"<code>: <message>"` body is returned as `{"status": "error", "code", "error"}`).
-  `place_orders` / `cancel_orders` / `cancel_client_orders` return an
-  `OrderListResult` (`tx`, `orders`), so a refused transaction is not an empty
-  list. Exceptions remain for submissions with no engine verdict
+  The batch methods return the response with the outcomes, so a refused
+  transaction is never an empty list. Exceptions remain for submissions with no engine verdict
   (`SubmissionPending`, `PreAdmissionRefusal`, transport and auth errors) and
   for an executed result that does not read (`OrderResultUnreadable`).
 - Close position (`closePosition` in TypeScript, `close_position` in Rust,
   and the new `ExchangeClient.close_position` in Python) reads the account's
   position and sends a reduce-only market order on the opposite side for its
-  size. It now returns a close outcome instead of a transaction result: closed
-  with the transaction (TypeScript `{ kind: "closed", tx }`, Python
-  `Closed(tx)`, Rust `CloseOutcome::Closed(submitted)`), or nothing to close on
-  a flat account, sent without a transaction (`{ kind: "nothingToClose" }`,
-  `NothingToClose()`, `CloseOutcome::NothingToClose`). A refused close is its
-  entry (code 12 when the account cannot afford it, code 35 when the position
-  went flat before the close ran). The size and nothing-to-close come from the
+  size. It returns `sent` with the transaction and the close order's outcome
+  (TypeScript `{ kind: "sent", tx, order }`, Python `Sent(tx, order)`, Rust
+  `CloseOutcome::Sent(submitted)`), which can be rejected (code 12 when the
+  account cannot afford it, 35 when the position went flat first), or nothing
+  to close on a flat account, sent without a transaction
+  (`{ kind: "nothingToClose" }`, `NothingToClose()`,
+  `CloseOutcome::NothingToClose`). The size and nothing-to-close come from the
   account read, which can trail a fill made just before; the close never sends
   more than the position read.
 - `AtomicBasketOrder` leg outcomes are read from `orders_placed`
@@ -104,7 +108,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Action bytes 0x01 (`PlaceOrder`), 0x02 (`CancelOrder`), 0x04
   (`MarketOrder`), 0x17 (`ClosePosition`) and 0x18 (`CancelClientOrder`) are
-  retired by the wire (the lists are on 0x35-0x37) and no longer encode or decode in any SDK; the stale
+  retired by the wire (batches are on 0x35-0x37) and no longer encode or decode in any SDK; the stale
   `crates/spec/golden-vectors/place_order.hex` and `cancel_order.hex` go
   with them.
 - The raw `ClosePosition` action is removed from every SDK; close with
