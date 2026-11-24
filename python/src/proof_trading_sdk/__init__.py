@@ -145,12 +145,10 @@ from proof_trading_sdk.governance_reads import (
 from proof_trading_sdk.client import CloseOutcome, ExchangeClient, NothingToClose, Sent
 from proof_trading_sdk.order_lists import (  # noqa: F401
     CancelledOrder,
-    CancelOrderResult,
     CancelOrdersResult,
     ExecutedOrder,
     OrderCancellation,
     OrderPlacement,
-    PlaceOrderResult,
     PlaceOrdersResult,
     RefusedCancel,
     RejectedOrder,
@@ -314,9 +312,7 @@ __all__ = [
     "RejectedOrder",
     "CancelledOrder",
     "RefusedCancel",
-    "PlaceOrderResult",
     "PlaceOrdersResult",
-    "CancelOrderResult",
     "CancelOrdersResult",
     "order_placements",
     "order_cancellations",

@@ -123,9 +123,7 @@ class OrderResultUnreadable(ProofTradingSdkError):
     """The transaction executed, but its order result did not read.
 
     Raised for an executed code-0 transaction whose ``orders_placed`` or
-    ``orders_cancelled`` event is malformed, or (when the SDK knows what was
-    sent) missing or not one entry per order sent. What each order did is
-    unknown. This is **not** a rejection: reconcile by ``tx_hash`` (open
+    ``orders_cancelled`` event is malformed. What each order did is unknown. This is **not** a rejection: reconcile by ``tx_hash`` (open
     orders, fills) and never re-submit.
 
     Attributes:

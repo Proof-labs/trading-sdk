@@ -31,6 +31,9 @@ ORDERS_CANCELLED = "orders_cancelled"
 
 _SIDES = {"buy": Side.Buy, "sell": Side.Sell}
 _TIME_IN_FORCE = {"gtc": TimeInForce.Gtc, "ioc": TimeInForce.Ioc, "fok": TimeInForce.Fok}
+_BOOLS = {"true": True, "false": False}
+_PLACEMENT_OUTCOMES = {o: o for o in ("resting", "executed", "rejected")}
+_CANCEL_OUTCOMES = {o: o for o in ("cancelled", "refused")}
 
 
 @dataclass(frozen=True)
@@ -111,7 +114,8 @@ OrderCancellation = t.Union[CancelledOrder, RefusedCancel]
 """How one cancel of a ``CancelOrders`` / ``CancelClientOrders`` ended."""
 
 
-def _int(entry: dict[str, t.Any], key: str) -> Optional[int]:
+def _opt_int(entry: dict[str, t.Any], key: str) -> Optional[int]:
+    """An integer attribute; an optional one renders empty when absent."""
     value = entry.get(key)
     if value is None or value == "":
         return None
@@ -121,51 +125,22 @@ def _int(entry: dict[str, t.Any], key: str) -> Optional[int]:
         raise CodecError(f"order result: {key} is not an integer: {value!r}") from e
 
 
-def _required(entry: dict[str, t.Any], key: str) -> int:
-    value = _int(entry, key)
+def _int(entry: dict[str, t.Any], key: str) -> int:
+    value = _opt_int(entry, key)
     if value is None:
         raise CodecError(f"order result: {key} is missing")
     return value
 
 
-def _outcome(entry: dict[str, t.Any], known: tuple[str, ...]) -> str:
-    outcome = entry.get("outcome")
-    if outcome not in known:
-        raise CodecError(f"order result: unknown outcome {outcome!r}")
-    return t.cast(str, outcome)
-
-
-def _bool(entry: dict[str, t.Any], key: str) -> Optional[bool]:
-    value = entry.get(key)
-    if value is None:
-        return None
-    if value not in ("true", "false"):
-        raise CodecError(f"order result: {key} is not true or false: {value!r}")
-    return value == "true"
-
-
 def _named(entry: dict[str, t.Any], key: str, names: dict[str, t.Any]) -> t.Any:
+    """A required attribute that must be one of ``names``."""
     value = entry.get(key)
     if value is None:
-        return None
+        raise CodecError(f"order result: {key} is missing")
     try:
         return names[value]
     except (KeyError, TypeError) as e:
         raise CodecError(f"order result: unknown {key}: {value!r}") from e
-
-
-def _required_named(entry: dict[str, t.Any], key: str, names: dict[str, t.Any]) -> t.Any:
-    value = _named(entry, key, names)
-    if value is None:
-        raise CodecError(f"order result: {key} is missing")
-    return value
-
-
-def _required_bool(entry: dict[str, t.Any], key: str) -> bool:
-    value = _bool(entry, key)
-    if value is None:
-        raise CodecError(f"order result: {key} is missing")
-    return value
 
 
 def _list_events(events: t.Any) -> list[tuple[str, Optional[str], list[dict[str, t.Any]]]]:
@@ -208,31 +183,31 @@ def _own_entries(events: t.Any, event_type: str) -> Optional[list[dict[str, t.An
 
 
 def _placement(entry: dict[str, t.Any]) -> OrderPlacement:
-    market = _required(entry, "market")
-    client_order_id = _int(entry, "client_order_id")
-    outcome = _outcome(entry, ("resting", "executed", "rejected"))
+    market = _int(entry, "market")
+    client_order_id = _opt_int(entry, "client_order_id")
+    outcome = _named(entry, "outcome", _PLACEMENT_OUTCOMES)
     if outcome == "resting":
         return RestingOrder(
             market=market,
             client_order_id=client_order_id,
-            order_id=_required(entry, "order_id"),
-            side=_required_named(entry, "side", _SIDES),
-            price=_required(entry, "price"),
-            quantity=_required(entry, "quantity"),
-            time_in_force=_required_named(entry, "time_in_force", _TIME_IN_FORCE),
-            post_only=_required_bool(entry, "post_only"),
-            reduce_only=_required_bool(entry, "reduce_only"),
+            order_id=_int(entry, "order_id"),
+            side=_named(entry, "side", _SIDES),
+            price=_int(entry, "price"),
+            quantity=_int(entry, "quantity"),
+            time_in_force=_named(entry, "time_in_force", _TIME_IN_FORCE),
+            post_only=_named(entry, "post_only", _BOOLS),
+            reduce_only=_named(entry, "reduce_only", _BOOLS),
         )
     if outcome == "executed":
         return ExecutedOrder(
             market=market,
             client_order_id=client_order_id,
-            order_id=_required(entry, "order_id"),
-            requested_quantity=_required(entry, "requested_quantity"),
-            filled_quantity=_required(entry, "filled_quantity"),
+            order_id=_int(entry, "order_id"),
+            requested_quantity=_int(entry, "requested_quantity"),
+            filled_quantity=_int(entry, "filled_quantity"),
             unfilled=entry.get("unfilled") or None,
         )
-    code = _required(entry, "code")
+    code = _int(entry, "code")
     return RejectedOrder(
         market=market,
         client_order_id=client_order_id,
@@ -242,19 +217,19 @@ def _placement(entry: dict[str, t.Any]) -> OrderPlacement:
 
 
 def _cancellation(entry: dict[str, t.Any]) -> OrderCancellation:
-    if _outcome(entry, ("cancelled", "refused")) == "cancelled":
+    if _named(entry, "outcome", _CANCEL_OUTCOMES) == "cancelled":
         return CancelledOrder(
-            order_id=_required(entry, "order_id"),
-            market=_required(entry, "market"),
-            client_order_id=_int(entry, "client_order_id"),
-            original_quantity=_required(entry, "original_quantity"),
-            remaining_quantity=_required(entry, "remaining_quantity"),
-            filled_quantity=_required(entry, "filled_quantity"),
+            order_id=_int(entry, "order_id"),
+            market=_int(entry, "market"),
+            client_order_id=_opt_int(entry, "client_order_id"),
+            original_quantity=_int(entry, "original_quantity"),
+            remaining_quantity=_int(entry, "remaining_quantity"),
+            filled_quantity=_int(entry, "filled_quantity"),
         )
-    code = _required(entry, "code")
+    code = _int(entry, "code")
     return RefusedCancel(
-        order_id=_int(entry, "order_id"),
-        client_order_id=_int(entry, "client_order_id"),
+        order_id=_opt_int(entry, "order_id"),
+        client_order_id=_opt_int(entry, "client_order_id"),
         code=code,
         error_name=get_error_name(code),
     )
@@ -295,69 +270,28 @@ class CancelOrdersResult:
     orders: list[OrderCancellation]
 
 
-@dataclass(frozen=True)
-class PlaceOrderResult:
-    """A single order call: its response and the order's outcome, ``None``
-    when the engine refused the whole transaction (non-zero ``tx["code"]``)."""
-
-    tx: dict[str, t.Any]
-    order: Optional[OrderPlacement]
-
-
-@dataclass(frozen=True)
-class CancelOrderResult:
-    """A single cancel: its response and the cancel's outcome, ``None`` when
-    the engine refused the whole transaction."""
-
-    tx: dict[str, t.Any]
-    cancellation: Optional[OrderCancellation]
-
-
-@dataclass(frozen=True)
-class SentOrders:
-    """What an order action sent: the event reporting it and how many orders.
-    A single order or cancel is a batch of one."""
-
-    event_type: str
-    orders: int
-
-
-def check_order_result(tx_hash: str, events: t.Any, sent: Optional[SentOrders] = None) -> None:
-    """Check an executed, code-0 transaction's order results.
-
-    Every order action is a batch, a single order a batch of one, so a
-    rejected order is reported in :func:`order_placements` /
-    :func:`order_cancellations` and never raises.
-
-    Raises :class:`OrderResultUnreadable` when an order event does not read,
-    or when ``sent`` says what was sent and the event is missing or has the
-    wrong number of orders: the transaction executed, so never re-submit it.
-    ``events`` are gateway event dicts or :class:`TransactionEvidenceEvent`
-    values.
-    """
+def check_order_result(tx_hash: str, events: t.Any) -> None:
+    """Check an executed, code-0 transaction's order events. A rejected order
+    is reported in :func:`order_placements` / :func:`order_cancellations` and
+    never raises; an order event that does not read raises
+    :class:`OrderResultUnreadable`: the transaction executed, so never
+    re-submit it. ``events`` are gateway event dicts or
+    :class:`TransactionEvidenceEvent` values."""
     try:
-        placed = _own_entries(events, ORDERS_PLACED)
-        cancelled = _own_entries(events, ORDERS_CANCELLED)
-        for entry in placed or []:
+        for entry in _own_entries(events, ORDERS_PLACED) or []:
             _placement(entry)
-        for entry in cancelled or []:
+        for entry in _own_entries(events, ORDERS_CANCELLED) or []:
             _cancellation(entry)
     except CodecError as e:
         raise OrderResultUnreadable(tx_hash, str(e)) from e
-    if sent is not None:
-        results = placed if sent.event_type == ORDERS_PLACED else cancelled
-        if results is None or len(results) != sent.orders:
-            read = "no order event" if results is None else f"{len(results)} reported"
-            raise OrderResultUnreadable(tx_hash, f"{sent.orders} sent, {read}")
+
 
 __all__ = [
-    "CancelOrderResult",
     "CancelOrdersResult",
     "CancelledOrder",
     "ExecutedOrder",
     "OrderCancellation",
     "OrderPlacement",
-    "PlaceOrderResult",
     "PlaceOrdersResult",
     "RefusedCancel",
     "RejectedOrder",

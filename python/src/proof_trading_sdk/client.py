@@ -36,28 +36,20 @@ from proof_trading_sdk._native import (
 from proof_trading_sdk.external_signer import ExternalSigner
 from proof_trading_sdk.actions import (
     Action,
-    CancelClientOrder,
     CancelClientOrders,
-    CancelOrder,
     CancelOrders,
     CancelPositionTriggers,
     MarketOrder,
     OrderEntry,
-    PlaceOrder,
     PlaceOrders,
     SetPositionTriggers,
     TriggerLimb,
     encode_action,
 )
 from proof_trading_sdk.order_lists import (
-    ORDERS_CANCELLED,
-    ORDERS_PLACED,
-    CancelOrderResult,
     CancelOrdersResult,
     OrderPlacement,
-    PlaceOrderResult,
     PlaceOrdersResult,
-    SentOrders,
     check_order_result,
     order_cancellations,
     order_placements,
@@ -197,24 +189,7 @@ def _engine_refusal(code: int, error: str) -> dict[str, t.Any]:
     return {"status": "error", "code": code, "error": error}
 
 
-def _sent_list(action: Action) -> SentOrders | None:
-    """What an order action sent as a list; ``None`` for any other action."""
-    if isinstance(action, (PlaceOrder, MarketOrder)):
-        return SentOrders(ORDERS_PLACED, 1)
-    if isinstance(action, (CancelOrder, CancelClientOrder)):
-        return SentOrders(ORDERS_CANCELLED, 1)
-    if isinstance(action, PlaceOrders):
-        return SentOrders(ORDERS_PLACED, len(action.orders))
-    if isinstance(action, CancelOrders):
-        return SentOrders(ORDERS_CANCELLED, len(action.order_ids))
-    if isinstance(action, CancelClientOrders):
-        return SentOrders(ORDERS_CANCELLED, len(action.client_order_ids))
-    return None
-
-
-def _read_order_result(
-    envelope: bytes, data: dict[str, t.Any], sent: SentOrders | None
-) -> dict[str, t.Any]:
+def _read_order_result(envelope: bytes, data: dict[str, t.Any]) -> dict[str, t.Any]:
     """Check an executed code-0 response's order list (see
     :func:`check_order_result`); any other response passes through."""
     code = data.get("code")
@@ -222,11 +197,7 @@ def _read_order_result(
     if isinstance(code, bool) or code != 0 or not executed:
         # A code-less acknowledgement has not executed yet.
         return data
-    check_order_result(
-        hashlib.sha256(envelope).hexdigest().upper(),
-        data.get("events"),
-        sent,
-    )
+    check_order_result(hashlib.sha256(envelope).hexdigest().upper(), data.get("events"))
     return data
 
 
@@ -704,19 +675,8 @@ class ExchangeClient:
         return self.sign_and_encode_action(action_type, payload)
 
     def submit(self, action: Action) -> dict[str, t.Any]:
-        """Encode + sign + submit a typed action in one call.
-
-        Every order action is a batch, a single order a batch of one: a
-        rejected order or refused cancel is its outcome in
-        :func:`order_placements` / :func:`order_cancellations`, and the
-        response keeps code 0 (:meth:`place_order` returns it directly). A
-        refused transaction is returned with its non-zero ``code``, as in
-        :meth:`submit_action`. An executed order action whose results do not
-        read, are missing, or are not one per order sent, raises
-        :class:`OrderResultUnreadable`: reconcile by hash, never re-submit.
-        """
-        envelope = self.sign_action(action)
-        return _read_order_result(envelope, self._post_envelope(envelope), _sent_list(action))
+        """Encode + sign + submit a typed action in one call."""
+        return self.submit_action(self.sign_action(action))
 
     def close_position(self, market: int, *, owner: bytes | None = None) -> CloseOutcome:
         """Close the whole position on *market*: a reduce-only market order on
@@ -726,11 +686,9 @@ class ExchangeClient:
         A flat account sends nothing and returns :class:`NothingToClose`.
         Otherwise it returns :class:`Sent` with the response and the close
         order's outcome, which can be a :class:`RejectedOrder` (code 35 when
-        the position went flat before the close ran). An executed close whose
-        result does not read raises :class:`OrderResultUnreadable`. The size
-        and ``NothingToClose`` come from the account read, which can trail a
-        fill made just before; the close never sends more than the position
-        read.
+        the position went flat before the close ran). The size and
+        ``NothingToClose`` come from the account read, which can trail a fill
+        made just before; the close never sends more than the position read.
         """
         selected_owner = self._own_owner() if owner is None else owner
         position = next(
@@ -757,10 +715,7 @@ class ExchangeClient:
     def _submit_with_signer_revision(self, action: Action, revision: int) -> dict[str, t.Any]:
         action_type, payload = encode_action(action)
         envelope = self._sign_and_encode_action(action_type, payload, expected_revision=revision)
-        sent = _sent_list(action)
-        if sent is None:
-            return self.submit_action(envelope)
-        return _read_order_result(envelope, self._post_envelope(envelope), sent)
+        return self.submit_action(envelope)
 
     def set_position_triggers(
         self,
@@ -813,27 +768,24 @@ class ExchangeClient:
             revision,
         )
 
-    def place_order(self, order: OrderEntry, *, owner: bytes | None = None) -> PlaceOrderResult:
+    def place_order(self, order: OrderEntry, *, owner: bytes | None = None) -> PlaceOrdersResult:
         """Place one limit or market order (:meth:`OrderEntry.market_order`):
-        a batch of one. Returns the response and the order's outcome; a
-        rejected order does not fail ``tx``, and ``order`` is ``None`` only
-        when the engine refused the whole transaction."""
-        result = self.place_orders([order], owner=owner)
-        return PlaceOrderResult(result.tx, result.orders[0] if result.orders else None)
+        a batch of one, read as :meth:`place_orders`; its outcome is
+        ``orders[0]``."""
+        return self.place_orders([order], owner=owner)
 
-    def cancel_order(self, order_id: int, *, owner: bytes | None = None) -> CancelOrderResult:
-        """Cancel one resting order by order id: a batch of one. ``cancellation``
-        is a :class:`RefusedCancel` (code 2) when no such order rests."""
-        result = self.cancel_orders([order_id], owner=owner)
-        return CancelOrderResult(result.tx, result.orders[0] if result.orders else None)
+    def cancel_order(self, order_id: int, *, owner: bytes | None = None) -> CancelOrdersResult:
+        """Cancel one resting order by order id: a batch of one, read as
+        :meth:`cancel_orders` (a :class:`RefusedCancel`, code 2, when no such
+        order rests)."""
+        return self.cancel_orders([order_id], owner=owner)
 
     def cancel_client_order(
         self, client_order_id: int, *, owner: bytes | None = None
-    ) -> CancelOrderResult:
+    ) -> CancelOrdersResult:
         """Cancel one resting order by client order id; read as
         :meth:`cancel_order`."""
-        result = self.cancel_client_orders([client_order_id], owner=owner)
-        return CancelOrderResult(result.tx, result.orders[0] if result.orders else None)
+        return self.cancel_client_orders([client_order_id], owner=owner)
 
     def place_orders(
         self, orders: t.Sequence[OrderEntry], *, owner: bytes | None = None
@@ -845,8 +797,8 @@ class ExchangeClient:
         in order; a rejected order is a :class:`RejectedOrder` with its code,
         and a refused transaction has a non-zero ``tx["code"]`` and no orders.
         ``owner`` defaults to the signer. An executed batch whose results do
-        not read, or do not report every order, raises
-        :class:`OrderResultUnreadable`: reconcile by hash, never re-submit.
+        not read raises :class:`OrderResultUnreadable`: reconcile by hash,
+        never re-submit.
         """
         with self._signer_lock:
             revision = self._signer_revision
@@ -924,7 +876,7 @@ class ExchangeClient:
                 results do not read; reconcile by hash, never re-submit.
                 Rejected orders are reported in their results.
         """
-        return _read_order_result(envelope, self._post_envelope(envelope), None)
+        return _read_order_result(envelope, self._post_envelope(envelope))
 
     def _post_envelope(self, envelope: bytes) -> dict[str, t.Any]:
         """``POST /exchange`` the envelope and classify the answer."""

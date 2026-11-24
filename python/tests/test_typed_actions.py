@@ -280,17 +280,6 @@ def test_a_full_list_encodes(kind):
     assert action_type == _LISTS[kind](1).action_type
 
 
-def test_single_names_share_the_list_bytes():
-    assert actions.ActionType.PlaceOrder == actions.ActionType.PlaceOrders == 0x35
-    assert actions.ActionType.MarketOrder == actions.ActionType.PlaceOrders
-    assert actions.ActionType.CancelOrder == actions.ActionType.CancelOrders == 0x36
-    assert (
-        actions.ActionType.CancelClientOrder
-        == actions.ActionType.CancelClientOrders
-        == 0x37
-    )
-
-
 def test_an_entry_is_a_limit_or_a_market_order():
     with pytest.raises(ValueError, match="needs a price"):
         actions.OrderEntry(market=1, side="Buy", price=None, quantity=1)
@@ -300,14 +289,3 @@ def test_an_entry_is_a_limit_or_a_market_order():
         actions.OrderEntry(market=1, side="Buy", price=1, quantity=1, kind="market")
     with pytest.raises(ValueError, match="unknown order kind"):
         actions.OrderEntry(market=1, side="Buy", price=1, quantity=1, kind="stop")
-
-
-def test_a_list_of_one_encodes_as_the_single_order():
-    single = actions.PlaceOrder(
-        market=1, owner=bytes(20), side="Buy", price=100, quantity=10
-    )
-    listed = actions.PlaceOrders(
-        owner=bytes(20),
-        orders=[actions.OrderEntry(market=1, side="Buy", price=100, quantity=10)],
-    )
-    assert actions.encode_action(listed) == actions.encode_action(single)

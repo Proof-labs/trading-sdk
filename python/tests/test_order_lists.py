@@ -120,23 +120,6 @@ def test_a_refused_single_is_reported_in_its_entry(answer, action, event, code):
     assert entry.code == code
 
 
-@pytest.mark.parametrize("action, event", [
-    (PlaceOrder(market=1, owner=OWNER, side="Buy", price=1, quantity=1), _placed(RESTING)),
-    (MarketOrder(market=2, owner=OWNER, side="Buy", quantity=5), _placed(EXECUTED)),
-    (CancelOrder(order_id=9, owner=OWNER), _cancelled(CANCELLED)),
-])
-def test_an_accepted_single_returns_the_response(answer, action, event):
-    assert answer(event).submit(action)["code"] == 0
-
-
-def test_a_single_cancel_ignores_other_cancel_events(answer):
-    # A placement's own cancel event never turns a placement into an error.
-    data = answer(_placed(RESTING), _cancelled(REFUSED_ID)).submit(
-        PlaceOrder(market=1, owner=OWNER, side="Buy", price=1, quantity=1)
-    )
-    assert data["code"] == 0
-
-
 def test_place_orders_reports_each_order_without_raising(answer):
     entry = OrderEntry(market=1, side="Buy", price=100, quantity=5)
     placements = answer(_placed(RESTING, EXECUTED, REJECTED)).place_orders([entry] * 3).orders
@@ -161,7 +144,7 @@ def test_place_order_returns_its_outcome(answer):
     entry = OrderEntry(market=1, side="Buy", price=100, quantity=5)
     result = answer(_placed(REJECTED)).place_order(entry)
     assert result.tx["code"] == 0
-    match result.order:
+    match result.orders[0]:
         case RejectedOrder(code=code):
             assert code == 12
         case other:
@@ -169,11 +152,10 @@ def test_place_order_returns_its_outcome(answer):
 
 
 def test_cancel_order_returns_its_outcome(answer):
-    result = answer(_cancelled(REFUSED_ID)).cancel_order(42)
-    assert isinstance(result.cancellation, RefusedCancel)
-    assert result.cancellation.code == 2
-    landed = answer(_cancelled(CANCELLED)).cancel_client_order(9)
-    assert isinstance(landed.cancellation, CancelledOrder)
+    [refused] = answer(_cancelled(REFUSED_ID)).cancel_order(42).orders
+    assert isinstance(refused, RefusedCancel) and refused.code == 2
+    [landed] = answer(_cancelled(CANCELLED)).cancel_client_order(9).orders
+    assert isinstance(landed, CancelledOrder)
 
 
 def test_cancel_orders_reports_each_entry(answer):
@@ -187,31 +169,22 @@ def test_cancel_orders_reports_each_entry(answer):
     )
 
 
-def test_cancel_client_orders_reports_each_entry(answer):
-    [refused] = answer(_cancelled(REFUSED_CLOID)).cancel_client_orders([11]).orders
-    assert isinstance(refused, RefusedCancel)
-    assert (refused.client_order_id, refused.code) == (11, 44)
-
-
 PLACE = PlaceOrder(market=1, owner=OWNER, side="Buy", price=1, quantity=1)
 
 
 @pytest.mark.parametrize("action, events", [
-    (PLACE, []),
     (PLACE, [_raw_placed("{}")]),
     (PLACE, [_raw_placed("not json")]),
     (PLACE, [{"type": "orders_placed", "attributes": [{"key": "owner", "value": OWNER.hex()}]}]),
-    (PLACE, [_placed(REJECTED, REJECTED)]),
     (PLACE, [_placed({"outcome": "rejected", "market": "1"})]),
     # Values Rust and TypeScript refuse are refused here too.
     (PLACE, [_placed({**RESTING, "side": "BUY"})]),
     (PLACE, [_placed({**RESTING, "post_only": "1"})]),
     (PLACE, [_placed({**RESTING, "time_in_force": "day"})]),
     (PLACE, [_placed({k: v for k, v in RESTING.items() if k != "order_id"})]),
-    (CancelOrder(order_id=42, owner=OWNER), [_event("orders_cancelled", [REFUSED_ID], reason="self_trade")]),
     (CancelOrder(order_id=42, owner=OWNER), [_cancelled({"outcome": "refused", "order_id": "42"})]),
 ])
-def test_an_executed_single_that_does_not_read_is_unreadable(answer, action, events):
+def test_an_executed_result_that_does_not_read_is_unreadable(answer, action, events):
     with pytest.raises(OrderResultUnreadable) as raised:
         answer(*events).submit(action)
     assert len(raised.value.tx_hash) == 64
@@ -221,37 +194,14 @@ def test_an_executed_single_that_does_not_read_is_unreadable(answer, action, eve
 def test_an_unreadable_list_raises_instead_of_returning_entries(answer):
     entry = OrderEntry(market=1, side="Buy", price=100, quantity=5)
     with pytest.raises(OrderResultUnreadable):
-        answer().cancel_orders([1])
-    with pytest.raises(OrderResultUnreadable):
-        answer(_placed(RESTING)).place_orders([entry, entry])
-    with pytest.raises(OrderResultUnreadable):
         answer(_placed(RESTING, {"outcome": "lost", "market": "1"})).place_orders([entry, entry])
 
 
-def test_a_refused_list_of_one_sent_as_bytes_reads_as_a_list(answer):
-    client = answer(_placed(REJECTED))
-    data = client.submit_action(client.sign_action(PLACE))
-    assert data["code"] == 0
-    assert order_placements(data)[0].code == 12
-
-
-def _evidence(*events):
-    return tuple(
-        TransactionEvidenceEvent(type=e["type"], attributes=tuple(e["attributes"])) for e in events
-    )
-
-
-def test_a_reconciled_list_of_one_does_not_raise():
-    check_order_result("A" * 64, _evidence(_placed(REJECTED)))
-    check_order_result("A" * 64, _evidence(_cancelled(REFUSED_CLOID)))
-
-
-def test_a_reconciled_result_reads_like_the_synchronous_one():
-    check_order_result("A" * 64, _evidence(_placed(RESTING)))
-    check_order_result("A" * 64, _evidence(_placed(REJECTED, RESTING)))
-    check_order_result("A" * 64, _evidence())
+def test_a_reconciled_result_that_does_not_read_is_unreadable():
+    raw = _raw_placed("[1]")
+    evidence = (TransactionEvidenceEvent(type=raw["type"], attributes=tuple(raw["attributes"])),)
     with pytest.raises(OrderResultUnreadable) as raised:
-        check_order_result("A" * 64, _evidence(_raw_placed("[1]")))
+        check_order_result("A" * 64, evidence)
     assert raised.value.tx_hash == "A" * 64
 
 
@@ -315,13 +265,6 @@ def test_close_position_on_a_flat_account_sends_nothing(answer, monkeypatch):
     assert sent == []
 
 
-def test_an_unreadable_close_raises_unreadable(answer, monkeypatch):
-    positions = [{"market": 2, "side": "Buy", "size": 4}]
-    client, _ = _closing(answer, monkeypatch, positions)
-    with pytest.raises(OrderResultUnreadable):
-        client.close_position(2, owner=OWNER)
-
-
 @pytest.mark.parametrize("code", [12, 35])
 def test_a_rejected_close_is_sent_with_its_order_rejected(answer, monkeypatch, code):
     # 35: the position went flat between the read and the close.
@@ -349,6 +292,6 @@ def test_a_refused_batch_returns_its_code_and_no_orders():
         result = client.place_orders([entry, entry])
         assert result.tx["code"] == 21
         assert result.orders == []
-        assert client.place_order(entry).order is None
+        assert client.place_order(entry).orders == []
     finally:
         client.close()
