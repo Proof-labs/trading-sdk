@@ -372,6 +372,14 @@ export {
   type LiquidationHistoryPage,
   type LiquidationHistoryRow,
 } from "./liquidation-history.js";
+export {
+  ORDER_SUMMARY_MAX_MARKETS,
+  decodeOrderSummaryPage,
+  orderSummarySearchParams,
+  type OrderSummary,
+  type OrderSummaryFilters,
+  type OrderSummaryPage,
+} from "./order-summaries.js";
 
 export {
   BINARY_PRICE_MAX,

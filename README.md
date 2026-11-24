@@ -250,6 +250,7 @@ class ExchangeClient {
   queryHistoryPositions(...): Promise<HistoryPositionSnapshot[]>;
   queryHistoryPositionsPage(...): Promise<HistoryPositionsPage>;
   queryLiquidationHistory(addressHex?: string, filters?: LiquidationHistoryFilters): Promise<LiquidationHistoryPage>;
+  queryOrderSummaries(addressHex?: string, filters?: OrderSummaryFilters): Promise<OrderSummaryPage>;
 
   // Blocks
   getBlock(height?: number): Promise<Record<string, unknown>>;

@@ -62,6 +62,12 @@ import {
   type LiquidationHistoryPage,
 } from "./liquidation-history.js";
 import {
+  decodeOrderSummaryPage,
+  orderSummarySearchParams,
+  type OrderSummaryFilters,
+  type OrderSummaryPage,
+} from "./order-summaries.js";
+import {
   accountInfoFromWasm,
   openOrdersFromWasm,
   eventInfoFromWasm,
@@ -1884,6 +1890,27 @@ export class ExchangeClient {
       "account",
     );
     return decodeLiquidationHistoryPage(json, owner);
+  }
+
+  /** One page of an owner's fills grouped into one row per order
+   * (`GET /v1/history/order-summaries/{owner}`), newest last fill first,
+   * optionally restricted to `filters.markets`. Only fills inside
+   * `fromMs`/`toMs` count. Pass a non-empty `nextCursor` back as
+   * `filters.cursor` with the other filters unchanged; an empty one ends the
+   * read. Always uses the gateway: the indexer, not the node, serves history. */
+  async queryOrderSummaries(
+    addressHex?: string,
+    filters: OrderSummaryFilters = {},
+  ): Promise<OrderSummaryPage> {
+    const hex = addressHex ?? this.addressHex;
+    if (!hex) throw new Error("No address available");
+    const owner = historyOwner(hex);
+    const qs = orderSummarySearchParams(filters).toString();
+    const json = await this.apiJson(
+      `${this.gatewayUrl}/v1/history/order-summaries/${owner}${qs ? `?${qs}` : ""}`,
+      "account",
+    );
+    return decodeOrderSummaryPage(json);
   }
 
   /** Shared market-level deferred/resumed trigger transitions. These are not
