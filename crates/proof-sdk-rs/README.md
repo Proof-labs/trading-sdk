@@ -89,10 +89,10 @@ On devnet, fund a new address with the faucet first:
 | `connect(&config, signer)`                      | reads `GET /v1/status` and `recent-nonces`, binds signatures to the chain |
 | `new(&config, signer)`                          | no request; signs for the config's chain id                               |
 | `limit_order(market, side, price, qty)`         | builds a GTC order for this account                                       |
-| `place_order(order)`                            | one limit or market order (a batch of one); its outcome is `placement()` |
+| `place_order(order)`                            | one limit or market order (a batch of one)                                |
 | `place_orders(Vec<OrderEntry>)`                 | 1 to 100 limit or market orders in one batch, one signature, each placed or rejected on its own (orders from `actions::order_entry` / `actions::market_entry`) |
-| `market_order(market, side, qty)`               | one market order (IOC); its outcome is `placement()`                     |
-| `cancel_order(order_id)`                        | one cancel; its outcome is `cancellation()` (refused, code 2, if nothing rests) |
+| `market_order(market, side, qty)`               | one market order (IOC)                                                    |
+| `cancel_order(order_id)`                        | one cancel (a batch of one)                                               |
 | `cancel_order_by_client_id(client_order_id)`    | one cancel by client order id, the same                                   |
 | `cancel_orders(Vec<OrderId>)`                   | 1 to 100 cancels by order id in one batch, each cancelled or refused on its own |
 | `cancel_client_orders(Vec<u64>)`                | 1 to 100 cancels by client order id, the same                             |
@@ -145,25 +145,14 @@ computed hash, a `TxStatus`, and `retry_after: Option<Duration>`:
 | `Refused(reason)`    | Turned away by the gateway (`Unauthorized`, `RateLimited`, `Paused`, `CancelOnly`, `Unavailable`, `InvalidRequest`). |
 
 Orders and cancels are sent in batches of 1 to `MAX_ORDERS_PER_BATCH` (100)
-under one signature; `place_order` is a batch of one. Each order gets its own
-result, and a rejected order does not fail the batch: the transaction commits
-with no error and `submitted.placements()` / `submitted.cancellations()` give
-each outcome in the order sent (`placement()` / `cancellation()` for a single
-call). They are `None` without an executed verdict (pending, or refused as a
-whole). An order is `Resting`, `Executed` (with its `requested_quantity`,
-`filled_quantity` and `unfilled` reason) or `Rejected` with its code; a cancel
-is `Cancelled` or `Refused`. `close_position` returns
-`CloseOutcome::Sent(submitted)`, whose `placement()` can still be rejected
-(code 12 when unaffordable, 35 when the position went flat first), or
-`CloseOutcome::NothingToClose` when the account holds no position on the
-market (nothing is sent); its size comes from the account read, which can
-trail a fill made just before. `wait_for_receipt` reads a reconciled receipt
-the same way. An executed transaction whose order results do not parse, or do
-not report one result per order sent, is
-`Error::OrderResultUnreadable { receipt, reason }`: it executed, so reconcile
-`receipt.hash` and never sign it again. A basket's legs are
-`receipt.placements()` too, in order; a failed basket is `receipt.error` with
-every leg rejected.
+under one signature; the single-order helpers send a batch of one. A rejected
+order does not fail the batch: `submitted.placements()` /
+`submitted.cancellations()` give each outcome in the order sent (`None`
+without an executed verdict): `Resting`, `Executed` (with `filled_quantity`
+and `unfilled` reason) or `Rejected` with its code; `Cancelled` or `Refused`.
+`close_position` returns `CloseOutcome::Sent(submitted)` (the close can be
+rejected: 12 unaffordable, 35 already flat) or `CloseOutcome::NothingToClose`
+on a flat account. A basket's legs are `receipt.placements()` too.
 
 `TxStatus` is exhaustive, so a `match` decides every case. Only `Committed`
 executed; `Pending` may still.
@@ -190,8 +179,9 @@ rejections and gateway refusals are `TxStatus`, not errors. When a
 submission may have landed without a verdict (transport failure, 5xx,
 unreadable answer), every submitting call, the order helpers included,
 returns `Error::Unconfirmed { tx, source }` with the exact signed transaction.
-`Error::OrderResultUnreadable` means it executed but its order result did not
-read. Any other `Err` means nothing executed.
+`Error::OrderResultUnreadable { receipt, .. }` means it executed but its order
+event did not parse: reconcile `receipt.hash`, never sign it again. Any other
+`Err` means nothing executed.
 
 ```rust,ignore
 match client.place_order(order).await {

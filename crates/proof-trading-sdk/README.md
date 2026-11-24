@@ -48,7 +48,7 @@ let key = SigningKey::from_bytes(&[7u8; 32]);
 let owner = crypto::pubkey_to_owner(&key.verifying_key().to_bytes());
 let chain_id = crypto::chain_id_from_string("exchange-devnet-1");
 
-// One order is a `PlaceOrders` (0x01) list of one.
+// One order is a `PlaceOrders` (0x35) list of one.
 let action = Action::PlaceOrders(PlaceOrders::one(PlaceOrder {
     market: 1,
     owner,

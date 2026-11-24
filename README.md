@@ -668,24 +668,16 @@ keep operator actions out of autocomplete. `submitTx` still accepts the full
 
 #### Placing and cancelling orders
 
-Orders and cancels are sent in batches of 1 to `MAX_ORDERS_PER_BATCH` (100)
-for one account under one signature, like Hyperliquid's `order` and `cancel`;
-`placeOrder` is a batch of one. Each order gets its own result, and a rejected
-order does not fail the batch. An order is a limit order, or a market order
-with `kind: "market"` (optional `worstPrice` stops the walk through the book at
-that price). Its outcome is `resting`, `executed` (with `requestedQuantity`,
-`filledQuantity` and the `unfilled` reason) or `rejected` with its engine
-code; a cancel's is `cancelled` or `refused` with its code.
+Orders and cancels go in batches of 1 to `MAX_ORDERS_PER_BATCH` (100) under
+one signature; `placeOrder`, `marketOrder`, `cancelOrder` and the other
+single-order calls send a batch of one and return the same `{ tx, orders }`.
+A rejected order does not fail the batch: each order's outcome is `resting`,
+`executed` (with `requestedQuantity`, `filledQuantity` and the `unfilled`
+reason) or `rejected` with its code; a cancel is `cancelled` or `refused`.
 
 ```typescript
 const { tx, orders } = await client.placeOrders([
-  {
-    market: 1,
-    side: Side.Buy,
-    price: 66_740_000_000n,
-    quantity: 50n,
-    postOnly: true,
-  },
+  { market: 1, side: Side.Buy, price: 66_740_000_000n, quantity: 50n },
   {
     kind: "market",
     market: 1,
@@ -695,45 +687,19 @@ const { tx, orders } = await client.placeOrders([
   },
 ]);
 for (const o of orders ?? []) {
-  if (o.outcome === "rejected")
-    console.log(o.clientOrderId, o.code, o.error?.name);
-  if (o.outcome === "executed")
-    console.log(o.filledQuantity, "of", o.requestedQuantity, o.unfilled);
+  if (o.outcome === "rejected") console.log(o.code, o.error?.name);
 }
-const cancels = await client.cancelOrders([42n, 43n]); // or cancelClientOrders
-
-const { order } = await client.placeOrder({
-  market: 1,
-  side: Side.Buy,
-  price: 66_740_000_000n,
-  quantity: 50n,
-});
-if (order?.outcome === "rejected") console.log(order.error?.name);
 ```
 
-`placeOrder`, `marketOrder`, `buyNo` and `sellNo` return `{ tx, order }`;
-`cancelOrder` and `cancelClientOrder` return `{ tx, cancellation }`. `orders`,
-`order` and `cancellation` are `null` when `tx` has no executed verdict: the
-transaction was refused as a whole (`tx.error`), is pending (reconcile with
-`waitForDelivery(tx)`, then `placementsOf` / `cancellationsOf`), or is
-`outcome: "unreadable"` (`ok: false`, `code: -1`): it executed but its results
-did not read, so reconcile by hash and never resubmit. `marketOrder` takes an
-optional `worstPrice` and `reduceOnly`.
+`orders` is `null` when `tx` has no executed verdict: refused as a whole
+(`tx.error`), pending (reconcile with `waitForDelivery(tx)`, then
+`placementsOf`), or `outcome: "unreadable"`: it executed but its order event
+did not decode, so reconcile by hash and never resubmit.
 
-`closePosition(market)` reads the position and sends a reduce-only market
-order on the opposite side for its size, returning
-`{ kind: "sent", tx, order }`; the close can still be `rejected` (code 12 when
-the account cannot afford it, 35 when the position went flat first). Its size
-and `nothingToClose` come from the account read, which can trail a fill made
-just before. On a flat account it sends nothing and returns
-`{ kind: "nothingToClose" }`. To close by hand, send a `MarketOrder` with
-`reduceOnly: true`.
-
-`orderPlacements(tx, owner)` also reads an `AtomicBasketOrder`'s legs.
-`decodeOrdersEvent` decodes `orders_placed` / `orders_cancelled` from their
-ABCI attributes; the retired `order_placed`, `order_cancelled`,
-`order_rejected` and `market_order_processed` are no longer emitted but still
-read from history.
+`closePosition(market)` sends a reduce-only market order against the position
+it reads and returns `{ kind: "sent", tx, order }` (the close can be
+`rejected`: 12 unaffordable, 35 already flat), or `{ kind: "nothingToClose" }`
+on a flat account.
 
 #### SetUserMarketLeverage availability
 
