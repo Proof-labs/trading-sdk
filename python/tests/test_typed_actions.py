@@ -270,13 +270,13 @@ _LISTS = {
 @pytest.mark.parametrize("kind", sorted(_LISTS))
 @pytest.mark.parametrize("count", [0, 101])
 def test_a_list_out_of_range_does_not_encode(kind, count):
-    with pytest.raises(ValueError, match=rf"list carries {count} entries"):
+    with pytest.raises(ValueError, match=rf"orders per call, got {count}"):
         actions.encode_action(_LISTS[kind](count))
 
 
 @pytest.mark.parametrize("kind", sorted(_LISTS))
 def test_a_full_list_encodes(kind):
-    action_type, _ = actions.encode_action(_LISTS[kind](actions.MAX_LIST_ENTRIES))
+    action_type, _ = actions.encode_action(_LISTS[kind](actions.MAX_ORDERS_PER_BATCH))
     assert action_type == _LISTS[kind](1).action_type
 
 
@@ -294,7 +294,7 @@ def test_single_names_share_the_list_bytes():
 def test_an_entry_is_a_limit_or_a_market_order():
     with pytest.raises(ValueError, match="needs a price"):
         actions.OrderEntry(market=1, side="Buy", price=None, quantity=1)
-    with pytest.raises(ValueError, match="worst_price is for market entries"):
+    with pytest.raises(ValueError, match="worst_price is for market orders"):
         actions.OrderEntry(market=1, side="Buy", price=1, quantity=1, worst_price=2)
     with pytest.raises(ValueError, match="has no price"):
         actions.OrderEntry(market=1, side="Buy", price=1, quantity=1, kind="market")

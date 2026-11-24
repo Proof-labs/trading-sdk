@@ -57,7 +57,7 @@ class _ActionTypeMap:
     def __init__(self) -> None:
         for entry in _native.get_action_types():
             setattr(self, entry["name"], entry["code"])
-        # The single-order names keep working: a single order is a list of one.
+        # The single-order names keep working: a single order is a batch of one.
         for single, listed in _SINGLE_ACTION_NAMES.items():
             setattr(self, single, getattr(self, listed))
 
@@ -149,7 +149,7 @@ class PlaceOrder(Action):
         )
 
     def fields(self) -> dict[str, Any]:
-        # A single order is a PlaceOrders list of one.
+        # A single order is a PlaceOrders batch of one.
         return {"owner": self.owner, "orders": [self.entry().as_wire()]}
 
 
@@ -193,7 +193,7 @@ class MarketOrder(Action):
         )
 
     def fields(self) -> dict[str, Any]:
-        # A market order is a PlaceOrders list of one market entry.
+        # A market order is a PlaceOrders batch of one market order.
         return {"owner": self.owner, "orders": [self.entry().as_wire()]}
 
 
@@ -204,7 +204,7 @@ class CancelOrder(Action):
     owner: bytes
 
     def fields(self) -> dict[str, Any]:
-        # A single cancel is a CancelOrders list of one.
+        # A single cancel is a CancelOrders batch of one.
         return {"owner": self.owner, "order_ids": [self.order_id]}
 
 
@@ -215,7 +215,7 @@ class CancelClientOrder(Action):
     client_order_id: int
 
     def fields(self) -> dict[str, Any]:
-        # A single cancel is a CancelClientOrders list of one.
+        # A single cancel is a CancelClientOrders batch of one.
         return {"owner": self.owner, "client_order_ids": [self.client_order_id]}
 
 
@@ -583,16 +583,14 @@ class AtomicBasketOrder(Action):
         }
 
 
-MAX_LIST_ENTRIES = 100
-"""Most entries one :class:`PlaceOrders`, :class:`CancelOrders` or
-:class:`CancelClientOrders` carries; the wire refuses more."""
+MAX_ORDERS_PER_BATCH = 100
+"""Most orders one batch (:class:`PlaceOrders`, :class:`CancelOrders` or
+:class:`CancelClientOrders`) carries; the wire refuses more."""
 
 
-def _check_list_size(entries: list[Any]) -> None:
-    if not 1 <= len(entries) <= MAX_LIST_ENTRIES:
-        raise ValueError(
-            f"list carries {len(entries)} entries, must carry 1..={MAX_LIST_ENTRIES}"
-        )
+def _check_list_size(orders: list[Any]) -> None:
+    if not 1 <= len(orders) <= MAX_ORDERS_PER_BATCH:
+        raise ValueError(f"1 to {MAX_ORDERS_PER_BATCH} orders per call, got {len(orders)}")
 
 
 ORDER_KIND_LIMIT = "limit"
@@ -603,8 +601,8 @@ ORDER_KIND_MARKET = "market"
 class OrderEntry:
     """One order of a :class:`PlaceOrders`. Not an action on its own.
 
-    A limit entry (the default ``kind``) has the fields of a
-    :class:`PlaceOrder` without its owner. A market entry
+    A limit order (the default ``kind``) has the fields of a
+    :class:`PlaceOrder` without its owner. A market order
     (:meth:`market_order`) has no ``price``, ``post_only`` or
     ``time_in_force``; ``worst_price``, when set, stops its walk at that
     price.
@@ -626,12 +624,12 @@ class OrderEntry:
     def __post_init__(self) -> None:
         if self.kind == ORDER_KIND_LIMIT:
             if self.price is None:
-                raise ValueError("a limit entry needs a price")
+                raise ValueError("a limit order needs a price")
             if self.worst_price is not None:
-                raise ValueError("worst_price is for market entries; a limit entry has price")
+                raise ValueError("worst_price is for market orders; a limit order has price")
         elif self.kind == ORDER_KIND_MARKET:
             if self.price is not None:
-                raise ValueError("a market entry has no price; bound it with worst_price")
+                raise ValueError("a market order has no price; bound it with worst_price")
         else:
             raise ValueError(f"unknown order kind {self.kind!r}")
         _validate_order_triggers(
@@ -651,7 +649,7 @@ class OrderEntry:
         stop_loss: Optional[TriggerLimb] = None,
         take_profit: Optional[TriggerLimb] = None,
     ) -> "OrderEntry":
-        """A market entry: immediate-or-cancel at the best prices."""
+        """A market order: immediate-or-cancel at the best prices."""
         return cls(
             market=market,
             side=side,
@@ -1296,7 +1294,7 @@ __all__ = [
     "MarketOrder",
     "CancelOrder",
     "CancelClientOrder",
-    "MAX_LIST_ENTRIES",
+    "MAX_ORDERS_PER_BATCH",
     "ORDER_KIND_LIMIT",
     "ORDER_KIND_MARKET",
     "OrderEntry",

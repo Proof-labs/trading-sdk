@@ -558,57 +558,67 @@ propose = actions.ProposeAdminAction(
 action_type, payload = actions.encode_action(propose)
 ```
 
-## Order lists
+## Placing and cancelling orders
 
-`PlaceOrders`, `CancelOrders` and `CancelClientOrders` carry 1 to 100 entries
-under one signature, like Hyperliquid's `order` and `cancel`. A `PlaceOrders`
-entry is a limit order (`OrderEntry(...)`) or a market order
+Orders and cancels are sent in batches of 1 to `MAX_ORDERS_PER_BATCH` (100)
+under one signature, like Hyperliquid's `order` and `cancel`; `place_order` is
+a batch of one. Each order gets its own result, and a rejected order does not
+fail the batch. An order is a limit order (`OrderEntry(...)`) or a market order
 (`OrderEntry.market_order(...)`, with an optional `worst_price` that stops its
-walk at that price). Each entry runs on its own: the transaction succeeds and
-its `orders_placed` or `orders_cancelled` event reports every entry. The client
-methods return the response as `tx` and those per-entry results as `orders`; a
-refused transaction (a stale nonce, say) has a non-zero `tx["code"]` and no
-orders:
+walk at that price).
+
+An order's outcome is a `RestingOrder`, an `ExecutedOrder` (done without
+resting; `unfilled` says why less than requested filled) or a `RejectedOrder`
+(`code`, `error_name`); a cancel's is a `CancelledOrder` or a `RefusedCancel`.
+Each carries its `outcome` tag, so `match` on the class or compare `outcome`.
+The methods return the response as `tx` with the outcomes; a transaction the
+engine refused as a whole (a stale nonce, say) has a non-zero `tx["code"]` and
+no outcomes:
 
 ```python
-from proof_trading_sdk import OrderEntry
+from proof_trading_sdk import (
+    ExecutedOrder, OrderEntry, RejectedOrder, RestingOrder,
+)
 
 result = client.place_orders([
     OrderEntry(market=1, side="Buy", price=66_740_000_000, quantity=50, post_only=True),
     OrderEntry(market=1, side="Sell", price=66_760_000_000, quantity=50, post_only=True),
     OrderEntry.market_order(2, "Buy", 10, worst_price=1_510_000_000),
 ])
-for p in result.orders:
-    if p.rejected:
-        print(p.market, p.code, p.error_name)
-    elif p.outcome == "executed":
-        # Done without resting; `unfilled` says why less than requested filled.
-        print(p.order_id, p.filled_quantity, p.requested_quantity, p.unfilled)
-    else:
-        print(p.order_id, p.quantity)  # resting remainder
+for order in result.orders:
+    match order:
+        case RestingOrder(order_id=oid, quantity=left):
+            print(oid, left)  # the resting remainder
+        case ExecutedOrder():
+            print(order.order_id, order.filled_quantity, order.requested_quantity, order.unfilled)
+        case RejectedOrder(code=code, error_name=name):
+            print(order.market, code, name)
+
+one = client.place_order(OrderEntry(market=1, side="Buy", price=66_740_000_000, quantity=50))
+print(one.order.outcome if one.order else one.tx["code"])
 
 for c in client.cancel_orders([order_id_a, order_id_b]).orders:
-    print(c.outcome, c.order_id, c.code)  # "cancelled", or "refused" with a code
-client.cancel_client_orders([7, 8])
+    print(c.outcome, c.order_id)  # "cancelled", or "refused" with c.code
+client.cancel_order(order_id_a)  # .cancellation; cancel_client_order by client id
 ```
 
-A single `PlaceOrder`, `MarketOrder`, `CancelOrder` or `CancelClientOrder` is
-sent as a list of one and read like any list: a refused entry is reported in
-`order_placements(response)` / `order_cancellations(response)` and the response
-keeps code 0. An executed order whose list event does not read, or does not
-report one entry per order sent, raises `OrderResultUnreadable` with its
-`tx_hash`: it executed, so reconcile and never re-submit (the list methods
-raise it too). After `SubmissionPending`, check the reconciled transaction with
+`submit` of a `PlaceOrder`, `MarketOrder`, `CancelOrder` or `CancelClientOrder`
+returns the response; read the outcome with `order_placements(response)` /
+`order_cancellations(response)`. An executed order whose results do not read,
+or do not report one result per order sent, raises `OrderResultUnreadable`
+with its `tx_hash`: it executed, so reconcile and never re-submit. After
+`SubmissionPending`, check the reconciled transaction with
 `check_order_result(evidence.hash, evidence.events)` (for example from
-`client.transaction_evidence(...)`). `MarketOrder` takes an optional
-`worst_price` and `reduce_only`. `client.close_position(market)` reads the
-position and sends a reduce-only market order on the opposite side for its
-size, returning `Closed(tx)`; a refused close is its entry in
-`order_placements(tx)`. The size and `NothingToClose()` come from the account
-read, which can trail a fill made just before. On a flat
-account it sends nothing and returns `NothingToClose()`. There is no close
-action: to close by hand, send a `MarketOrder` with `reduce_only=True`.
-Entries out of range raise `ValueError` before signing.
+`client.transaction_evidence(...)`).
+
+`client.close_position(market)` reads the position and sends a reduce-only
+market order on the opposite side for its size, returning `Sent(tx, order)`;
+the close can still be a `RejectedOrder` (code 12 when the account cannot
+afford it, 35 when the position went flat first). The size and
+`NothingToClose()` come from the account read, which can trail a fill made
+just before. On a flat account it sends nothing and returns
+`NothingToClose()`. To close by hand, send a reduce-only market order. Batches
+out of range raise `ValueError` before signing.
 
 An `AtomicBasketOrder` reports its legs in `orders_placed` too:
 `order_placements(client.submit(basket))` gives one placement per leg.

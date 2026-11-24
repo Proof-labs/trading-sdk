@@ -1,4 +1,4 @@
-"""List actions report every entry; a single order keeps its old error."""
+"""Batch actions report each order's outcome; a single order is a batch of one."""
 
 import json
 
@@ -6,10 +6,15 @@ import httpx
 import pytest
 
 from proof_trading_sdk import (
-    Closed,
+    CancelledOrder,
     ExchangeClient,
+    ExecutedOrder,
     NothingToClose,
     OrderResultUnreadable,
+    RefusedCancel,
+    RejectedOrder,
+    RestingOrder,
+    Sent,
     Side,
     TimeInForce,
     check_order_result,
@@ -26,8 +31,6 @@ from proof_trading_sdk.actions import (
 from proof_trading_sdk.chain_evidence import TransactionEvidenceEvent
 from proof_trading_sdk.client import AccountState
 from proof_trading_sdk.order_lists import (
-    OrderCancellation,
-    OrderPlacement,
     order_cancellations,
     order_placements,
 )
@@ -138,41 +141,56 @@ def test_place_orders_reports_each_order_without_raising(answer):
     entry = OrderEntry(market=1, side="Buy", price=100, quantity=5)
     placements = answer(_placed(RESTING, EXECUTED, REJECTED)).place_orders([entry] * 3).orders
     assert placements == [
-        OrderPlacement(
-            outcome="resting", market=1, order_id=9, side=Side.Buy, price=100,
+        RestingOrder(
+            market=1, client_order_id=None, order_id=9, side=Side.Buy, price=100,
             quantity=5, time_in_force=TimeInForce.Gtc, post_only=True, reduce_only=False,
         ),
-        OrderPlacement(
-            outcome="executed", market=2, client_order_id=3, order_id=10,
-            requested_quantity=5, filled_quantity=2, unfilled="no_liquidity",
+        ExecutedOrder(
+            market=2, client_order_id=3, order_id=10, requested_quantity=5,
+            filled_quantity=2, unfilled="no_liquidity",
         ),
-        OrderPlacement(
-            outcome="rejected", market=1, client_order_id=7, code=12,
-            error_name=placements[2].error_name,
+        RejectedOrder(
+            market=1, client_order_id=7, code=12, error_name=placements[2].error_name,
         ),
     ]
-    assert placements[2].rejected and placements[2].error_name
+    assert [p.outcome for p in placements] == ["resting", "executed", "rejected"]
+    assert placements[2].error_name
 
 
-def test_a_list_of_one_refused_does_not_raise(answer):
+def test_place_order_returns_its_outcome(answer):
     entry = OrderEntry(market=1, side="Buy", price=100, quantity=5)
-    [placement] = answer(_placed(REJECTED)).place_orders([entry]).orders
-    assert placement.rejected and placement.code == 12
+    result = answer(_placed(REJECTED)).place_order(entry)
+    assert result.tx["code"] == 0
+    match result.order:
+        case RejectedOrder(code=code):
+            assert code == 12
+        case other:
+            raise AssertionError(f"expected a rejected order, got {other!r}")
+
+
+def test_cancel_order_returns_its_outcome(answer):
+    result = answer(_cancelled(REFUSED_ID)).cancel_order(42)
+    assert isinstance(result.cancellation, RefusedCancel)
+    assert result.cancellation.code == 2
+    landed = answer(_cancelled(CANCELLED)).cancel_client_order(9)
+    assert isinstance(landed.cancellation, CancelledOrder)
 
 
 def test_cancel_orders_reports_each_entry(answer):
     cancellations = answer(_cancelled(CANCELLED, REFUSED_ID)).cancel_orders([9, 42]).orders
-    assert cancellations[0] == OrderCancellation(
-        outcome="cancelled", order_id=9, market=1, original_quantity=5,
+    assert cancellations[0] == CancelledOrder(
+        order_id=9, market=1, client_order_id=None, original_quantity=5,
         remaining_quantity=3, filled_quantity=2,
     )
-    assert cancellations[1].refused and cancellations[1].order_id == 42
-    assert cancellations[1].code == 2
+    assert cancellations[1] == RefusedCancel(
+        order_id=42, client_order_id=None, code=2, error_name=cancellations[1].error_name,
+    )
 
 
 def test_cancel_client_orders_reports_each_entry(answer):
     [refused] = answer(_cancelled(REFUSED_CLOID)).cancel_client_orders([11]).orders
-    assert refused.refused and refused.client_order_id == 11 and refused.code == 44
+    assert isinstance(refused, RefusedCancel)
+    assert (refused.client_order_id, refused.code) == (11, 44)
 
 
 PLACE = PlaceOrder(market=1, owner=OWNER, side="Buy", price=1, quantity=1)
@@ -281,7 +299,8 @@ def test_close_position_sends_a_reduce_only_market_order(answer, monkeypatch, si
     ]
     client, sent = _closing(answer, monkeypatch, positions, _placed(FILLED))
     closed = client.close_position(2, owner=OWNER)
-    assert isinstance(closed, Closed) and closed.tx["code"] == 0
+    assert isinstance(closed, Sent) and closed.tx["code"] == 0
+    assert isinstance(closed.order, ExecutedOrder)
     [order] = sent
     assert isinstance(order, MarketOrder)
     assert (order.market, order.owner, order.side, order.quantity, order.reduce_only) == (
@@ -304,17 +323,17 @@ def test_an_unreadable_close_raises_unreadable(answer, monkeypatch):
 
 
 @pytest.mark.parametrize("code", [12, 35])
-def test_a_refused_close_is_reported_in_its_entry(answer, monkeypatch, code):
+def test_a_rejected_close_is_sent_with_its_order_rejected(answer, monkeypatch, code):
     # 35: the position went flat between the read and the close.
     positions = [{"market": 2, "side": "Buy", "size": 4}]
     refused = {**REFUSED_CLOSE, "code": str(code)}
     client, _ = _closing(answer, monkeypatch, positions, _placed(refused))
-    closed = client.close_position(2, owner=OWNER)
-    assert closed.tx["code"] == 0
-    assert order_placements(closed.tx)[0].code == code
+    sent = client.close_position(2, owner=OWNER)
+    assert isinstance(sent, Sent) and sent.tx["code"] == 0
+    assert isinstance(sent.order, RejectedOrder) and sent.order.code == code
 
 
-def test_a_refused_list_returns_its_code_and_no_orders():
+def test_a_refused_batch_returns_its_code_and_no_orders():
     # A stale nonce refuses the whole transaction: a value, not an exception.
     def handler(request):
         return httpx.Response(200, json={
@@ -330,5 +349,6 @@ def test_a_refused_list_returns_its_code_and_no_orders():
         result = client.place_orders([entry, entry])
         assert result.tx["code"] == 21
         assert result.orders == []
+        assert client.place_order(entry).order is None
     finally:
         client.close()
