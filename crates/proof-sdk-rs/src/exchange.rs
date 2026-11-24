@@ -1208,7 +1208,7 @@ mod tests {
         assert_eq!(list.placements()[1].outcome, margin);
 
         let not_found = refused_cancel(EngineError::new(2, None));
-        let cancel = cancelled(CancelReason::UserRequested, vec![not_found.clone()]);
+        let cancel = cancelled(CancelReason::UserRequested, vec![not_found]);
         let cancel = read(vec![cancel]).unwrap();
         assert!(cancel.is_success());
         assert_eq!(cancel.cancellations(), [not_found]);
