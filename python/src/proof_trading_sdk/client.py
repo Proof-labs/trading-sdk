@@ -298,8 +298,8 @@ class Sent:
     """:meth:`ExchangeClient.close_position` sent the close: ``tx`` is its
     ``/exchange`` response and ``order`` the close order's outcome, which can
     be a :class:`RejectedOrder` (code 12 when the account cannot afford it, 35
-    when the position went flat first); ``None`` when the engine refused the
-    whole transaction."""
+    when the position went flat first); ``None`` without an executed verdict
+    (the engine refused the whole transaction, or it has not executed yet)."""
 
     tx: dict[str, t.Any]
     order: Optional[OrderPlacement]

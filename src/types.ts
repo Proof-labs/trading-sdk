@@ -2114,8 +2114,7 @@ export type ExchangeEvent =
  *                   either the gateway returned a hash-only ambiguous response
  *                   or inclusion polling expired. The tx may still land.
  * - `"unreadable"`: the tx executed with code 0 (`height` set), but its order
- *                   results did not read: malformed, missing, or not one
- *                   result per order sent (`code === -1`). What each order did
+ *                   event did not decode (`code === -1`). What each order did
  *                   is unknown; reconcile by `hash` and never resubmit.
  */
 export type TxOutcome =
