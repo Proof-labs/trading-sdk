@@ -53,6 +53,7 @@ from proof_trading_sdk.order_lists import (
     ORDERS_CANCELLED,
     ORDERS_PLACED,
     OrderCancellation,
+    OrderListResult,
     OrderPlacement,
     SentList,
     check_order_result,
@@ -99,7 +100,6 @@ from proof_trading_sdk.finalized_accounts import (
 from proof_trading_sdk.errors import (
     AuthenticationError,
     CodecError,
-    EngineError,
     GatewayError,
     PreAdmissionRefusal,
     ProofTradingSdkError,
@@ -187,6 +187,12 @@ def _submission_may_have_been_admitted(exc: TransportError) -> bool:
         return True
     cause = exc.__cause__
     return isinstance(cause, httpx.RequestError) and not isinstance(cause, _NOT_SENT)
+
+
+def _engine_refusal(code: int, error: str) -> dict[str, t.Any]:
+    """A legacy gateway's ``"<code>: <message>"`` verdict, in the shape of a
+    structured one."""
+    return {"status": "error", "code": code, "error": error}
 
 
 def _sent_list(action: Action) -> SentList | None:
@@ -696,7 +702,9 @@ class ExchangeClient:
 
         Every order action is a list, a single order a list of one: a refused
         order or cancel is its entry in :func:`order_placements` /
-        :func:`order_cancellations`, and the response keeps code 0. An executed order action whose list event
+        :func:`order_cancellations`, and the response keeps code 0. A refused
+        transaction is returned with its non-zero ``code``, as in
+        :meth:`submit_action`. An executed order action whose list event
         does not read, or is missing, or has the wrong number of entries,
         raises :class:`OrderResultUnreadable`: reconcile by hash, never
         re-submit.
@@ -797,12 +805,13 @@ class ExchangeClient:
 
     def place_orders(
         self, orders: t.Sequence[OrderEntry], *, owner: bytes | None = None
-    ) -> list[OrderPlacement]:
+    ) -> OrderListResult[OrderPlacement]:
         """Place 1 to 100 limit or market orders under one signature, each on
         its own (market entries via :meth:`OrderEntry.market_order`).
 
-        Returns one :class:`OrderPlacement` per order, in order; a refused
-        order is ``rejected`` with its code and raises nothing. ``owner``
+        Returns the response and one :class:`OrderPlacement` per order, in
+        order; a refused order is ``rejected`` with its code, and a refused
+        transaction has a non-zero ``tx["code"]`` and no orders. ``owner``
         defaults to the signer. An executed list whose event does not read,
         or does not report every order, raises
         :class:`OrderResultUnreadable`: reconcile by hash, never re-submit.
@@ -810,33 +819,31 @@ class ExchangeClient:
         with self._signer_lock:
             revision = self._signer_revision
             selected_owner = self._own_owner() if owner is None else owner
-        return order_placements(
-            self._submit_with_signer_revision(
-                PlaceOrders(owner=selected_owner, orders=list(orders)), revision
-            )
+        tx = self._submit_with_signer_revision(
+            PlaceOrders(owner=selected_owner, orders=list(orders)), revision
         )
+        return OrderListResult(tx, order_placements(tx))
 
     def cancel_orders(
         self, order_ids: t.Sequence[int], *, owner: bytes | None = None
-    ) -> list[OrderCancellation]:
+    ) -> OrderListResult[OrderCancellation]:
         """Cancel 1 to 100 resting orders by order id, each on its own.
 
-        Returns one :class:`OrderCancellation` per entry, in order; a cancel
-        that removed nothing is ``refused`` with its code and raises nothing.
+        Returns the response and one :class:`OrderCancellation` per entry, in
+        order; a cancel that removed nothing is ``refused`` with its code.
         An unreadable result raises as in :meth:`place_orders`.
         """
         with self._signer_lock:
             revision = self._signer_revision
             selected_owner = self._own_owner() if owner is None else owner
-        return order_cancellations(
-            self._submit_with_signer_revision(
-                CancelOrders(owner=selected_owner, order_ids=list(order_ids)), revision
-            )
+        tx = self._submit_with_signer_revision(
+            CancelOrders(owner=selected_owner, order_ids=list(order_ids)), revision
         )
+        return OrderListResult(tx, order_cancellations(tx))
 
     def cancel_client_orders(
         self, client_order_ids: t.Sequence[int], *, owner: bytes | None = None
-    ) -> list[OrderCancellation]:
+    ) -> OrderListResult[OrderCancellation]:
         """Cancel 1 to 100 resting orders by client order id, each on its own.
 
         Results as :meth:`cancel_orders`.
@@ -844,14 +851,11 @@ class ExchangeClient:
         with self._signer_lock:
             revision = self._signer_revision
             selected_owner = self._own_owner() if owner is None else owner
-        return order_cancellations(
-            self._submit_with_signer_revision(
-                CancelClientOrders(
-                    owner=selected_owner, client_order_ids=list(client_order_ids)
-                ),
-                revision,
-            )
+        tx = self._submit_with_signer_revision(
+            CancelClientOrders(owner=selected_owner, client_order_ids=list(client_order_ids)),
+            revision,
         )
+        return OrderListResult(tx, order_cancellations(tx))
 
     # ── Write action ─────────────────────────────────────────────────────
 
@@ -866,8 +870,12 @@ class ExchangeClient:
             The engine's response dict with keys like ``code``,
             ``tx_hash``, etc.
 
+        A transaction the engine refused comes back as a value: ``code`` is
+        its ``ExecError`` code (non-zero), ``error`` its message; read the
+        name with :func:`get_error_name`. Exceptions are for submissions with
+        no engine verdict.
+
         Raises:
-            EngineError: the engine rejected the tx with an ``ExecError`` code.
             SubmissionPending: the gateway broadcast it but could not report
                 the outcome; reconcile by ``tx_hash``.
             PreAdmissionRefusal: the gateway refused the request before
@@ -915,7 +923,7 @@ class ExchangeClient:
             text = (parsed if isinstance(parsed, str) else raw or "").strip()
             code = _leading_error_code(text)
             if code is not None and code > 0:
-                raise EngineError(code, text[:200])
+                return _engine_refusal(code, text[:200])
             # An arbitrary proxy body or truncated response is not an engine
             # rejection. The original transaction may still have committed.
             raise SubmissionPending(
@@ -967,10 +975,8 @@ class ExchangeClient:
 
         code = data.get("code")
         if isinstance(code, int) and not isinstance(code, bool):
-            # Structured chain verdict — the engine code is authoritative.
-            if code != 0:
-                msg = data.get("message") or data.get("log") or data.get("error") or ""
-                raise EngineError(code, msg)
+            # Structured chain verdict — the engine code is authoritative. A
+            # non-zero code is the engine's answer, returned as a value.
             return data
 
         if data.get("status") == "ok":
@@ -997,7 +1003,7 @@ class ExchangeClient:
         err = str(data.get("error") or data.get("message") or "")
         code = _leading_error_code(err)
         if code is not None and code > 0:
-            raise EngineError(code, err)
+            return _engine_refusal(code, err)
         raise SubmissionPending(
             hashlib.sha256(envelope).hexdigest().upper(),
             "malformed /exchange response (no verdict); reconcile by hash",

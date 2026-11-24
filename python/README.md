@@ -55,9 +55,13 @@ finally:
 For separate signing and submission, use `envelope = client.sign_action(action)`
 followed by `client.submit_action(envelope)`. `submit_action` accepts signed
 bytes, not an action dictionary. Keep private keys and signed envelopes out of
-logs. A gateway acknowledgement alone is not a final fill. When the outcome is
-uncertain the SDK raises `SubmissionPending` carrying the original transaction
-hash as `tx_hash`; reconcile that hash before retrying.
+logs. A gateway acknowledgement alone is not a final fill. The engine's answer
+is a value: `result["code"]` is 0 when the transaction executed, else its
+`ExecError` code (`pts.get_error_name(code)` names it), and a refused order of
+a list is its entry, not a failed transaction. Exceptions are for submissions
+with no engine verdict: when the outcome is uncertain the SDK raises
+`SubmissionPending` carrying the original transaction hash as `tx_hash`;
+reconcile that hash before retrying.
 
 See the full API at `help(proof_trading_sdk)`.
 
@@ -562,17 +566,19 @@ entry is a limit order (`OrderEntry(...)`) or a market order
 (`OrderEntry.market_order(...)`, with an optional `worst_price` that stops its
 walk at that price). Each entry runs on its own: the transaction succeeds and
 its `orders_placed` or `orders_cancelled` event reports every entry. The client
-methods return those per-entry results and raise nothing for a refused entry:
+methods return the response as `tx` and those per-entry results as `orders`; a
+refused transaction (a stale nonce, say) has a non-zero `tx["code"]` and no
+orders:
 
 ```python
 from proof_trading_sdk import OrderEntry
 
-placements = client.place_orders([
+result = client.place_orders([
     OrderEntry(market=1, side="Buy", price=66_740_000_000, quantity=50, post_only=True),
     OrderEntry(market=1, side="Sell", price=66_760_000_000, quantity=50, post_only=True),
     OrderEntry.market_order(2, "Buy", 10, worst_price=1_510_000_000),
 ])
-for p in placements:
+for p in result.orders:
     if p.rejected:
         print(p.market, p.code, p.error_name)
     elif p.outcome == "executed":
@@ -581,7 +587,7 @@ for p in placements:
     else:
         print(p.order_id, p.quantity)  # resting remainder
 
-for c in client.cancel_orders([order_id_a, order_id_b]):
+for c in client.cancel_orders([order_id_a, order_id_b]).orders:
     print(c.outcome, c.order_id, c.code)  # "cancelled", or "refused" with a code
 client.cancel_client_orders([7, 8])
 ```

@@ -136,7 +136,7 @@ def test_a_single_cancel_ignores_other_cancel_events(answer):
 
 def test_place_orders_reports_each_order_without_raising(answer):
     entry = OrderEntry(market=1, side="Buy", price=100, quantity=5)
-    placements = answer(_placed(RESTING, EXECUTED, REJECTED)).place_orders([entry] * 3)
+    placements = answer(_placed(RESTING, EXECUTED, REJECTED)).place_orders([entry] * 3).orders
     assert placements == [
         OrderPlacement(
             outcome="resting", market=1, order_id=9, side=Side.Buy, price=100,
@@ -156,12 +156,12 @@ def test_place_orders_reports_each_order_without_raising(answer):
 
 def test_a_list_of_one_refused_does_not_raise(answer):
     entry = OrderEntry(market=1, side="Buy", price=100, quantity=5)
-    [placement] = answer(_placed(REJECTED)).place_orders([entry])
+    [placement] = answer(_placed(REJECTED)).place_orders([entry]).orders
     assert placement.rejected and placement.code == 12
 
 
 def test_cancel_orders_reports_each_entry(answer):
-    cancellations = answer(_cancelled(CANCELLED, REFUSED_ID)).cancel_orders([9, 42])
+    cancellations = answer(_cancelled(CANCELLED, REFUSED_ID)).cancel_orders([9, 42]).orders
     assert cancellations[0] == OrderCancellation(
         outcome="cancelled", order_id=9, market=1, original_quantity=5,
         remaining_quantity=3, filled_quantity=2,
@@ -171,7 +171,7 @@ def test_cancel_orders_reports_each_entry(answer):
 
 
 def test_cancel_client_orders_reports_each_entry(answer):
-    [refused] = answer(_cancelled(REFUSED_CLOID)).cancel_client_orders([11])
+    [refused] = answer(_cancelled(REFUSED_CLOID)).cancel_client_orders([11]).orders
     assert refused.refused and refused.client_order_id == 11 and refused.code == 44
 
 
@@ -242,7 +242,7 @@ def test_place_orders_takes_market_entries(answer):
         OrderEntry(market=1, side="Buy", price=100, quantity=5),
         OrderEntry.market_order(2, "Sell", 4, worst_price=90),
     ]
-    _, filled = answer(_placed(RESTING, FILLED)).place_orders(entries)
+    _, filled = answer(_placed(RESTING, FILLED)).place_orders(entries).orders
     assert (filled.outcome, filled.filled_quantity, filled.requested_quantity) == (
         "executed", 4, 4,
     )
@@ -312,3 +312,23 @@ def test_a_refused_close_is_reported_in_its_entry(answer, monkeypatch, code):
     closed = client.close_position(2, owner=OWNER)
     assert closed.tx["code"] == 0
     assert order_placements(closed.tx)[0].code == code
+
+
+def test_a_refused_list_returns_its_code_and_no_orders():
+    # A stale nonce refuses the whole transaction: a value, not an exception.
+    def handler(request):
+        return httpx.Response(200, json={
+            "status": "error", "code": 21, "height": 5, "txHash": "A" * 64,
+            "log": "invalid nonce", "events": [],
+        })
+
+    client = ExchangeClient(gateway_url="http://test-gateway", chain_id=b"\x00" * 32, secret_key=SEED)
+    client._http.close()
+    client._http = httpx.Client(base_url="http://test-gateway", transport=httpx.MockTransport(handler))
+    try:
+        entry = OrderEntry(market=1, side="Buy", price=100, quantity=5)
+        result = client.place_orders([entry, entry])
+        assert result.tx["code"] == 21
+        assert result.orders == []
+    finally:
+        client.close()

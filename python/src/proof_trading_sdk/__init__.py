@@ -145,6 +145,7 @@ from proof_trading_sdk.governance_reads import (
 from proof_trading_sdk.client import Closed, CloseOutcome, ExchangeClient, NothingToClose
 from proof_trading_sdk.order_lists import (  # noqa: F401
     OrderCancellation,
+    OrderListResult,
     OrderPlacement,
     check_order_result,
     order_cancellations,
@@ -298,6 +299,7 @@ __all__ = [
     "Closed",
     "CloseOutcome",
     "NothingToClose",
+    "OrderListResult",
     "OrderPlacement",
     "OrderCancellation",
     "order_placements",

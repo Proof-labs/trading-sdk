@@ -229,6 +229,22 @@ def order_cancellations(response: dict[str, t.Any]) -> list[OrderCancellation]:
     ]
 
 
+E = t.TypeVar("E", "OrderPlacement", "OrderCancellation")
+
+
+@dataclass(frozen=True)
+class OrderListResult(t.Generic[E]):
+    """A list action's ``/exchange`` response and its entries, in order.
+
+    ``tx["code"]`` is non-zero when the engine refused the whole transaction
+    (a stale nonce, for example); ``orders`` is then empty. A refused entry
+    is in ``orders`` and leaves ``tx["code"]`` at 0.
+    """
+
+    tx: dict[str, t.Any]
+    orders: list[E]
+
+
 @dataclass(frozen=True)
 class SentList:
     """What an order-list action sent: the event reporting it and its entry
@@ -269,6 +285,7 @@ def check_order_result(tx_hash: str, events: t.Any, sent: Optional[SentList] = N
 __all__ = [
     "OrderPlacement",
     "OrderCancellation",
+    "OrderListResult",
     "check_order_result",
     "order_placements",
     "order_cancellations",

@@ -70,6 +70,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `CancelClientOrder` on 0x37). Python's list decoder refuses unknown sides,
   times in force and booleans, and resting or executed entries without an
   order id, as Rust and TypeScript do.
+- **Breaking (Python):** the engine's answer is a value, as in TypeScript and
+  Rust. `submit` / `submit_action` return a refused transaction's response
+  with its non-zero `code` instead of raising `EngineError` (a legacy
+  `"<code>: <message>"` body is returned as `{"status": "error", "code", "error"}`).
+  `place_orders` / `cancel_orders` / `cancel_client_orders` return an
+  `OrderListResult` (`tx`, `orders`), so a refused transaction is not an empty
+  list. Exceptions remain for submissions with no engine verdict
+  (`SubmissionPending`, `PreAdmissionRefusal`, transport and auth errors) and
+  for an executed result that does not read (`OrderResultUnreadable`).
 - Close position (`closePosition` in TypeScript, `close_position` in Rust,
   and the new `ExchangeClient.close_position` in Python) reads the account's
   position and sends a reduce-only market order on the opposite side for its
