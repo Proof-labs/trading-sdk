@@ -46,6 +46,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `orders_cancelled`; the retired single-order events still decode from
   history. Needs the wire of exchange#1514.
 
+### Fixed
+
+- Python order results reject malformed or out-of-range integer attributes
+  and non-string order lists as `OrderResultUnreadable`, preserving the
+  executed transaction's hash for reconciliation.
+
 ## [14.1.0] — 2026-11-20
 
 npm only: a MINOR on proof-wire 12.2.0, as 14.0.0: the admin quorum's

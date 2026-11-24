@@ -191,14 +191,77 @@ def test_an_executed_result_that_does_not_read_is_unreadable(answer, action, eve
     assert "do NOT re-submit" in str(raised.value)
 
 
+@pytest.mark.parametrize("value", [
+    4.9, 4, True, False, "-1", "+1", "01", " 1", "1\n", "1.0", "１", "9" * 5000,
+])
+@pytest.mark.parametrize("event, entry, key", [
+    (_placed, RESTING, "price"),
+    (_placed, RESTING, "quantity"),
+    (_placed, EXECUTED, "market"),
+    (_placed, EXECUTED, "order_id"),
+    (_placed, EXECUTED, "client_order_id"),
+    (_placed, EXECUTED, "requested_quantity"),
+    (_placed, EXECUTED, "filled_quantity"),
+    (_placed, REJECTED, "code"),
+    (_cancelled, CANCELLED, "market"),
+    (_cancelled, CANCELLED, "original_quantity"),
+    (_cancelled, CANCELLED, "remaining_quantity"),
+    (_cancelled, CANCELLED, "filled_quantity"),
+    (_cancelled, REFUSED_ID, "order_id"),
+    (_cancelled, REFUSED_CLOID, "client_order_id"),
+    (_cancelled, REFUSED_ID, "code"),
+])
+def test_numeric_order_attributes_never_coerce_invalid_values(answer, event, entry, key, value):
+    with pytest.raises(OrderResultUnreadable) as raised:
+        answer(event({**entry, key: value})).submit(PLACE)
+    assert len(raised.value.tx_hash) == 64
+
+
+@pytest.mark.parametrize("event, entry, key, bits, read", [
+    (_placed, EXECUTED, "market", 32, order_placements),
+    (_placed, REJECTED, "code", 32, order_placements),
+    (_placed, EXECUTED, "order_id", 64, order_placements),
+    (_placed, EXECUTED, "client_order_id", 64, order_placements),
+    (_placed, EXECUTED, "requested_quantity", 64, order_placements),
+    (_placed, EXECUTED, "filled_quantity", 64, order_placements),
+    (_cancelled, CANCELLED, "market", 32, order_cancellations),
+    (_cancelled, REFUSED_ID, "code", 32, order_cancellations),
+    (_cancelled, CANCELLED, "remaining_quantity", 64, order_cancellations),
+    (_cancelled, REFUSED_CLOID, "client_order_id", 64, order_cancellations),
+])
+def test_numeric_order_attributes_preserve_wire_boundaries(answer, event, entry, key, bits, read):
+    for value in (0, (1 << bits) - 1):
+        response = answer(event({**entry, key: str(value)})).submit(PLACE)
+        assert getattr(read(response)[0], key) == value
+    with pytest.raises(OrderResultUnreadable):
+        answer(event({**entry, key: str(1 << bits)})).submit(PLACE)
+
+
+@pytest.mark.parametrize("value", [42, True, None, [], [RESTING], {}, {"orders": []}])
+@pytest.mark.parametrize("kind", ["orders_placed", "orders_cancelled"])
+def test_non_string_order_lists_preserve_the_executed_verdict(answer, kind, value):
+    event = _raw_placed(value)
+    event["type"] = kind
+    event["attributes"].append({"key": "reason", "value": "user_requested"})
+    with pytest.raises(OrderResultUnreadable) as raised:
+        answer(event).submit(PLACE)
+    assert len(raised.value.tx_hash) == 64
+    assert "do NOT re-submit" in str(raised.value)
+
+
 def test_an_unreadable_list_raises_instead_of_returning_entries(answer):
     entry = OrderEntry(market=1, side="Buy", price=100, quantity=5)
     with pytest.raises(OrderResultUnreadable):
         answer(_placed(RESTING, {"outcome": "lost", "market": "1"})).place_orders([entry, entry])
 
 
-def test_a_reconciled_result_that_does_not_read_is_unreadable():
-    raw = _raw_placed("[1]")
+@pytest.mark.parametrize("raw", [
+    _raw_placed("[1]"),
+    _raw_placed(42),
+    _placed({**EXECUTED, "filled_quantity": 4.9}),
+    _cancelled({**CANCELLED, "remaining_quantity": str(1 << 64)}),
+])
+def test_a_reconciled_result_that_does_not_read_is_unreadable(raw):
     evidence = (TransactionEvidenceEvent(type=raw["type"], attributes=tuple(raw["attributes"])),)
     with pytest.raises(OrderResultUnreadable) as raised:
         check_order_result("A" * 64, evidence)

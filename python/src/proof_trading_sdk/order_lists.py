@@ -15,6 +15,7 @@ An outcome is one of :class:`RestingOrder`, :class:`ExecutedOrder` or
 from __future__ import annotations
 
 import json
+import re
 import typing as t
 from dataclasses import dataclass, field
 from typing import Optional
@@ -34,6 +35,8 @@ _TIME_IN_FORCE = {"gtc": TimeInForce.Gtc, "ioc": TimeInForce.Ioc, "fok": TimeInF
 _BOOLS = {"true": True, "false": False}
 _PLACEMENT_OUTCOMES = {o: o for o in ("resting", "executed", "rejected")}
 _CANCEL_OUTCOMES = {o: o for o in ("cancelled", "refused")}
+_U32_MAX = (1 << 32) - 1
+_U64_MAX = (1 << 64) - 1
 
 
 @dataclass(frozen=True)
@@ -114,19 +117,23 @@ OrderCancellation = t.Union[CancelledOrder, RefusedCancel]
 """How one cancel of a ``CancelOrders`` / ``CancelClientOrders`` ended."""
 
 
-def _opt_int(entry: dict[str, t.Any], key: str) -> Optional[int]:
+def _opt_int(
+    entry: dict[str, t.Any], key: str, maximum: int = _U64_MAX
+) -> Optional[int]:
     """An integer attribute; an optional one renders empty when absent."""
     value = entry.get(key)
     if value is None or value == "":
         return None
-    try:
-        return int(value)
-    except (TypeError, ValueError) as e:
-        raise CodecError(f"order result: {key} is not an integer: {value!r}") from e
+    if not isinstance(value, str) or re.fullmatch(r"0|[1-9][0-9]*", value) is None:
+        raise CodecError(f"order result: {key} is not a decimal unsigned integer")
+    # Bound the string before conversion, including Python's integer digit limit.
+    if len(value) > len(str(maximum)) or int(value) > maximum:
+        raise CodecError(f"order result: {key} exceeds {maximum}")
+    return int(value)
 
 
-def _int(entry: dict[str, t.Any], key: str) -> int:
-    value = _opt_int(entry, key)
+def _int(entry: dict[str, t.Any], key: str, maximum: int = _U64_MAX) -> int:
+    value = _opt_int(entry, key, maximum)
     if value is None:
         raise CodecError(f"order result: {key} is missing")
     return value
@@ -163,8 +170,10 @@ def _list_events(events: t.Any) -> list[tuple[str, Optional[str], list[dict[str,
         }
         if "orders" not in values:
             raise CodecError(f"{event_type}: orders is missing")
+        if not isinstance(values["orders"], str):
+            raise CodecError(f"{event_type}: orders is not a JSON string")
         try:
-            entries = json.loads(values["orders"] or "")
+            entries = json.loads(values["orders"])
         except ValueError as e:
             raise CodecError(f"{event_type}: orders is not JSON") from e
         if not isinstance(entries, list) or not all(isinstance(e, dict) for e in entries):
@@ -183,7 +192,7 @@ def _own_entries(events: t.Any, event_type: str) -> Optional[list[dict[str, t.An
 
 
 def _placement(entry: dict[str, t.Any]) -> OrderPlacement:
-    market = _int(entry, "market")
+    market = _int(entry, "market", _U32_MAX)
     client_order_id = _opt_int(entry, "client_order_id")
     outcome = _named(entry, "outcome", _PLACEMENT_OUTCOMES)
     if outcome == "resting":
@@ -207,7 +216,7 @@ def _placement(entry: dict[str, t.Any]) -> OrderPlacement:
             filled_quantity=_int(entry, "filled_quantity"),
             unfilled=entry.get("unfilled") or None,
         )
-    code = _int(entry, "code")
+    code = _int(entry, "code", _U32_MAX)
     return RejectedOrder(
         market=market,
         client_order_id=client_order_id,
@@ -220,13 +229,13 @@ def _cancellation(entry: dict[str, t.Any]) -> OrderCancellation:
     if _named(entry, "outcome", _CANCEL_OUTCOMES) == "cancelled":
         return CancelledOrder(
             order_id=_int(entry, "order_id"),
-            market=_int(entry, "market"),
+            market=_int(entry, "market", _U32_MAX),
             client_order_id=_opt_int(entry, "client_order_id"),
             original_quantity=_int(entry, "original_quantity"),
             remaining_quantity=_int(entry, "remaining_quantity"),
             filled_quantity=_int(entry, "filled_quantity"),
         )
-    code = _int(entry, "code")
+    code = _int(entry, "code", _U32_MAX)
     return RefusedCancel(
         order_id=_opt_int(entry, "order_id"),
         client_order_id=_opt_int(entry, "client_order_id"),
