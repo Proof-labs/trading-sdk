@@ -33,6 +33,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `query_v2` view (`market_snapshot::MarketsSnapshotView`). A record that is
   not a map keyed by field name, or a name that is not a string (a status
   sent as the integer 0, for example), refuses the whole read.
+- Error code 156 `PostOnlyNotResting`: a post-only order that would not rest.
 
 ### Changed
 
@@ -53,12 +54,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Basket legs and account-stream order updates read from `orders_placed` /
   `orders_cancelled`; the retired single-order events still decode from
   history. Needs the wire of exchange#1514.
+- **Breaking (TypeScript):** `orderPlacements`, `orderCancellations`,
+  `placementsOf` and `cancellationsOf` take only the transaction. They read a
+  transaction you submitted; for another, match the event's `owner`.
+- **Breaking (Rust):** `UnfilledReason` is the SDK's own open enum,
+  `Known(<wire reason>)` or `Other(String)`, so a reason newer than the SDK
+  still reads. `PlacementOutcome` and `OrderPlacement` are no longer `Copy`.
+- **Breaking (Rust):** `Error::OrderResultUnreadable` carries only the
+  receipt; the event that did not parse is in `receipt.events`.
+- Pins proof-wire 13.0.0 (exchange 2.28.0).
 
 ### Fixed
 
-- Python order results reject malformed or out-of-range integer attributes
-  and non-string order lists as `OrderResultUnreadable`, preserving the
-  executed transaction's hash for reconciliation.
+- Python order results reject malformed or out-of-range integer attributes,
+  a non-string `unfilled` reason and non-string order lists as
+  `OrderResultUnreadable`, preserving the executed transaction's hash for
+  reconciliation.
 
 ## [14.1.0] — 2026-11-20
 
