@@ -171,20 +171,18 @@ describe("order methods", () => {
   });
 
   it("read a failed basket's legs from orders_placed", () => {
-    const legs = orderPlacements(
-      {
-        ok: false,
-        outcome: "engine",
-        code: 47,
-        error: null,
-        hash: "",
-        events: [
-          placed(
-            '[{"outcome":"rejected","market":"1","client_order_id":"","code":"47"},{"outcome":"rejected","market":"2","client_order_id":"","code":"47"}]',
-          ),
-        ],
-      },
-    );
+    const legs = orderPlacements({
+      ok: false,
+      outcome: "engine",
+      code: 47,
+      error: null,
+      hash: "",
+      events: [
+        placed(
+          '[{"outcome":"rejected","market":"1","client_order_id":"","code":"47"},{"outcome":"rejected","market":"2","client_order_id":"","code":"47"}]',
+        ),
+      ],
+    });
     expect(legs.map((l) => [l.outcome, l.market])).toEqual([
       ["rejected", 1],
       ["rejected", 2],
@@ -237,9 +235,9 @@ describe("pending results reconciled later", () => {
       height: 43,
       hash: pending.tx.hash,
     });
-    expect(
-      placementsOf(delivered),
-    ).toMatchObject([{ outcome: "rejected", code: 12 }]);
+    expect(placementsOf(delivered)).toMatchObject([
+      { outcome: "rejected", code: 12 },
+    ]);
   });
 
   it("report an unreadable result as unreadable, never success", async () => {
