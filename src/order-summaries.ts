@@ -15,8 +15,9 @@ export interface OrderSummaryFilters {
   markets?: readonly number[];
   /** Inclusive lower bound on fill time, Unix epoch milliseconds. */
   fromMs?: number;
-  /** Exclusive upper bound on fill time, Unix epoch milliseconds. Set it when
-   *  paging an account that is still trading: a new fill moves its order. */
+  /** Exclusive upper bound on fill time, Unix epoch milliseconds. A cursor
+   *  walk is pinned to its first page's height, so fills arriving mid-walk
+   *  cannot skip an order. */
   toMs?: number;
   /** Page size, 1 to 5000. */
   limit?: number;
