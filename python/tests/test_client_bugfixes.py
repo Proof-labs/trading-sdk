@@ -15,6 +15,7 @@ import httpx
 import pytest
 
 from proof_trading_sdk.client import ExchangeClient
+from proof_trading_sdk.errors import get_error_name
 from proof_trading_sdk.errors import (
     EngineError,
     GatewayError,
@@ -165,10 +166,9 @@ def test_submit_action_error_string_recovers_leading_engine_code():
             200, json={"status": "error", "error": "12: insufficient margin"}
         )
 
-    with pytest.raises(EngineError) as exc:
-        _client(handler).submit_action(b"\x00")
-    assert exc.value.code == 12
-    assert exc.value.name == "InsufficientMargin"
+    data = _client(handler).submit_action(b"\x00")
+    assert data["code"] == 12
+    assert get_error_name(data["code"]) == "InsufficientMargin"
 
 
 def test_submit_action_legacy_status_ok_without_code_succeeds():
@@ -227,12 +227,11 @@ def test_submit_action_code_zero_still_succeeds():
     assert _client(handler).submit_action(b"\x00")["tx_hash"] == "0xabc"
 
 
-def test_submit_action_nonzero_code_raises_engine_error():
+def test_submit_action_nonzero_code_is_returned_as_a_value():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"code": 12, "message": "insufficient margin"})
 
-    with pytest.raises(EngineError):
-        _client(handler).submit_action(b"\x00")
+    assert _client(handler).submit_action(b"\x00")["code"] == 12
 
 
 def test_env_config_not_clobbered_by_defaults(monkeypatch, tmp_path):
@@ -257,9 +256,7 @@ def test_submit_action_plain_text_error_recovers_engine_code():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, text="12: insufficient margin")
 
-    with pytest.raises(EngineError) as exc:
-        _client(handler).submit_action(b"\x00")
-    assert exc.value.code == 12
+    assert _client(handler).submit_action(b"\x00")["code"] == 12
 
 
 def test_submit_action_json_string_body_does_not_crash():
@@ -267,9 +264,7 @@ def test_submit_action_json_string_body_does_not_crash():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json="12: insufficient margin")
 
-    with pytest.raises(EngineError) as exc:
-        _client(handler).submit_action(b"\x00")
-    assert exc.value.code == 12
+    assert _client(handler).submit_action(b"\x00")["code"] == 12
 
 
 def test_submit_action_bare_error_string_without_code_is_pending():

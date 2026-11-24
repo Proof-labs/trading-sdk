@@ -55,9 +55,13 @@ finally:
 For separate signing and submission, use `envelope = client.sign_action(action)`
 followed by `client.submit_action(envelope)`. `submit_action` accepts signed
 bytes, not an action dictionary. Keep private keys and signed envelopes out of
-logs. A gateway acknowledgement alone is not a final fill. When the outcome is
-uncertain the SDK raises `SubmissionPending` carrying the original transaction
-hash as `tx_hash`; reconcile that hash before retrying.
+logs. A gateway acknowledgement alone is not a final fill. The engine's answer
+is a value: `result["code"]` is 0 when the transaction executed, else its
+`ExecError` code (`pts.get_error_name(code)` names it), and a refused order of
+a list is its entry, not a failed transaction. Exceptions are for submissions
+with no engine verdict: when the outcome is uncertain the SDK raises
+`SubmissionPending` carrying the original transaction hash as `tx_hash`;
+reconcile that hash before retrying.
 
 See the full API at `help(proof_trading_sdk)`.
 
@@ -529,9 +533,11 @@ newer than this package.
 `SetUserMarketLeverage` has a typed builder, but ordinary-account submission is
 unsupported. See [availability](../README.md#setusermarketleverage-availability).
 
-- **Trading:** `PlaceOrder`, `MarketOrder`, `CancelOrder`, `CancelClientOrder`,
-  `CancelAllOrders`, `CancelReplaceOrder`, `AmendOrder`, `ClosePosition`,
-  `AtomicBasketOrder`, `SetPositionTriggers`, `CancelPositionTriggers`,
+- **Trading:** `PlaceOrder`, `PlaceOrders` (of `OrderEntry`s), `MarketOrder`,
+  `CancelOrder`, `CancelOrders`, `CancelClientOrder`, `CancelClientOrders`,
+  `CancelAllOrders`,
+  `CancelReplaceOrder`, `AmendOrder`, `AtomicBasketOrder`,
+  `SetPositionTriggers`, `CancelPositionTriggers`,
   `SetUserMarketLeverage`, `ApproveAgent`, `RevokeAgent`, `CreateSubAccount`,
   `SubAccountTransfer`, `Deposit`, `Withdraw`, `WithdrawRequest`.
 - **Operator (privileged):** `SubmitOracleObservation`, `CreateMarket`, `UpdateMarketFees`,
@@ -551,6 +557,48 @@ propose = actions.ProposeAdminAction(
 )
 action_type, payload = actions.encode_action(propose)
 ```
+
+## Placing and cancelling orders
+
+Orders and cancels go in batches of 1 to `MAX_ORDERS_PER_BATCH` (100) under
+one signature; `place_order`, `cancel_order` and `cancel_client_order` send a
+batch of one and return the same result (`orders[0]` is the outcome). A
+rejected order does not fail the batch. An order is a limit order
+(`OrderEntry(...)`) or a market order (`OrderEntry.market_order(...)`, with an
+optional `worst_price`). Its outcome is a `RestingOrder`, an `ExecutedOrder`
+(`unfilled` says why less than requested filled) or a `RejectedOrder` (`code`,
+`error_name`); a cancel's is a `CancelledOrder` or a `RefusedCancel`. A
+transaction refused as a whole has a non-zero `tx["code"]`, and `orders`
+is `None` whenever there is no executed verdict (refused or not yet executed).
+
+```python
+from proof_trading_sdk import ExecutedOrder, OrderEntry, RejectedOrder, RestingOrder
+
+result = client.place_orders([
+    OrderEntry(market=1, side="Buy", price=66_740_000_000, quantity=50, post_only=True),
+    OrderEntry.market_order(2, "Buy", 10, worst_price=1_510_000_000),
+])
+for order in result.orders:
+    match order:
+        case RestingOrder(order_id=oid, quantity=left):
+            print(oid, left)
+        case ExecutedOrder():
+            print(order.filled_quantity, order.requested_quantity, order.unfilled)
+        case RejectedOrder(code=code, error_name=name):
+            print(code, name)
+```
+
+An executed order whose event does not decode raises `OrderResultUnreadable`
+with its `tx_hash`: reconcile and never re-submit. After `SubmissionPending`,
+check the reconciled transaction with
+`check_order_result(evidence.hash, evidence.events)`. `submit` of a raw order
+action or an `AtomicBasketOrder` returns the response; read its outcomes with
+`order_placements(response)` / `order_cancellations(response)`.
+
+`client.close_position(market)` sends a reduce-only market order against the
+position it reads and returns `Sent(tx, order)` (the close can be a
+`RejectedOrder`: 12 unaffordable, 35 already flat), or `NothingToClose()` on
+a flat account. Batches out of range raise `ValueError` before signing.
 
 ## Position stop-loss / take-profit
 

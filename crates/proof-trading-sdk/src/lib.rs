@@ -19,13 +19,14 @@
 //!
 //! ```
 //! use ed25519_dalek::SigningKey;
-//! use proof_trading_sdk::{codec, crypto, types::{Action, PlaceOrder, Side}};
+//! use proof_trading_sdk::{codec, crypto, types::{Action, PlaceOrder, PlaceOrders, Side}};
 //!
 //! let key = SigningKey::from_bytes(&[7u8; 32]);
 //! let owner = crypto::pubkey_to_owner(&key.verifying_key().to_bytes());
 //! let chain_id = crypto::chain_id_from_string("exchange-devnet-1");
 //!
-//! let action = Action::PlaceOrder(PlaceOrder {
+//! // One order is a `PlaceOrders` (0x35) list of one.
+//! let action = Action::PlaceOrders(PlaceOrders::one(PlaceOrder {
 //!     market: 1,
 //!     owner,
 //!     side: Side::Buy,
@@ -33,7 +34,7 @@
 //!     quantity: 1,           // 1 unit = 10^-sz_decimals of the base asset
 //!     post_only: true,
 //!     ..Default::default()
-//! });
+//! }));
 //!
 //! // `seq` is a wall-clock-millisecond timestamp nonce, one per signature.
 //! // `ExecError` is `Display`, not `std::error::Error`.

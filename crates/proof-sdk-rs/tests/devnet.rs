@@ -20,7 +20,8 @@ use std::time::Duration;
 
 use proof_sdk_rs::{
     actions, AccountEvent, CancelReason, ClientConfig, Event, EventId, ExchangeClient, LocalSigner,
-    Orderbook, Receipt, Side, Subscription, TxStatus, WsClient, WsMessage, WsReceiver,
+    OrderCancellation, OrderPlacement, Orderbook, PlacementOutcome, Receipt, Side, Subscription,
+    TxStatus, WsClient, WsMessage, WsReceiver,
 };
 
 async fn next(rx: &mut WsReceiver) -> WsMessage {
@@ -57,10 +58,10 @@ fn assert_sorted(book: &Orderbook) {
 }
 
 fn order_ids(r: &Receipt) -> Vec<(u64, Option<u64>)> {
-    r.events
+    r.placements()
         .iter()
-        .filter_map(|e| match e {
-            Event::OrderPlaced(p) => Some((p.order_id, p.client_order_id)),
+        .filter_map(|p| match p.outcome {
+            PlacementOutcome::Resting { order_id, .. } => Some((order_id, p.client_order_id)),
             _ => None,
         })
         .collect()
@@ -195,9 +196,7 @@ async fn a_funded_account_trades_and_reconciles() {
     order.client_order_id = Some(77);
 
     // Sign and send apart: an Err from send would leave tx.hash to reconcile.
-    let tx = client
-        .sign(&proof_sdk_rs::Action::PlaceOrder(order.clone()))
-        .unwrap();
+    let tx = client.sign(&actions::place_order(order.clone())).unwrap();
     let TxStatus::Committed(placed) = client.send(&tx).await.unwrap().status else {
         panic!("place did not commit")
     };
@@ -207,7 +206,10 @@ async fn a_funded_account_trades_and_reconciles() {
     };
     let e = next_event(&mut rx).await;
     assert_eq!((e.tx_hash, e.height), (Some(tx.hash), placed.height));
-    assert!(matches!(e.event, Event::OrderPlaced(o) if o.order_id == order_id));
+    assert!(matches!(&e.event, Event::OrdersPlaced(p) if matches!(
+        p.orders.as_slice(),
+        [OrderPlacement { outcome: PlacementOutcome::Resting { order_id: id, .. }, .. }] if *id == order_id
+    )));
     let state = client.info().account_state(me).await.unwrap();
     assert!(state.height >= placed.height && state.balance > 0);
 
@@ -221,7 +223,8 @@ async fn a_funded_account_trades_and_reconciles() {
     let r = replaced.receipt().expect("replace did not commit");
     assert!(r.is_success(), "{r:?}");
     assert!(r.events.iter().any(|e| matches!(e,
-        Event::OrderCancelled(c) if c.order_id == order_id && c.reason == CancelReason::UserRequested)));
+        Event::OrdersCancelled(c) if c.reason == CancelReason::UserRequested
+            && matches!(c.orders.as_slice(), [OrderCancellation::Cancelled { order_id: id, .. }] if *id == order_id))));
     let [(new_id, Some(78))] = order_ids(r)[..] else {
         panic!("{:?}", r.events)
     };

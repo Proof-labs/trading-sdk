@@ -2,6 +2,7 @@
 import { ExchangeClient } from "../client.js";
 import { pacedTransport } from "./pacing.js";
 import { decodeExecError } from "../errors.js";
+import { decodeOrdersEvent } from "../order-lists.js";
 import type { AdminAction, ProposalDisplayInfo, TxResult } from "../types.js";
 
 /** An approved proposal whose action the engine refused with `code`. */
@@ -81,7 +82,19 @@ export function governance(
       });
       refused(approved, `${label}: approve`);
       const status = (await find(id)).statusEffective;
-      if (status.kind === "Executed") return;
+      if (status.kind === "Executed") {
+        // An executed fund order or cancel list can still have refused its entries.
+        const entry = (approved.events ?? [])
+          .flatMap((e) => decodeOrdersEvent(e)?.orders ?? [])
+          .find((o) => o.outcome === "rejected" || o.outcome === "refused");
+        if (entry && "code" in entry) {
+          throw new ProposalFailed(
+            `${label}: proposal ${id} executed but an order entry was refused with code ${entry.code} (${decodeExecError(entry.code)?.name ?? "unknown"})`,
+            entry.code,
+          );
+        }
+        return;
+      }
       if (status.kind === "Failed") {
         throw new ProposalFailed(
           `${label}: proposal ${id} is Failed with code ${status.code} (${decodeExecError(status.code)?.name ?? "unknown"})`,

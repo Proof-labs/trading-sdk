@@ -204,6 +204,7 @@ export enum ExecErrorCode {
   // 143 (UserImAboveNotional) is not named yet; 144-154 are reserved on
   // the wire for the bridge vote errors.
   MarketSettingsChanged = 155,
+  PostOnlyNotResting = 156,
   InternalError = 255,
 }
 
@@ -729,6 +730,11 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "MarketSettingsChanged",
     description:
       "A quorum UpdateMarketFees names a settings sequence its market is not at, as when the settings changed after the proposal was made. Re-read the market's settings_sequence and propose the change again.",
+  },
+  156: {
+    name: "PostOnlyNotResting",
+    description:
+      "A post-only order with IOC or FOK time in force: it may neither take nor rest, so it could never fill.",
   },
   255: { name: "InternalError", description: "unexpected runtime failure" },
 };

@@ -479,7 +479,9 @@ fn load_key_from_fd(fd: i32) -> PyResult<SigningHandle> {
     use std::os::fd::BorrowedFd;
 
     if fd < 0 {
-        return Err(PyValueError::new_err("fd must be a non-negative file descriptor"));
+        return Err(PyValueError::new_err(
+            "fd must be a non-negative file descriptor",
+        ));
     }
     // The caller owns `fd`: read through a duplicate so dropping ours leaves theirs open.
     // SAFETY: the borrow lives only for the `try_clone_to_owned` call, during which

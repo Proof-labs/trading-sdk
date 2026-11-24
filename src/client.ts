@@ -112,7 +112,9 @@ import type {
   Action,
   TxEvent,
   TxResult,
+  CloseOutcome,
   PlaceOrder,
+  OrderEntry,
   MarketOrder,
   AccountInfo,
   HistoryCashFlow,
@@ -170,6 +172,13 @@ import {
   type ExchangeHttpTransport,
 } from "./http-transport.js";
 import { yesOrder, type NoOrder } from "./binary.js";
+import {
+  cancellationsOf,
+  placementsOf,
+  readOrderLists,
+  type CancelOrdersResult,
+  type PlaceOrdersResult,
+} from "./order-lists.js";
 import {
   depositAccount,
   queryDepositAddressAnswer,
@@ -844,9 +853,10 @@ export class ExchangeClient {
     txBytes: Uint8Array,
     action?: Action,
   ): Promise<TxResult> {
-    return this.useGateway
-      ? this.submitViaGateway(txBytes, action)
-      : this.submitViaCometBFT(txBytes, action);
+    const result = this.useGateway
+      ? await this.submitViaGateway(txBytes, action)
+      : await this.submitViaCometBFT(txBytes, action);
+    return readOrderLists(result);
   }
 
   /**
@@ -1086,7 +1096,8 @@ export class ExchangeClient {
     return (
       r.height !== undefined ||
       r.outcome === "engine" ||
-      r.outcome === "transport"
+      r.outcome === "transport" ||
+      r.outcome === "unreadable"
     );
   }
 
@@ -1245,6 +1256,7 @@ export class ExchangeClient {
    * Never resubmits writes. Use setUnsafeFastSubmit(true) to avoid a second poller.
    * `opts.action` labels the confirmation polls with that action's transport
    * priority, as on `submitSignedTx`; it is never checked against the hash.
+   * An executed result whose order events do not decode is `unreadable`.
    */
   async waitForDelivery(
     sync: TxResult,
@@ -1261,7 +1273,7 @@ export class ExchangeClient {
     opts: { timeoutMs?: number; signal?: AbortSignal },
     action?: Action,
   ): Promise<TxResult> {
-    if (this.isFinalResult(sync)) return sync;
+    if (this.isFinalResult(sync)) return readOrderLists(sync);
     if (!sync.hash) throw new Error("submitTx returned no tx hash");
     const timeoutMs = opts.timeoutMs ?? 9_000;
     if (!Number.isFinite(timeoutMs) || timeoutMs < 0)
@@ -1293,7 +1305,7 @@ export class ExchangeClient {
         );
         if (!res.ok) continue;
         const result = txFromQueryResponse(await res.json(), sync.hash);
-        if (!opts.signal?.aborted && result) return result;
+        if (!opts.signal?.aborted && result) return readOrderLists(result);
       } catch {
         /* Read failures leave the write outcome unknown. */
       } finally {
@@ -1332,32 +1344,43 @@ export class ExchangeClient {
   }
 
   /**
-   * Place a limit order for the loaded signer. `owner` is supplied
-   * automatically. Equivalent to
-   * `submitTx({ type: "PlaceOrder", data: { ...params, owner } })`.
+   * Place a limit order for the loaded signer: a `PlaceOrders` batch of one.
+   * Returns `{ tx, orders }` as {@link ExchangeClient.placeOrders}; the
+   * order's outcome is `orders[0]`. The other single-order methods return
+   * the same way.
    * Optional `stopLoss`/`takeProfit` limbs attach a pre-fill bracket that
    * installs on the order's first fill (validated client-side here and in
    * the codec path; encoded as the proof-wire 2.1.0 trailing fields).
    */
-  async placeOrder(params: Omit<PlaceOrder, "owner">): Promise<TxResult> {
+  async placeOrder(
+    params: Omit<PlaceOrder, "owner">,
+  ): Promise<PlaceOrdersResult> {
     validateOrderTriggers(params);
-    return this.submitTx({
+    const owner = this.requireOwner();
+    const tx = await this.submitTx({
       type: "PlaceOrder",
-      data: { ...params, owner: this.requireOwner() },
+      data: { ...params, owner },
     });
+    return { tx, orders: placementsOf(tx) };
   }
 
   /**
-   * Place a market order (crosses immediately) for the loaded signer.
+   * Place a market order (crosses immediately) for the loaded signer: a
+   * `PlaceOrders` of one market entry. Optional `worstPrice` stops the walk
+   * through the book at that price; `reduceOnly` only reduces the position.
    * Optional `stopLoss`/`takeProfit` limbs are validated like
-   * {@link ExchangeClient.placeOrder}.
+   * {@link ExchangeClient.placeOrder}, and the result reads the same way.
    */
-  async marketOrder(params: Omit<MarketOrder, "owner">): Promise<TxResult> {
+  async marketOrder(
+    params: Omit<MarketOrder, "owner">,
+  ): Promise<PlaceOrdersResult> {
     validateOrderTriggers(params);
-    return this.submitTx({
+    const owner = this.requireOwner();
+    const tx = await this.submitTx({
       type: "MarketOrder",
-      data: { ...params, owner: this.requireOwner() },
+      data: { ...params, owner },
     });
+    return { tx, orders: placementsOf(tx) };
   }
 
   /**
@@ -1368,7 +1391,7 @@ export class ExchangeClient {
    * Throws {@link BinaryPriceError} for a No price with no Yes mirror (0 or
    * `$1`).
    */
-  async buyNo(params: Omit<NoOrder, "side">): Promise<TxResult> {
+  async buyNo(params: Omit<NoOrder, "side">): Promise<PlaceOrdersResult> {
     return this.placeOrder(yesOrder({ ...params, side: Side.Buy }));
   }
 
@@ -1377,24 +1400,73 @@ export class ExchangeClient {
    * Selling No that an account holds is a reduce-only Yes buy: pass
    * `reduceOnly: true` to close without flipping. See {@link ExchangeClient.buyNo}.
    */
-  async sellNo(params: Omit<NoOrder, "side">): Promise<TxResult> {
+  async sellNo(params: Omit<NoOrder, "side">): Promise<PlaceOrdersResult> {
     return this.placeOrder(yesOrder({ ...params, side: Side.Sell }));
   }
 
-  /** Cancel a resting order by its engine-assigned order ID. */
-  async cancelOrder(orderId: bigint): Promise<TxResult> {
-    return this.submitTx({
+  /** Cancel a resting order by its engine-assigned order ID: a batch of one,
+   *  read as {@link ExchangeClient.cancelOrders} (`refused` code 2 when no
+   *  such order rests). */
+  async cancelOrder(orderId: bigint): Promise<CancelOrdersResult> {
+    const owner = this.requireOwner();
+    const tx = await this.submitTx({
       type: "CancelOrder",
-      data: { orderId, owner: this.requireOwner() },
+      data: { orderId, owner },
     });
+    return { tx, orders: cancellationsOf(tx) };
   }
 
-  /** Cancel a resting order by the owner-scoped client order ID. */
-  async cancelClientOrder(clientOrderId: bigint): Promise<TxResult> {
-    return this.submitTx({
+  /** Cancel a resting order by the owner-scoped client order ID; read as
+   *  {@link ExchangeClient.cancelOrder}. */
+  async cancelClientOrder(clientOrderId: bigint): Promise<CancelOrdersResult> {
+    const owner = this.requireOwner();
+    const tx = await this.submitTx({
       type: "CancelClientOrder",
-      data: { clientOrderId, owner: this.requireOwner() },
+      data: { clientOrderId, owner },
     });
+    return { tx, orders: cancellationsOf(tx) };
+  }
+
+  /**
+   * Place 1 to `MAX_ORDERS_PER_BATCH` limit or market orders (`kind: "market"`)
+   * for the loaded signer in one batch under one signature (`PlaceOrders`).
+   * Each order stands or is rejected on its own: `tx` succeeds and `orders`
+   * gives each order's outcome in the order sent. `orders` is `null` while
+   * `tx` has no executed verdict; read them later with
+   * `placementsOf(await waitForDelivery(tx))`. An executed `tx` whose
+   * results do not read is `unreadable`: reconcile by hash, never resubmit.
+   */
+  async placeOrders(orders: OrderEntry[]): Promise<PlaceOrdersResult> {
+    const owner = this.requireOwner();
+    const tx = await this.submitTx({
+      type: "PlaceOrders",
+      data: { owner, orders },
+    });
+    return { tx, orders: placementsOf(tx) };
+  }
+
+  /** Cancel 1 to `MAX_ORDERS_PER_BATCH` resting orders by order ID
+   *  (`CancelOrders`); `orders` gives each cancel's outcome in order. */
+  async cancelOrders(orderIds: bigint[]): Promise<CancelOrdersResult> {
+    const owner = this.requireOwner();
+    const tx = await this.submitTx({
+      type: "CancelOrders",
+      data: { owner, orderIds },
+    });
+    return { tx, orders: cancellationsOf(tx) };
+  }
+
+  /** Cancel 1 to `MAX_ORDERS_PER_BATCH` resting orders by client order ID
+   *  (`CancelClientOrders`); `orders` gives each cancel's outcome in order. */
+  async cancelClientOrders(
+    clientOrderIds: bigint[],
+  ): Promise<CancelOrdersResult> {
+    const owner = this.requireOwner();
+    const tx = await this.submitTx({
+      type: "CancelClientOrders",
+      data: { owner, clientOrderIds },
+    });
+    return { tx, orders: cancellationsOf(tx) };
   }
 
   /**
@@ -1444,15 +1516,34 @@ export class ExchangeClient {
   }
 
   /**
-   * Close the loaded signer's entire position on `market` via an
-   * opposite-side IOC order at oracle±spread. Idempotent on an already-flat
-   * position.
+   * Close the loaded signer's entire position on `market`: a reduce-only
+   * market order on the opposite side for the position's size, read first
+   * with {@link ExchangeClient.queryAccount}. A flat account sends nothing
+   * and returns `nothingToClose`. Otherwise it returns `sent` with the
+   * transaction and the close order's outcome: `rejected` with code 35 when
+   * the position went flat before the close ran, 12 when the account cannot
+   * afford it; `order` is `null` without an executed verdict. The size and
+   * `nothingToClose` come from the account read, which can trail a fill made just before; the close never sends more
+   * than the position read.
    */
-  async closePosition(market: number): Promise<TxResult> {
-    return this.submitTx({
-      type: "ClosePosition",
-      data: { market, owner: this.requireOwner() },
+  async closePosition(market: number): Promise<CloseOutcome> {
+    const owner = this.requireOwner();
+    const account = await this.queryAccount();
+    const position = account?.positions.find(
+      (p) => p.market === market && p.size > 0n,
+    );
+    if (!position) return { kind: "nothingToClose" };
+    const tx = await this.submitTx({
+      type: "MarketOrder",
+      data: {
+        market,
+        owner,
+        side: position.side === "Buy" ? Side.Sell : Side.Buy,
+        quantity: position.size,
+        reduceOnly: true,
+      },
     });
+    return { kind: "sent", tx, order: placementsOf(tx)?.[0] ?? null };
   }
 
   /** Atomically replace a complete SL/TP bracket. When `owner` is omitted,

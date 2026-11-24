@@ -79,14 +79,14 @@ async fn main() -> AnyResult<()> {
 
     let placed = client
         .submit_and_wait(
-            &proof_sdk_rs::Action::PlaceOrder(order),
+            &proof_sdk_rs::actions::place_order(order),
             Duration::from_secs(10),
         )
         .await?;
     println!(
-        "placed {}: events={:?} error={:?}",
+        "placed {}: orders={:?} error={:?}",
         placed.tx.hash,
-        placed.receipt().map(|r| &r.events),
+        placed.receipt().map(|r| r.placements()),
         placed.error()
     );
 
