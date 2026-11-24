@@ -32,6 +32,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   one. A rejected order or refused cancel no longer fails the transaction: it
   is its outcome. Single-order calls return the batch result (`{ tx, orders }`
   / `PlaceOrdersResult`; Rust `Submitted::placements`): read `orders[0]`.
+  Code that detects a refused order with `tx.code !== 0` / `code != 0` now
+  misses it: check each order's outcome. A non-zero transaction code remains
+  for a batch refused as a whole (for example an agent without authority for
+  the owner), which applies nothing.
 - **Breaking (Python):** a transaction the engine refused is returned with its
   non-zero `code` instead of raising `EngineError`, as in TypeScript and Rust.
 - **Breaking:** close position reads the position and sends a reduce-only

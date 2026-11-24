@@ -674,6 +674,14 @@ single-order calls send a batch of one and return the same `{ tx, orders }`.
 A rejected order does not fail the batch: each order's outcome is `resting`,
 `executed` (with `requestedQuantity`, `filledQuantity` and the `unfilled`
 reason) or `rejected` with its code; a cancel is `cancelled` or `refused`.
+A non-zero `tx.code` means the batch was refused as a whole before any order
+ran (for example an agent without authority for the owner): nothing applied
+and `orders` is `null`. A batch of 0 or more than 100 orders is refused by the
+SDK before signing. A trading rule (tick, lot, margin,
+reduce-only, market status, unknown order) rejects only its order, in a
+transaction with code 0, so check each outcome, not `tx.code`. An
+`atomicBasketOrder` is all or nothing: a failed leg fails the transaction and
+every leg is reported `rejected` with that code.
 
 ```typescript
 const { tx, orders } = await client.placeOrders([
