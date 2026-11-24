@@ -132,6 +132,16 @@ def _opt_int(
     return int(value)
 
 
+def _opt_str(entry: dict[str, t.Any], key: str) -> Optional[str]:
+    """An optional text attribute: absent or empty is ``None``, any other non-string refuses."""
+    value = entry.get(key)
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str):
+        raise CodecError(f"order result: {key} is not a string")
+    return value
+
+
 def _int(entry: dict[str, t.Any], key: str, maximum: int = _U64_MAX) -> int:
     value = _opt_int(entry, key, maximum)
     if value is None:
@@ -214,7 +224,7 @@ def _placement(entry: dict[str, t.Any]) -> OrderPlacement:
             order_id=_int(entry, "order_id"),
             requested_quantity=_int(entry, "requested_quantity"),
             filled_quantity=_int(entry, "filled_quantity"),
-            unfilled=entry.get("unfilled") or None,
+            unfilled=_opt_str(entry, "unfilled"),
         )
     code = _int(entry, "code", _U32_MAX)
     return RejectedOrder(
@@ -251,13 +261,15 @@ def _cancellation(entry: dict[str, t.Any]) -> OrderCancellation:
 def order_placements(response: dict[str, t.Any]) -> list[OrderPlacement]:
     """Each order's outcome from the response's ``orders_placed`` event, in
     order: the orders of a ``PlaceOrders`` or the legs of an
-    ``AtomicBasketOrder``."""
+    ``AtomicBasketOrder``. Reads a transaction you submitted; for another
+    transaction, match the event's ``owner``."""
     return [_placement(e) for e in _own_entries(response.get("events"), ORDERS_PLACED) or []]
 
 
 def order_cancellations(response: dict[str, t.Any]) -> list[OrderCancellation]:
     """Each cancel's outcome from the response's user-requested
-    ``orders_cancelled`` event, in order."""
+    ``orders_cancelled`` event, in order. Reads a transaction you submitted; for
+    another transaction, match the event's ``owner``."""
     return [
         _cancellation(e) for e in _own_entries(response.get("events"), ORDERS_CANCELLED) or []
     ]

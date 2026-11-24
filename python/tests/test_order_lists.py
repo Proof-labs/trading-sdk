@@ -182,6 +182,8 @@ PLACE = PlaceOrder(market=1, owner=OWNER, side="Buy", price=1, quantity=1)
     (PLACE, [_placed({**RESTING, "post_only": "1"})]),
     (PLACE, [_placed({**RESTING, "time_in_force": "day"})]),
     (PLACE, [_placed({k: v for k, v in RESTING.items() if k != "order_id"})]),
+    (PLACE, [_placed({**EXECUTED, "unfilled": 3})]),
+    (PLACE, [_placed({**EXECUTED, "unfilled": ["no_liquidity"]})]),
     (CancelOrder(order_id=42, owner=OWNER), [_cancelled({"outcome": "refused", "order_id": "42"})]),
     (CancelOrder(order_id=42, owner=OWNER), [_cancelled({"outcome": "refused", "code": "2"})]),
 ])
@@ -279,6 +281,13 @@ def test_place_orders_takes_market_entries(answer):
         "executed", 4, 4,
     )
     assert filled.unfilled is None
+
+
+def test_an_unfilled_reason_newer_than_the_sdk_still_reads(answer):
+    [filled] = order_placements(
+        answer(_placed({**EXECUTED, "unfilled": "queue_full"})).submit(PLACE)
+    )
+    assert (filled.unfilled, filled.filled_quantity) == ("queue_full", 2)
 
 
 def test_basket_legs_read_from_orders_placed(answer):
