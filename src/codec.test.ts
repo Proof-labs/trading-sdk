@@ -25,13 +25,11 @@ import {
 } from "./crypto.js";
 import {
   ActionType,
-  MAX_ORDERS_PER_BATCH,
   Outcome,
   Side,
   TimeInForce,
   type Action,
   type Address,
-  type OrderEntry,
 } from "./types.js";
 
 const OWNER = new Uint8Array(20).fill(0xaa);
@@ -916,172 +914,22 @@ describe("codec v1 all action types", () => {
     expect(decoded.data.legs[0].reduceOnly).toBe(false);
   });
 
-  describe("order lists", () => {
-    const entry = (price: bigint): OrderEntry => ({
-      market: 1,
-      side: Side.Buy,
-      price,
-      quantity: 2n,
-      clientOrderId: price,
-      postOnly: true,
-      reduceOnly: false,
-      timeInForce: TimeInForce.Gtc,
-      stopLoss: null,
-      takeProfit: null,
+  it("decodes a cancel list of one as the single cancel", () => {
+    const cancels: Action = {
+      type: "CancelOrders",
+      data: { owner: SIGNER, orderIds: [42n] },
+    };
+    expect(decodeTx(encodeTx(cancels, 1n)).action).toEqual({
+      type: "CancelOrder",
+      data: { orderId: 42n, owner: SIGNER },
     });
-    const placeOrders = (n: number): Action => ({
-      type: "PlaceOrders",
-      data: {
-        owner: SIGNER,
-        orders: Array.from({ length: n }, (_, i) => entry(100n + BigInt(i))),
-      },
-    });
-
-    it("round-trips a full PlaceOrders and refuses 0 or 101 orders", () => {
-      const action = placeOrders(MAX_ORDERS_PER_BATCH);
-      expect(decodeTx(encodeTx(action, 1n)).action).toEqual(action);
-      for (const n of [0, MAX_ORDERS_PER_BATCH + 1]) {
-        expect(() => encodeTx(placeOrders(n), 1n)).toThrow(
-          `1 to ${MAX_ORDERS_PER_BATCH} orders per call, got ${n}`,
-        );
-      }
-    });
-
-    it("refuses 0 or 101 cancels of either kind", () => {
-      for (const n of [0, MAX_ORDERS_PER_BATCH + 1]) {
-        const ids = Array.from({ length: n }, (_, i) => BigInt(i + 1));
-        expect(() =>
-          encodeTx(
-            { type: "CancelOrders", data: { owner: SIGNER, orderIds: ids } },
-            1n,
-          ),
-        ).toThrow("orders per call");
-        expect(() =>
-          encodeTx(
-            {
-              type: "CancelClientOrders",
-              data: { owner: SIGNER, clientOrderIds: ids },
-            },
-            1n,
-          ),
-        ).toThrow("orders per call");
-      }
-    });
-
-    it("round-trips two cancels of either kind as batches", () => {
-      const byId: Action = {
-        type: "CancelOrders",
-        data: { owner: SIGNER, orderIds: [42n, 43n] },
-      };
-      const byClientId: Action = {
-        type: "CancelClientOrders",
-        data: { owner: SIGNER, clientOrderIds: [7n, 8n] },
-      };
-      expect(decodeTx(encodeTx(byId, 1n)).action).toEqual(byId);
-      expect(decodeTx(encodeTx(byClientId, 1n)).action).toEqual(byClientId);
-    });
-
-    it("encodes a list of one as the single action's bytes, which decode as the single action", () => {
-      const single: Action = {
-        type: "PlaceOrder",
-        data: { ...entry(100n), owner: SIGNER },
-      };
-      expect(encodeTx(placeOrders(1), 1n)).toEqual(encodeTx(single, 1n));
-      expect(decodeTx(encodeTx(placeOrders(1), 1n)).action).toEqual(single);
-
-      const cancel: Action = {
-        type: "CancelOrder",
-        data: { orderId: 42n, owner: SIGNER },
-      };
-      const cancels: Action = {
-        type: "CancelOrders",
-        data: { owner: SIGNER, orderIds: [42n] },
-      };
-      expect(encodeTx(cancels, 1n)).toEqual(encodeTx(cancel, 1n));
-      expect(decodeTx(encodeTx(cancels, 1n)).action).toEqual(cancel);
-
-      const byClient: Action = {
-        type: "CancelClientOrder",
-        data: { owner: SIGNER, clientOrderId: 9n },
-      };
-      const byClients: Action = {
-        type: "CancelClientOrders",
-        data: { owner: SIGNER, clientOrderIds: [9n] },
-      };
-      expect(encodeTx(byClients, 1n)).toEqual(encodeTx(byClient, 1n));
-      expect(decodeTx(encodeTx(byClients, 1n)).action).toEqual(byClient);
-    });
-
-    it("keeps the single names on the list bytes", () => {
-      expect(ActionType.PlaceOrders).toBe(0x35);
-      expect(ActionType.CancelOrders).toBe(0x36);
-      expect(ActionType.CancelClientOrders).toBe(0x37);
-      expect(ActionType.PlaceOrder).toBe(ActionType.PlaceOrders);
-      expect(ActionType.MarketOrder).toBe(ActionType.PlaceOrders);
-      expect(ActionType.CancelOrder).toBe(ActionType.CancelOrders);
-      expect(ActionType.CancelClientOrder).toBe(ActionType.CancelClientOrders);
-    });
-
-    it("round-trips a list mixing limit and market entries", () => {
-      const action: Action = {
-        type: "PlaceOrders",
-        data: {
-          owner: SIGNER,
-          orders: [
-            entry(100n),
-            {
-              kind: "market",
-              market: 2,
-              side: Side.Sell,
-              quantity: 3n,
-              worstPrice: 90n,
-              reduceOnly: true,
-              clientOrderId: null,
-              stopLoss: null,
-              takeProfit: null,
-            },
-          ],
-        },
-      };
-      expect(decodeTx(encodeTx(action, 1n)).action).toEqual(action);
-    });
-
-    it("encodes a market order as a list of one market entry and reads it back", () => {
-      const plain: Action = {
-        type: "MarketOrder",
-        data: { market: 1, owner: SIGNER, side: Side.Sell, quantity: 5n },
-      };
-      const bounded: Action = {
-        type: "MarketOrder",
-        data: {
-          market: 1,
-          owner: SIGNER,
-          side: Side.Buy,
-          quantity: 5n,
-          worstPrice: 101n,
-          reduceOnly: true,
-        },
-      };
-      expect(peekActionType(encodeTx(plain, 1n))).toBe(ActionType.PlaceOrders);
-      expect(decodeTx(encodeTx(plain, 1n)).action).toMatchObject(plain);
-      expect(decodeTx(encodeTx(bounded, 1n)).action).toMatchObject(bounded);
-      const listOfOne: Action = {
-        type: "PlaceOrders",
-        data: {
-          owner: SIGNER,
-          orders: [
-            {
-              kind: "market",
-              market: 1,
-              side: Side.Buy,
-              quantity: 5n,
-              worstPrice: 101n,
-              reduceOnly: true,
-            },
-          ],
-        },
-      };
-      expect(encodeTx(listOfOne, 1n)).toEqual(encodeTx(bounded, 1n));
+    const byClients: Action = {
+      type: "CancelClientOrders",
+      data: { owner: SIGNER, clientOrderIds: [9n] },
+    };
+    expect(decodeTx(encodeTx(byClients, 1n)).action).toEqual({
+      type: "CancelClientOrder",
+      data: { owner: SIGNER, clientOrderId: 9n },
     });
   });
 

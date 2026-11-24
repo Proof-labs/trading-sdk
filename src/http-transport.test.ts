@@ -5,7 +5,6 @@ import { surfaceFor } from "./http-transport.js";
 import {
   ExchangeClient,
   Side,
-  bytesToHex,
   exchangeHttpPriorityForAction,
   fetchChainId,
   getPublicKey,
@@ -31,41 +30,6 @@ const place: Action = {
   },
 };
 const cancel: Action = { type: "CancelOrder", data: { orderId: 7n, owner } };
-
-/** The list event an executed `place` (it rested) or `cancel` reports. */
-function listEvent(action: Action) {
-  const cancelled = action.type === "CancelOrder";
-  const entry = cancelled
-    ? {
-        outcome: "cancelled",
-        order_id: "7",
-        market: "3",
-        client_order_id: "",
-        original_quantity: "400",
-        remaining_quantity: "400",
-        filled_quantity: "0",
-      }
-    : {
-        outcome: "resting",
-        market: "3",
-        client_order_id: "",
-        order_id: "7",
-        side: "buy",
-        price: "78451952",
-        quantity: "400",
-        time_in_force: "gtc",
-        post_only: "false",
-        reduce_only: "false",
-      };
-  return {
-    type: cancelled ? "orders_cancelled" : "orders_placed",
-    attributes: [
-      { key: "owner", value: bytesToHex(owner) },
-      ...(cancelled ? [{ key: "reason", value: "user_requested" }] : []),
-      { key: "orders", value: JSON.stringify([entry]) },
-    ],
-  };
-}
 
 const json = (value: unknown, status = 200) =>
   new Response(JSON.stringify(value), { status });
@@ -272,12 +236,7 @@ describe("ExchangeClient httpTransport", () => {
           : json({
               result: {
                 height: "43",
-                tx_result: {
-                  code: 0,
-                  log: "",
-                  info: "",
-                  events: [listEvent(action)],
-                },
+                tx_result: { code: 0, log: "", info: "" },
               },
             }),
       );

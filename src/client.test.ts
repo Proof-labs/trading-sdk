@@ -527,29 +527,6 @@ describe("ExchangeClient submitTx gateway path", () => {
     return c;
   }
 
-  /** The `orders_placed` an executed single order reports: it rested. */
-  function restingOrder(client: ExchangeClient) {
-    const resting = {
-      outcome: "resting",
-      market: "1",
-      client_order_id: "",
-      order_id: "7",
-      side: "buy",
-      price: "100000000",
-      quantity: "1",
-      time_in_force: "gtc",
-      post_only: "false",
-      reduce_only: "false",
-    };
-    return {
-      type: "orders_placed",
-      attributes: [
-        { key: "owner", value: bytesToHex(client.getAddress()!) },
-        { key: "orders", value: JSON.stringify([resting]) },
-      ],
-    };
-  }
-
   /** A minimal valid order, so the tests read as being about the response. */
   function placeOrder(client: ExchangeClient): Action {
     return {
@@ -585,7 +562,7 @@ describe("ExchangeClient submitTx gateway path", () => {
           txHash: sent,
           code: 0,
           height: 4821903,
-          events: [restingOrder(client)],
+          events: [{ type: "order_placed", attributes: [] }],
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
@@ -691,7 +668,7 @@ describe("ExchangeClient submitTx gateway path", () => {
               tx_result: {
                 code: 0,
                 log: "",
-                events: [restingOrder(client)],
+                events: [{ type: "order_placed", attributes: [] }],
               },
             },
           }),
@@ -1029,7 +1006,7 @@ describe("ExchangeClient submitTx gateway path", () => {
           JSON.stringify({
             result: {
               height: "77",
-              tx_result: { code: 0, log: "", events: [restingOrder(client)] },
+              tx_result: { code: 0, log: "", events: [] },
             },
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
@@ -1349,11 +1326,7 @@ describe("ExchangeClient submitTx gateway path", () => {
         new Response(
           JSON.stringify({
             result: {
-              tx_result: {
-                code: 0,
-                log: "",
-                events: [{ type: "proof.test" }, restingOrder(client)],
-              },
+              tx_result: { code: 0, log: "", events: [{ type: "proof.test" }] },
               height: "202",
             },
           }),

@@ -343,7 +343,6 @@ export {
   orderCancellations,
   orderPlacements,
   placementsOf,
-  type CancelOrderResult,
   type CancelOrdersResult,
   type CancelTarget,
   type OrderCancellation,
@@ -351,7 +350,6 @@ export {
   type OrderPlacement,
   type OrdersCancelledEvent,
   type OrdersPlacedEvent,
-  type PlaceOrderResult,
   type PlaceOrdersResult,
   type UnfilledReason,
 } from "./order-lists.js";

@@ -7,7 +7,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ExchangeClient,
   Side,
-  bytesToHex,
   decodeTx,
   getPublicKey,
   pubkeyToOwner,
@@ -23,28 +22,6 @@ const place: Action = {
   data: { owner, market: 3, side: Side.Buy, price: 1_000_000n, quantity: 1n },
 };
 const cancel: Action = { type: "CancelOrder", data: { owner, orderId: 42n } };
-/** What an executed `cancel` reports: order 42 left the book. */
-const cancelled = {
-  type: "orders_cancelled",
-  attributes: [
-    { key: "owner", value: bytesToHex(owner) },
-    { key: "reason", value: "user_requested" },
-    {
-      key: "orders",
-      value: JSON.stringify([
-        {
-          outcome: "cancelled",
-          order_id: "42",
-          market: "3",
-          client_order_id: "",
-          original_quantity: "1",
-          remaining_quantity: "1",
-          filled_quantity: "0",
-        },
-      ]),
-    },
-  ],
-};
 
 function client(transport?: ExchangeHttpTransport): ExchangeClient {
   const c = new ExchangeClient({
@@ -139,9 +116,7 @@ describe("byte-level sends carry the action's transport priority", () => {
 
   it("waitForDelivery polls a cancellation's confirmation as urgent", async () => {
     const { contexts, transport } = recording([
-      json({
-        result: { height: "11", tx_result: { code: 0, events: [cancelled] } },
-      }),
+      json({ result: { height: "11", tx_result: { code: 0, events: [] } } }),
     ]);
     const c = client(transport);
     const result = await c.waitForDelivery(
@@ -170,9 +145,7 @@ describe("byte-level sends carry the action's transport priority", () => {
           JSON.stringify({ status: "pending", error: "park deadline" }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         ),
-      json({
-        result: { height: "12", tx_result: { code: 0, events: [cancelled] } },
-      }),
+      json({ result: { height: "12", tx_result: { code: 0, events: [] } } }),
     ]);
     const c = client(transport);
     const result = await c.submitSignedTxCommit(await c.signTx(cancel), {

@@ -122,12 +122,13 @@ if (FAUCET_TOKEN && account && account.balance > 0n) {
   const orderPrice = 50_000_000_000n; // $50,000.00 in micro-USDC (6 dp)
   info(`  Placing bid: market=1  side=Buy  price=$${fmt(orderPrice)}  qty=1`);
 
-  const { tx, order } = await client.placeOrder({
+  const { tx, orders } = await client.placeOrder({
     market: 1,
     side: Side.Buy,
     price: orderPrice,
     quantity: 1n,
   });
+  const order = orders?.[0];
   info(
     `  Result: code=${tx.code}  height=${tx.height ?? "?"}  hash=${tx.hash}`,
   );

@@ -15,7 +15,6 @@ import { txUnreadable } from "./tx-result.js";
 import {
   Side,
   TimeInForce,
-  type Action,
   type Address,
   type CancelReason,
   type TxResult,
@@ -131,20 +130,6 @@ export interface PlaceOrdersResult {
 export interface CancelOrdersResult {
   tx: TxResult;
   orders: OrderCancellation[] | null;
-}
-
-/** What a single order call did: the transaction, and the order's outcome.
- *  `order` is `null` when `tx` has no executed verdict: read `tx`. */
-export interface PlaceOrderResult {
-  tx: TxResult;
-  order: OrderPlacement | null;
-}
-
-/** What a single cancel did. `cancellation` is `null` when `tx` has no
- *  executed verdict: read `tx`. */
-export interface CancelOrderResult {
-  tx: TxResult;
-  cancellation: OrderCancellation | null;
 }
 
 /** Executed in a block with code 0, so its order events are its result. */
@@ -321,58 +306,14 @@ export function orderCancellations(
   return event?.type === "OrdersCancelled" ? event.orders : [];
 }
 
-/** What an order action sent: the event that reports it and how many
- *  orders. A single order or cancel is a batch of one. */
-interface SentList {
-  event: OrdersEvent["type"];
-  entries: number;
-  owner: Address;
-}
-
-function sentList(action: Action): SentList | null {
-  const list = (
-    event: SentList["event"],
-    entries: number,
-    owner: Address,
-  ): SentList => ({ event, entries, owner });
-  switch (action.type) {
-    case "PlaceOrder":
-    case "MarketOrder":
-      return list("OrdersPlaced", 1, action.data.owner);
-    case "CancelOrder":
-    case "CancelClientOrder":
-      return list("OrdersCancelled", 1, action.data.owner);
-    case "PlaceOrders":
-      return list("OrdersPlaced", action.data.orders.length, action.data.owner);
-    case "CancelOrders":
-      return list(
-        "OrdersCancelled",
-        action.data.orderIds.length,
-        action.data.owner,
-      );
-    case "CancelClientOrders":
-      return list(
-        "OrdersCancelled",
-        action.data.clientOrderIds.length,
-        action.data.owner,
-      );
-    default:
-      return null;
-  }
-}
-
 /**
- * Check an executed code-0 transaction's order results. Every order action is
- * a batch, a single order a batch of one, so a rejected order is reported in
- * {@link orderPlacements} / {@link orderCancellations} and never fails the
- * transaction.
- *
- * An order event that does not read, or (when `action` says what was sent) a
- * missing event or one with the wrong number of orders, returns `unreadable`:
- * the transaction executed, so it is never reported as success and never
- * resubmitted. Every other result passes through.
+ * Check an executed code-0 transaction's order events. A rejected order is
+ * reported in {@link orderPlacements} / {@link orderCancellations} and never
+ * fails the transaction; an order event that does not decode returns
+ * `unreadable`: the transaction executed, so it is never reported as success
+ * and never resubmitted. Every other result passes through.
  */
-export function readOrderLists(tx: TxResult, action?: Action): TxResult {
+export function readOrderLists(tx: TxResult): TxResult {
   // A CheckTx acceptance carries no height or events: nothing executed yet.
   if (
     tx.outcome !== "ok" ||
@@ -380,29 +321,13 @@ export function readOrderLists(tx: TxResult, action?: Action): TxResult {
   ) {
     return tx;
   }
-  const sent = action ? sentList(action) : null;
-  let events: OrdersEvent[];
   try {
-    events = listEvents(tx, sent?.owner);
+    listEvents(tx);
   } catch (err) {
     const why = err instanceof Error ? err.message : String(err);
     return txUnreadable(
       tx,
       `order results unreadable (${why}); reconcile by hash`,
-    );
-  }
-  if (!sent) return tx;
-  const entries =
-    sent.event === "OrdersPlaced"
-      ? events.find((e) => e.type === "OrdersPlaced")?.orders
-      : events.find(
-          (e) => e.type === "OrdersCancelled" && e.reason === "user_requested",
-        )?.orders;
-  if (entries?.length !== sent.entries) {
-    const read = entries ? `${entries.length} reported` : "no order event";
-    return txUnreadable(
-      tx,
-      `order results unreadable (${sent.entries} sent, ${read}); reconcile by hash`,
     );
   }
   return tx;

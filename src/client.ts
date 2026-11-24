@@ -170,9 +170,7 @@ import {
   cancellationsOf,
   placementsOf,
   readOrderLists,
-  type CancelOrderResult,
   type CancelOrdersResult,
-  type PlaceOrderResult,
   type PlaceOrdersResult,
 } from "./order-lists.js";
 import {
@@ -825,9 +823,8 @@ export class ExchangeClient {
    *
    * `opts.action` is the action the bytes carry, when the caller knows it.
    * It only labels the transport requests (the submission and its
-   * confirmation polls) so a cancellation keeps its `urgent` priority, and
-   * checks the result has one outcome per order sent, as `submitTx` does; it is never encoded, sent or checked
-   * against the bytes.
+   * confirmation polls) so a cancellation keeps its `urgent` priority; it is
+   * never encoded, sent or checked against the bytes.
    */
   async submitSignedTx(
     txBytes: Uint8Array,
@@ -853,7 +850,7 @@ export class ExchangeClient {
     const result = this.useGateway
       ? await this.submitViaGateway(txBytes, action)
       : await this.submitViaCometBFT(txBytes, action);
-    return readOrderLists(result, action);
+    return readOrderLists(result);
   }
 
   /**
@@ -1253,9 +1250,7 @@ export class ExchangeClient {
    * Never resubmits writes. Use setUnsafeFastSubmit(true) to avoid a second poller.
    * `opts.action` labels the confirmation polls with that action's transport
    * priority, as on `submitSignedTx`; it is never checked against the hash.
-   * The executed result is read as `submitTx` reads it: rejected orders are
-   * reported in their results, and results that do not read return
-   * `unreadable`.
+   * An executed result whose order events do not decode is `unreadable`.
    */
   async waitForDelivery(
     sync: TxResult,
@@ -1272,7 +1267,7 @@ export class ExchangeClient {
     opts: { timeoutMs?: number; signal?: AbortSignal },
     action?: Action,
   ): Promise<TxResult> {
-    if (this.isFinalResult(sync)) return readOrderLists(sync, action);
+    if (this.isFinalResult(sync)) return readOrderLists(sync);
     if (!sync.hash) throw new Error("submitTx returned no tx hash");
     const timeoutMs = opts.timeoutMs ?? 9_000;
     if (!Number.isFinite(timeoutMs) || timeoutMs < 0)
@@ -1304,8 +1299,7 @@ export class ExchangeClient {
         );
         if (!res.ok) continue;
         const result = txFromQueryResponse(await res.json(), sync.hash);
-        if (!opts.signal?.aborted && result)
-          return readOrderLists(result, action);
+        if (!opts.signal?.aborted && result) return readOrderLists(result);
       } catch {
         /* Read failures leave the write outcome unknown. */
       } finally {
@@ -1345,25 +1339,23 @@ export class ExchangeClient {
 
   /**
    * Place a limit order for the loaded signer: a `PlaceOrders` batch of one.
-   * Returns the transaction and the order's outcome (`resting`, `executed`
-   * or `rejected` with its code); a rejected order does not fail `tx`.
-   * `order` is `null` when `tx` has no executed verdict (pending, refused as
-   * a whole, or `unreadable`: reconcile by hash, never resubmit). The other
-   * single-order methods return the same way.
+   * Returns `{ tx, orders }` as {@link ExchangeClient.placeOrders}; the
+   * order's outcome is `orders[0]`. The other single-order methods return
+   * the same way.
    * Optional `stopLoss`/`takeProfit` limbs attach a pre-fill bracket that
    * installs on the order's first fill (validated client-side here and in
    * the codec path; encoded as the proof-wire 2.1.0 trailing fields).
    */
   async placeOrder(
     params: Omit<PlaceOrder, "owner">,
-  ): Promise<PlaceOrderResult> {
+  ): Promise<PlaceOrdersResult> {
     validateOrderTriggers(params);
     const owner = this.requireOwner();
     const tx = await this.submitTx({
       type: "PlaceOrder",
       data: { ...params, owner },
     });
-    return { tx, order: placementsOf(tx, owner)?.[0] ?? null };
+    return { tx, orders: placementsOf(tx, owner) };
   }
 
   /**
@@ -1375,14 +1367,14 @@ export class ExchangeClient {
    */
   async marketOrder(
     params: Omit<MarketOrder, "owner">,
-  ): Promise<PlaceOrderResult> {
+  ): Promise<PlaceOrdersResult> {
     validateOrderTriggers(params);
     const owner = this.requireOwner();
     const tx = await this.submitTx({
       type: "MarketOrder",
       data: { ...params, owner },
     });
-    return { tx, order: placementsOf(tx, owner)?.[0] ?? null };
+    return { tx, orders: placementsOf(tx, owner) };
   }
 
   /**
@@ -1393,7 +1385,7 @@ export class ExchangeClient {
    * Throws {@link BinaryPriceError} for a No price with no Yes mirror (0 or
    * `$1`).
    */
-  async buyNo(params: Omit<NoOrder, "side">): Promise<PlaceOrderResult> {
+  async buyNo(params: Omit<NoOrder, "side">): Promise<PlaceOrdersResult> {
     return this.placeOrder(yesOrder({ ...params, side: Side.Buy }));
   }
 
@@ -1402,31 +1394,31 @@ export class ExchangeClient {
    * Selling No that an account holds is a reduce-only Yes buy: pass
    * `reduceOnly: true` to close without flipping. See {@link ExchangeClient.buyNo}.
    */
-  async sellNo(params: Omit<NoOrder, "side">): Promise<PlaceOrderResult> {
+  async sellNo(params: Omit<NoOrder, "side">): Promise<PlaceOrdersResult> {
     return this.placeOrder(yesOrder({ ...params, side: Side.Sell }));
   }
 
-  /** Cancel a resting order by its engine-assigned order ID: a batch of one.
-   *  `cancellation` says whether it left the book or was `refused` (code 2
-   *  when no such order rests); `null` without an executed verdict. */
-  async cancelOrder(orderId: bigint): Promise<CancelOrderResult> {
+  /** Cancel a resting order by its engine-assigned order ID: a batch of one,
+   *  read as {@link ExchangeClient.cancelOrders} (`refused` code 2 when no
+   *  such order rests). */
+  async cancelOrder(orderId: bigint): Promise<CancelOrdersResult> {
     const owner = this.requireOwner();
     const tx = await this.submitTx({
       type: "CancelOrder",
       data: { orderId, owner },
     });
-    return { tx, cancellation: cancellationsOf(tx, owner)?.[0] ?? null };
+    return { tx, orders: cancellationsOf(tx, owner) };
   }
 
   /** Cancel a resting order by the owner-scoped client order ID; read as
    *  {@link ExchangeClient.cancelOrder}. */
-  async cancelClientOrder(clientOrderId: bigint): Promise<CancelOrderResult> {
+  async cancelClientOrder(clientOrderId: bigint): Promise<CancelOrdersResult> {
     const owner = this.requireOwner();
     const tx = await this.submitTx({
       type: "CancelClientOrder",
       data: { clientOrderId, owner },
     });
-    return { tx, cancellation: cancellationsOf(tx, owner)?.[0] ?? null };
+    return { tx, orders: cancellationsOf(tx, owner) };
   }
 
   /**
@@ -1444,10 +1436,7 @@ export class ExchangeClient {
       type: "PlaceOrders",
       data: { owner, orders },
     });
-    return {
-      tx,
-      orders: placementsOf(tx, owner),
-    };
+    return { tx, orders: placementsOf(tx, owner) };
   }
 
   /** Cancel 1 to `MAX_ORDERS_PER_BATCH` resting orders by order ID
@@ -1458,10 +1447,7 @@ export class ExchangeClient {
       type: "CancelOrders",
       data: { owner, orderIds },
     });
-    return {
-      tx,
-      orders: cancellationsOf(tx, owner),
-    };
+    return { tx, orders: cancellationsOf(tx, owner) };
   }
 
   /** Cancel 1 to `MAX_ORDERS_PER_BATCH` resting orders by client order ID
@@ -1474,10 +1460,7 @@ export class ExchangeClient {
       type: "CancelClientOrders",
       data: { owner, clientOrderIds },
     });
-    return {
-      tx,
-      orders: cancellationsOf(tx, owner),
-    };
+    return { tx, orders: cancellationsOf(tx, owner) };
   }
 
   /**
@@ -1533,8 +1516,8 @@ export class ExchangeClient {
    * and returns `nothingToClose`. Otherwise it returns `sent` with the
    * transaction and the close order's outcome: `rejected` with code 35 when
    * the position went flat before the close ran, 12 when the account cannot
-   * afford it; `order` is `null` without an executed verdict. The size and `nothingToClose` come from the account
-   * read, which can trail a fill made just before; the close never sends more
+   * afford it; `order` is `null` without an executed verdict. The size and
+   * `nothingToClose` come from the account read, which can trail a fill made just before; the close never sends more
    * than the position read.
    */
   async closePosition(market: number): Promise<CloseOutcome> {
