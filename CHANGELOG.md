@@ -9,6 +9,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **TypeScript:** `ExchangeClient.queryOrderSummaries(address?, filters)` reads
+  `GET /v1/history/order-summaries/{owner}`: the owner's fills grouped into one
+  row per order (`OrderSummary`: order id, market, side, filled quantity,
+  average price, notional, fees, first/last fill time, fill count), filtered by
+  a market list (`markets`, at most 200), `fromMs`/`toMs` and an opaque cursor.
+  `orderSummarySearchParams` and `decodeOrderSummaryPage` are exported.
 - **Rust core:** `market_snapshot::decode_snapshot_view` decodes a complete
   `GET /v2/markets-snapshot` body, bound to a chain, into proof-wire's
   `query_v2` view (`market_snapshot::MarketsSnapshotView`). A record that is
