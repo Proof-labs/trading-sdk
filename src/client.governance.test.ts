@@ -55,10 +55,14 @@ describe("ExchangeClient governance reads (W30-11)", () => {
     expect(got.oracle.map((a) => Buffer.from(a).toString("hex"))).toEqual([
       "6601e832953d30318b7d1f36386a241b59b7d2d7",
     ]);
-    expect(got.cexComposite).toEqual([]);
     expect(got.custody).toEqual([]);
     expect(got.marketParams).toEqual([]);
-    expect(got.scheduledOps).toEqual([]);
+    expect(Object.keys(got).sort()).toEqual([
+      "custody",
+      "marketParams",
+      "oracle",
+      "relayer",
+    ]);
   });
 
   it("queryAuthorities fails closed on a snapshot that is not six sets", async () => {

@@ -1095,16 +1095,13 @@ export interface CancelAllOrdersForAccount {
 
 /** One operator-authority allowlist an `UpdateAuthoritySet` action targets.
  *  Externally tagged on the wire, so the domain arrives as this bare
- *  string, never a numeric discriminant. `Custody`/`MarketParams`/
- *  `ScheduledOps` are the capability-split sets; `Oracle`/`CexComposite`/
- *  `Relayer` are the genesis-seeded presence sets. */
-export type AuthorityDomain =
-  | "Oracle"
-  | "CexComposite"
-  | "Relayer"
-  | "Custody"
-  | "MarketParams"
-  | "ScheduledOps";
+ *  string, never a numeric discriminant. `Custody`/`MarketParams` are the
+ *  capability sets; `Oracle`/`Relayer` are the genesis-seeded presence sets. */
+export type AuthorityDomain = "Oracle" | "Relayer" | "Custody" | "MarketParams";
+
+/** A retired authority list. The engine refuses any change naming one; the
+ *  names still decode from historical proposals. */
+export type RetiredAuthorityDomain = "CexComposite" | "ScheduledOps";
 
 /**
  * Governance addition/removal of members in one privileged authorization
@@ -1383,8 +1380,18 @@ export type RetiredAdminAction = {
   value: RetiredTriggerMarketConfig;
 };
 
+/** An `UpdateAuthoritySet` naming a retired list: still decodable from
+ * historical proposals, never submittable. */
+export type RetiredAuthoritySetUpdate = {
+  kind: "UpdateAuthoritySet";
+  value: Omit<UpdateAuthoritySet, "domain"> & {
+    domain: RetiredAuthorityDomain;
+  };
+};
+
 /** Historical proposals may contain retired actions; these cannot be submitted. */
-export type DecodedAdminAction = AdminAction | RetiredAdminAction;
+export type DecodedAdminAction =
+  AdminAction | RetiredAdminAction | RetiredAuthoritySetUpdate;
 
 /** Authenticated relay attestation, not a cryptographic provider-proof verifier.
  * Price and confidence are integers in the policy's normalized micro unit. */
@@ -1553,18 +1560,16 @@ export interface AdminSignerRegistry {
 
 /**
  * The engine's privileged authorization sets, as read from
- * `GET /v1/admin/authorities` (engine `AuthoritiesSnapshot`, field order
- * relayer, oracle, cex_composite, custody, market_params, scheduled_ops).
- * Each is a list of 20-byte addresses. An empty list is a real chain state:
- * no signer holds that authority.
+ * `GET /v1/admin/authorities`. Each is a list of 20-byte addresses. An empty
+ * list is a real chain state: no signer holds that authority. The engine's
+ * response still carries the retired composite-feeder and
+ * scheduled-operations slots, always empty; they are decoded and dropped.
  */
 export interface AuthoritiesSnapshot {
   relayer: Address[];
   oracle: Address[];
-  cexComposite: Address[];
   custody: Address[];
   marketParams: Address[];
-  scheduledOps: Address[];
 }
 
 /** Why a pending proposal expired. */

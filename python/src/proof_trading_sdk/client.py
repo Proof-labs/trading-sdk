@@ -1098,7 +1098,7 @@ class ExchangeClient:
         return result
 
     def authorities(self) -> AuthoritiesSnapshot:
-        """Read the six operator-authority sets. HTTP/decode failures remain errors.
+        """Read the four live operator-authority sets. HTTP/decode failures remain errors.
 
         Addresses are 20-byte values. These are gateway-reported membership
         facts, without a witness or proof of action authorization.

@@ -412,27 +412,32 @@ export function decodeAdminSignerRegistry(
   };
 }
 
+// The engine's six slots in wire order; `null` marks a retired list, which is
+// decoded (so a malformed slot still fails) and then dropped.
 const AUTHORITIES_FIELDS = [
   "relayer",
   "oracle",
-  "cexComposite",
+  null,
   "custody",
   "marketParams",
-  "scheduledOps",
+  null,
 ] as const;
 
 /**
  * Decode the engine's six-field `AuthoritiesSnapshot`. Fails closed on any
  * other shape: a partially decoded set would present a missing authority as
- * an empty one.
+ * an empty one. The retired composite-feeder and scheduled-operations slots
+ * are validated and dropped.
  */
 export function decodeAuthoritiesSnapshot(raw: unknown): AuthoritiesSnapshot {
   const fields = toTuple(raw, "authorities", AUTHORITIES_FIELDS.length);
   const out = {} as AuthoritiesSnapshot;
   AUTHORITIES_FIELDS.forEach((name, i) => {
-    out[name] = toArray(fields[i], `authorities.${name}`).map((a, j) =>
-      toBytes(a, `authorities.${name}[${j}]`, ADDRESS_LEN),
+    const label = name ?? `retired[${i}]`;
+    const addresses = toArray(fields[i], `authorities.${label}`).map((a, j) =>
+      toBytes(a, `authorities.${label}[${j}]`, ADDRESS_LEN),
     );
+    if (name !== null) out[name] = addresses;
   });
   return out;
 }

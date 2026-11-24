@@ -20,6 +20,7 @@ import {
   type DecodedAction,
   type DecodedAdminAction,
   type RetiredAdminAction,
+  type RetiredAuthoritySetUpdate,
   type CreateMarket,
   type SubmitOracleObservation,
   type ConfigureOraclePolicy,
@@ -528,7 +529,7 @@ function decodedAdminActionsNarrowWithoutCasts(
     const current: AdminAction = decoded;
     void current;
   } else {
-    const retired: RetiredAdminAction = decoded;
+    const retired: RetiredAdminAction | RetiredAuthoritySetUpdate = decoded;
     // @ts-expect-error the rejected branch is a retired action
     const submit: AdminAction = decoded;
     void retired;

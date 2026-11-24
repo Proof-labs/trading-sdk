@@ -7,6 +7,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking, TypeScript and Python:** the authorities read no longer exposes the retired
+  composite-feeder and scheduled-operations lists. `AuthoritiesSnapshot` carries
+  `relayer`, `oracle`, `custody` and `marketParams` (`market_params` in Python);
+  the engine's six-slot response is still checked in full and the two retired
+  slots are dropped. `AuthorityDomain` no longer offers `CexComposite` or
+  `ScheduledOps`; an `UpdateAuthoritySet` naming either decodes as
+  `RetiredAuthoritySetUpdate` and `isSubmittableAdminAction` rejects it. The
+  wire format is unchanged.
+
 ### Added
 
 - **TypeScript:** `ExchangeClient.queryOrderSummaries(address?, filters)` reads

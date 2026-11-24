@@ -122,6 +122,8 @@ export {
   type RetiredTriggerMarketConfig,
   type DecodedAdminAction,
   type RetiredAdminAction,
+  type RetiredAuthorityDomain,
+  type RetiredAuthoritySetUpdate,
   type DecodedAction,
   type SetOracleGuards,
   type FundInsuranceFund,
