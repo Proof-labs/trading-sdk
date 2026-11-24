@@ -12,8 +12,9 @@ use std::str::FromStr;
 
 use proof_trading_sdk::gateway::{TxAttribute, TxEvent};
 use proof_trading_sdk::types::ConversionFallbackReason as WireFallbackReason;
+use proof_trading_sdk::types::UnfilledReason as WireUnfilledReason;
 use proof_trading_sdk::types::{
-    CancelTarget, EventId, MarketId, OrderId, Outcome, Side, TimeInForce, UnfilledReason,
+    CancelTarget, EventId, MarketId, OrderId, Outcome, Side, TimeInForce,
 };
 
 use crate::address::Address;
@@ -111,7 +112,7 @@ pub struct OrdersPlaced {
 }
 
 /// How one order of an [`OrdersPlaced`] ended.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OrderPlacement {
     pub market: MarketId,
     pub client_order_id: Option<u64>,
@@ -119,7 +120,7 @@ pub struct OrderPlacement {
 }
 
 /// What became of one placed order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PlacementOutcome {
     /// Accepted, with `quantity` left resting on the book.
     Resting {
@@ -143,6 +144,37 @@ pub enum PlacementOutcome {
     /// Refused; it wrote nothing. Read from the code alone, as
     /// [`OrderRejected::error`] is.
     Rejected(EngineError),
+}
+
+/// Why an executed order filled less than it asked for. Advisory: the
+/// quantities are the result, so a reason newer than this SDK still reads.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum UnfilledReason {
+    /// A reason the engine's wire names.
+    Known(WireUnfilledReason),
+    /// A reason this version does not name, as the engine wrote it.
+    Other(String),
+}
+
+impl From<&str> for UnfilledReason {
+    fn from(s: &str) -> Self {
+        use WireUnfilledReason as W;
+        // Matched against the wire's own spellings, so the two can't drift.
+        [W::ReduceOnlyCap, W::SelfTrade, W::NoLiquidity, W::MarginCap]
+            .into_iter()
+            .find(|w| w.to_string() == s)
+            .map_or_else(|| Self::Other(s.to_owned()), Self::Known)
+    }
+}
+
+impl fmt::Display for UnfilledReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Known(w) => w.fmt(f),
+            Self::Other(s) => f.write_str(s),
+        }
+    }
 }
 
 /// `orders_cancelled`: one per cancel action or cause and owner.
@@ -681,7 +713,7 @@ fn placement(a: &Attrs<'_>) -> Option<OrderPlacement> {
             filled_quantity: a.u64("filled_quantity")?,
             unfilled: match a.str("unfilled") {
                 None | Some("") => None,
-                Some(reason) => Some(unfilled_reason(reason)?),
+                Some(reason) => Some(UnfilledReason::from(reason)),
             },
         },
         "rejected" => PlacementOutcome::Rejected(EngineError::new(a.parse("code")?, None)),
@@ -692,14 +724,6 @@ fn placement(a: &Attrs<'_>) -> Option<OrderPlacement> {
         client_order_id: a.client_order_id("client_order_id")?,
         outcome,
     })
-}
-
-/// Matched against the wire's own spellings, so the two can't drift.
-fn unfilled_reason(s: &str) -> Option<UnfilledReason> {
-    use UnfilledReason as U;
-    [U::ReduceOnlyCap, U::SelfTrade, U::NoLiquidity, U::MarginCap]
-        .into_iter()
-        .find(|u| u.to_string() == s)
 }
 
 fn orders_cancelled(a: &Attrs<'_>) -> Option<OrdersCancelled> {
@@ -1023,7 +1047,7 @@ mod tests {
                         order_id: 10,
                         requested_quantity: 6,
                         filled_quantity: 4,
-                        unfilled: Some(UnfilledReason::NoLiquidity),
+                        unfilled: Some(UnfilledReason::Known(WireUnfilledReason::NoLiquidity)),
                     },
                 },
                 OrderPlacement {
@@ -1078,12 +1102,26 @@ mod tests {
         };
         assert_eq!((c.reason, c.orders.len()), (CancelReason::Expired, 1));
 
+        // A reason newer than this SDK is kept as written; the quantities still read.
+        let newer = json!({"owner": MAKER, "orders": r#"[{"outcome":"executed","market":"1","client_order_id":"","order_id":"10","requested_quantity":"3","filled_quantity":"1","unfilled":"queue_full"}]"#});
+        let Event::OrdersPlaced(p) = kind_of("orders_placed", &newer) else {
+            panic!("an unknown unfilled reason must still read")
+        };
+        assert_eq!(
+            p.orders[0].outcome,
+            PlacementOutcome::Executed {
+                order_id: 10,
+                requested_quantity: 3,
+                filled_quantity: 1,
+                unfilled: Some(UnfilledReason::Other("queue_full".into())),
+            }
+        );
+
         for bad in [
             r#"[{"outcome":"resting","market":"1","client_order_id":""}]"#,
             r#"[{"outcome":"queued","market":"1","client_order_id":""}]"#,
             r#"[{"outcome":"executed","market":1,"client_order_id":"","order_id":"10","requested_quantity":"1","filled_quantity":"1","unfilled":""}]"#,
             r#"[{"outcome":"executed","market":"1","client_order_id":"","order_id":"10"}]"#,
-            r#"[{"outcome":"executed","market":"1","client_order_id":"","order_id":"10","requested_quantity":"1","filled_quantity":"0","unfilled":"queue_full"}]"#,
             "not json",
         ] {
             let placed = json!({"owner": MAKER, "orders": bad});

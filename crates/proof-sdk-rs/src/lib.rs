@@ -74,7 +74,7 @@ pub use event::{
     EventResolved, Fill, FundingSettled, MarketOrderProcessed, OrderAmended, OrderCancellation,
     OrderCancelled, OrderPlaced, OrderPlacement, OrderRejected, OrdersCancelled, OrdersPlaced,
     PlacementOutcome, PositionClosed, PositionTriggersInvalidated, PositionUpdated,
-    PredictionSettled, TriggerInvalidation,
+    PredictionSettled, TriggerInvalidation, UnfilledReason,
 };
 pub use exchange::{
     CloseOutcome, EngineError, ExchangeClient, Receipt, RefusalReason, SignedTx, Submitted,
@@ -110,8 +110,7 @@ pub use proof_trading_sdk::types::{
     Action, AtomicBasketLeg, CancelClientOrders, CancelOrders, CancelReplaceOrder, CancelTarget,
     ClientTriggerGroupId, ClientTriggerId, EventId, EventInfo, FundingRate, MarketConfig, MarketId,
     Order, OrderEntry, OrderId, OrderKind, Outcome, PlaceOrder, PlaceOrders, Position,
-    PositionEpoch, Side, TimeInForce, TriggerLimb, TriggerSlippageBps, UnfilledReason,
-    WithdrawalStatus,
+    PositionEpoch, Side, TimeInForce, TriggerLimb, TriggerSlippageBps, WithdrawalStatus,
 };
 
 /// Most orders one batch (`PlaceOrders`, `CancelOrders`,

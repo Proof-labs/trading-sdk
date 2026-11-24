@@ -124,8 +124,22 @@ impl Receipt {
         self.error.is_none()
     }
 
+    /// The kind of the first order event that did not parse, if any.
+    #[must_use]
+    pub fn malformed_order_event(&self) -> Option<&str> {
+        self.events.iter().find_map(|e| match e {
+            Event::Malformed(raw)
+                if raw.kind == "orders_placed" || raw.kind == "orders_cancelled" =>
+            {
+                Some(raw.kind.as_str())
+            }
+            _ => None,
+        })
+    }
+
     /// What each order of a `PlaceOrders` did, in the order sent; empty when
-    /// the transaction placed none.
+    /// the transaction placed none. Reads a transaction you submitted; for
+    /// another transaction, match [`OrdersPlaced::owner`](crate::OrdersPlaced::owner) in `events`.
     #[must_use]
     pub fn placements(&self) -> &[OrderPlacement] {
         self.events
@@ -138,7 +152,9 @@ impl Receipt {
     }
 
     /// What each entry of a `CancelOrders` or `CancelClientOrders` did, in
-    /// the order sent; empty when the transaction requested no cancel.
+    /// the order sent; empty when the transaction requested no cancel. Reads a
+    /// transaction you submitted; for another transaction, match
+    /// [`OrdersCancelled::owner`](crate::OrdersCancelled::owner) in `events`.
     #[must_use]
     pub fn cancellations(&self) -> &[OrderCancellation] {
         self.events
@@ -159,22 +175,12 @@ impl Receipt {
 /// [`Error::OrderResultUnreadable`]: the transaction executed, so it is never
 /// read as success or re-signed.
 fn read_order_lists(receipt: Receipt) -> Result<Receipt> {
-    if receipt.error.is_some() {
-        return Ok(receipt);
-    }
-    let malformed = receipt.events.iter().find_map(|e| match e {
-        Event::Malformed(raw) if raw.kind == "orders_placed" || raw.kind == "orders_cancelled" => {
-            Some(raw.kind.clone())
-        }
-        _ => None,
-    });
-    match malformed {
-        Some(kind) => Err(Error::OrderResultUnreadable {
+    if receipt.error.is_none() && receipt.malformed_order_event().is_some() {
+        return Err(Error::OrderResultUnreadable {
             receipt: Box::new(receipt),
-            reason: format!("its {kind} event does not parse"),
-        }),
-        None => Ok(receipt),
+        });
     }
+    Ok(receipt)
 }
 
 /// The reduce-only market entry flattening a position held on `side` for
@@ -1152,10 +1158,10 @@ mod tests {
             owner: Address([1; 20]),
             orders: outcomes
                 .iter()
-                .map(|&outcome| OrderPlacement {
+                .map(|outcome| OrderPlacement {
                     market: 1,
                     client_order_id: None,
-                    outcome,
+                    outcome: outcome.clone(),
                 })
                 .collect(),
         })
@@ -1199,11 +1205,13 @@ mod tests {
             order_id: 4,
             requested_quantity: 5,
             filled_quantity: 0,
-            unfilled: Some(proof_trading_sdk::types::UnfilledReason::NoLiquidity),
+            unfilled: Some(crate::UnfilledReason::Known(
+                proof_trading_sdk::types::UnfilledReason::NoLiquidity,
+            )),
         };
         let margin = PlacementOutcome::Rejected(EngineError::new(12, None));
         // Nothing filled is still an executed order, not an error.
-        let list = read(vec![placed(&[no_liquidity, margin])]).unwrap();
+        let list = read(vec![placed(&[no_liquidity, margin.clone()])]).unwrap();
         assert!(list.is_success());
         assert_eq!(list.placements()[1].outcome, margin);
 
@@ -1238,7 +1246,7 @@ mod tests {
             receipt
                 .placements()
                 .iter()
-                .map(|p| p.outcome)
+                .map(|p| p.outcome.clone())
                 .collect::<Vec<_>>(),
             [executed(3), executed(4)]
         );
@@ -1261,7 +1269,7 @@ mod tests {
         let margin = EngineError::new(12, None);
         let one = committed(vec![placed(&[PlacementOutcome::Rejected(margin)])]);
         assert_eq!(
-            one.placements().map(|p| p[0].outcome),
+            one.placements().map(|p| p[0].outcome.clone()),
             Some(PlacementOutcome::Rejected(margin))
         );
         assert_eq!(one.cancellations(), Some(&[][..]));

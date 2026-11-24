@@ -72,10 +72,7 @@ pub enum Error {
     /// `orders_cancelled` event did not parse. What each order did is
     /// unknown. Not a rejection: reconcile `receipt.hash` (open orders,
     /// fills) and never sign the action again.
-    OrderResultUnreadable {
-        receipt: Box<Receipt>,
-        reason: String,
-    },
+    OrderResultUnreadable { receipt: Box<Receipt> },
     /// A core transport failure with no closer match above (a hash mismatch,
     /// a rejected option), as the core reported it.
     Gateway(GatewayError),
@@ -107,11 +104,13 @@ impl fmt::Display for Error {
             Error::Unconfirmed { tx, source } => {
                 write!(f, "{} may have landed: {source}", tx.hash)
             }
-            Error::OrderResultUnreadable { receipt, reason } => write!(
+            Error::OrderResultUnreadable { receipt } => write!(
                 f,
-                "{} executed at height {} but its order result did not read ({reason}); \
+                "{} executed at height {} but its {} event did not parse; \
                  reconcile by hash, do not sign it again",
-                receipt.hash, receipt.height
+                receipt.hash,
+                receipt.height,
+                receipt.malformed_order_event().unwrap_or("order")
             ),
             Error::Gateway(e) => write!(f, "gateway: {e}"),
         }
