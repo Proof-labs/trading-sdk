@@ -201,6 +201,9 @@ export enum ExecErrorCode {
   AccountPositionCapReached = 140,
   SubAccountCapReached = 141,
   WorkCapReached = 142,
+  // 143 (UserImAboveNotional) is not named yet; 144-154 are reserved on
+  // the wire for the bridge vote errors.
+  MarketSettingsChanged = 155,
   InternalError = 255,
 }
 
@@ -721,6 +724,11 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "WorkCapReached",
     description:
       "A chain-wide bound on consensus work is full (resting orders, live positions, markets or sub-accounts); the log names which. Retry once capacity frees.",
+  },
+  155: {
+    name: "MarketSettingsChanged",
+    description:
+      "A quorum UpdateMarketFees names a settings sequence its market is not at, as when the settings changed after the proposal was made. Re-read the market's settings_sequence and propose the change again.",
   },
   255: { name: "InternalError", description: "unexpected runtime failure" },
 };

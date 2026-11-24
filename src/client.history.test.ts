@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ExchangeClient } from "./client.js";
 import type { HistoryPositionsPage } from "./index.js";
@@ -22,6 +23,88 @@ const position = {
 };
 
 describe("position history pages", () => {
+  it("decodes bucketed multi-market pages without dropping ties, nulls or cursor filters", async () => {
+    const fixture = JSON.parse(
+      readFileSync(
+        new URL("../conformance/positions-history.json", import.meta.url),
+        "utf8",
+      ),
+    );
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(json(fixture.pages[0]))
+      .mockResolvedValueOnce(json(fixture.pages[1]));
+    vi.stubGlobal("fetch", fetch);
+    const c = client();
+    const opts = {
+      fromMs: fixture.from_ms,
+      toMs: fixture.to_ms,
+      interval: fixture.interval,
+      limit: 2,
+    };
+    const first = await c.queryHistoryPositionsPage(owner, opts);
+    const last = await c.queryHistoryPositionsPage(owner, {
+      ...opts,
+      cursor: first.nextCursor,
+    });
+    const rows = [...first.positions, ...last.positions];
+    expect(rows.map((row) => [row.market, row.blockHeight])).toEqual([
+      [2, 200],
+      [1, 200],
+      [1, 100],
+    ]);
+    expect(rows[0]).toMatchObject({ side: null, entryPrice: null, size: "0" });
+    expect(rows[1]).toMatchObject({
+      entryPrice: "9007199254740993.000000",
+      blockTime: "2026-04-19T01:45:00.123456Z",
+    });
+    expect(last.nextCursor).toBe("");
+    expect(
+      Object.fromEntries(new URL(fetch.mock.calls[1][0]).searchParams),
+    ).toEqual({
+      from: String(fixture.from_ms),
+      to: String(fixture.to_ms),
+      interval: "1h",
+      limit: "2",
+      cursor: "opaque+/=frontier",
+    });
+  });
+
+  it.each([
+    "1s",
+    "90s",
+    "15m",
+    "1h",
+    "365d",
+    "8760h",
+    "525600m",
+    "31536000s",
+    "0001h",
+  ])("accepts canonical interval %s", async (interval) => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(json({ positions: [], next_cursor: "" }));
+    vi.stubGlobal("fetch", fetch);
+    await client().queryHistoryPositionsPage(owner, {
+      interval,
+      fromMs: 0,
+      toMs: 1000,
+    });
+    expect(new URL(fetch.mock.calls[0][0]).searchParams.get("interval")).toBe(
+      interval,
+    );
+  });
+
+  it.each(["invalid_interval", "invalid_cursor", "cursor_mismatch"])(
+    "propagates server interval/page rejection %s",
+    async (error) => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json({ error }, 400)));
+      await expect(
+        client().queryHistoryPositionsPage(owner, { interval: "1s" }),
+      ).rejects.toThrow(error);
+    },
+  );
+
   it("preserves prices, exact block time, null close fields and the opaque cursor", async () => {
     const fetch = vi
       .fn()
@@ -162,11 +245,52 @@ describe("position history pages", () => {
     );
   });
 
+  it("sends interval only when set, keeping the other filters", async () => {
+    const fetch = vi
+      .fn()
+      .mockImplementation(async () => json({ positions: [], next_cursor: "" }));
+    vi.stubGlobal("fetch", fetch);
+    const c = client();
+    await c.queryHistoryPositionsPage(owner, {
+      fromMs: 1000,
+      toMs: 3000,
+      interval: "15m",
+      cursor: "next",
+    });
+    await c.queryHistoryPositions(owner, { interval: "1d" });
+    await c.queryHistoryPositionsPage(owner, { fromMs: 1000 });
+    const [bucketed, array, raw] = fetch.mock.calls.map(
+      ([u]) => new URL(u as string),
+    );
+    expect(Object.fromEntries(bucketed.searchParams)).toEqual({
+      from: "1000",
+      to: "3000",
+      interval: "15m",
+      cursor: "next",
+    });
+    expect(array.searchParams.get("interval")).toBe("1d");
+    expect(raw.searchParams.has("interval")).toBe(false);
+    expect(raw.search).toBe("?from=1000");
+  });
+
   it.each([
     { limit: 0 },
     { limit: 5001 },
     { market: -1 },
     { fromMs: 2, toMs: 1 },
+    { interval: "" },
+    { interval: "0m" },
+    { interval: "15" },
+    { interval: "1w" },
+    { interval: "1.5h" },
+    { interval: "-1h" },
+    { interval: "366d" },
+    { interval: "8761h" },
+    { interval: "525601m" },
+    { interval: "31536001s" },
+    { interval: "999999999999999999999999999s" },
+    { interval: "1h\n" },
+    { interval: "1h\r" },
   ])("rejects invalid filters before fetching", async (opts) => {
     const fetch = vi.fn();
     vi.stubGlobal("fetch", fetch);

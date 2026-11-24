@@ -158,6 +158,9 @@ BUILDERS = {
     "cancel_orders/two_orders": _cancel_orders,
     "cancel_client_orders/one": _cancel_client_orders,
     "cancel_client_orders/two_orders": _cancel_client_orders,
+    "propose_admin_action/update_market_fees": lambda i: actions.ProposeAdminAction(
+        **_admin(i, "proposer")
+    ),
 }
 
 

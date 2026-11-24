@@ -106,6 +106,69 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   gone; `actions::market_order` returns `Action`; `PlacementOutcome::Executed`
   gained fields.
 
+## [14.1.0] — 2026-11-20
+
+npm only: a MINOR on proof-wire 12.2.0, as 14.0.0: the admin quorum's
+`UpdateMarketFees`, `MarketView.settingsSequence`, code 155 and the positions
+history `interval`. `MarketView` gains the required `settingsSequence`, which
+breaks code that builds a `MarketView` by hand; it ships in 14.1.0 by decision
+rather than in a MAJOR. The Rust core entry above stays under [Unreleased].
+
+### Added
+
+- **Positions history `interval`, all three SDKs:** a bucket width for
+  `GET /v1/history/positions` (indexer `/v1/positions?interval=`, the values
+  `/v1/portfolio` takes: a positive count and `s`, `m`, `h` or `d`, up to
+  365 days, e.g. `15m`). With it the indexer serves, per market, the last snapshot in each
+  epoch-aligned bucket of `[from, to)`; row shape and ordering are unchanged.
+  The interval read defaults to the last 24 hours and permits at most
+  5,000 whole bucket widths. Keep the interval and filters with each cursor;
+  use explicit bounds for a stable window across pages.
+  Omitted, the query string is unchanged. Needs an indexer with
+  Proof-labs/indexer#449; an older one refuses the parameter.
+  - **TypeScript:** `interval?: string` on `queryHistoryPositionsPage` and
+    `queryHistoryPositions`; a malformed value throws before fetching.
+  - **Rust (`proof-sdk-rs`):** `InfoClient::position_history_by_interval` with
+    `HistoryInterval` (`count` of `IntervalUnit`; `FIFTEEN_MINUTES`,
+    `ONE_HOUR`, `ONE_DAY`). Zero or widths above 365 days are
+    `Error::InvalidInput`.
+  - **Python:** keywords `interval`, `from_ms`, `to_ms` and `market` on
+    `ExchangeClient.history_positions`; invalid inputs raise `ValueError`
+    before fetching.
+- **All SDKs:** the admin quorum's `UpdateMarketFees` (inner tag 35), which
+  changes a live market's settings. A `ProposeAdminAction` carries
+  `QuorumUpdateMarketFees`: `predecessor`, the market's settings sequence
+  (`MarketSettingsSequence`) when proposed, and `change`, a
+  `MarketSettingsChange` (the `UpdateMarketFees` fields without `signer`).
+  The engine refuses the proposal with code 155 unless `predecessor` is the
+  market's current sequence, and fails it with 155 at execution if another
+  settings change landed in between.
+  - TypeScript (MINOR): `AdminAction` gains the `UpdateMarketFees` variant,
+    with the `QuorumUpdateMarketFees` and `MarketSettingsChange` types, and a
+    tag-35 proposal reads back under that kind in `decodeAdminAction`,
+    `decodeProposalDisplayInfo` and `decodeProposalPage`. An exhaustive
+    `switch` on `action.kind` (one that assigns the remainder to `never`) or
+    a `Record<AdminAction["kind"], …>` table needs a new entry.
+  - Rust: the crate re-exports proof-wire's `market_settings`, and
+    `governance` re-exports `QuorumUpdateMarketFees`, `MarketSettingsChange`
+    and `MarketSettingsSequence`.
+  - Python: `ProposeAdminAction` takes it in the wire form,
+    `{"UpdateMarketFees": {"predecessor": 0, "change": {"market": 1, …}}}`.
+  - Every SDK builds the engine's frozen proposal
+    (`crates/spec/golden-vectors/propose_update_market_fees.hex`, DevNet BTC's
+    open-interest cap to 35,000 at sequence 0) byte for byte and decodes it
+    back.
+- **TypeScript:** `MarketView.settingsSequence`, the version 2 `Market`
+  view's `settings_sequence`: the settings changes recorded for the market,
+  and the `predecessor` a quorum `UpdateMarketFees` names. It reads 0 for a
+  market with none, and from a node that does not serve the field. In Rust it
+  is `settings_sequence` on proof-wire's `query_v2::Market`. `MarketView`
+  gains it as a required field, which breaks code that builds a `MarketView`
+  by hand (a mock or fixture): it must add the field.
+- Error code 155 `MarketSettingsChanged` (proof-wire 12.2.0): a quorum
+  `UpdateMarketFees` names a settings sequence its market is not at. Named in
+  Rust, TypeScript and Python.
+
 ## [14.0.0] — 2026-11-20
 
 npm only: a MAJOR for exchange 2.27.0 (proof-wire 12.2.0). Code 35 is renamed

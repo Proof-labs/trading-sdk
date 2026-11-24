@@ -82,9 +82,9 @@ pub use exchange::{
 };
 pub use history::{
     AccountEventsQuery, BboCandle, Candle, CandlePage, CandleQuery, CandleResolution, CandleUnit,
-    Conversion, Decimal, FundingPayment, HistoryEvent, HistoryFill, HistoryPage, HistoryQuery,
-    OrderHistoryQuery, PositionSnapshot, Resolution, ResolutionOutcome, ResolutionsQuery,
-    SnapshotPosition, SortOrder, TriggerHistoryEvent,
+    Conversion, Decimal, FundingPayment, HistoryEvent, HistoryFill, HistoryInterval, HistoryPage,
+    HistoryQuery, IntervalUnit, OrderHistoryQuery, PositionSnapshot, Resolution, ResolutionOutcome,
+    ResolutionsQuery, SnapshotPosition, SortOrder, TriggerHistoryEvent,
 };
 pub use ids::{IndexerEventId, SubAccountId, TriggerGroupId, TriggerLimbId};
 pub use info::{

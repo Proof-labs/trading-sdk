@@ -259,6 +259,7 @@ export const ACTION_TAG_BY_KIND: Record<DecodedAdminAction["kind"], number> = {
   VoidEvent: 29,
   SettleEvent: 30,
   SetMarketStatus: 31,
+  UpdateMarketFees: 35,
   ScheduleUpgrade: 14,
   CancelUpgrade: 15,
   SetWithdrawalLimit: 19,

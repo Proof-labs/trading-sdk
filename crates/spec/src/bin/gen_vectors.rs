@@ -845,6 +845,50 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "action": { "SetMarketStatus": { "market": 7u32, "status": "ReduceOnly" } }
             }),
         ),
+        // UpdateMarketFees (inner tag 0x23), a live market's settings change
+        // through the admin quorum: every field of the change holds its own
+        // value, so a binding that puts one in another field's slot changes
+        // the bytes. The engine's frozen proposal, with every field but the
+        // open-interest cap empty, is golden-vectors/propose_update_market_fees.hex.
+        codec_case(
+            "propose_admin_action/update_market_fees",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": { "UpdateMarketFees": {
+                    "predecessor": 22u64,
+                    "change": {
+                        "market": 7u32,
+                        "taker_fee_bps": 1u32,
+                        "maker_fee_bps": 2u32,
+                        "max_funding_rate_bps": 3u32,
+                        "funding_interval_ms": 4u64,
+                        "max_position_size": 5u64,
+                        "default_ttl_ms": 6u64,
+                        "net_delta_margin": true,
+                        "tick_size": 8u64,
+                        "lot_size": 9u64,
+                        "primary_oracle_signer": vec![0x0Au8; 20],
+                        "oracle_staleness_ms": 11u64,
+                        "mark_source_mode": "Median",
+                        "max_mark_spread_bps": 13u32,
+                        "cex_composite_staleness_ms": 14u64,
+                        "fee_tiers": [{
+                            "min_30d_volume_micro_usdc": 0u64,
+                            "maker_fee_tenth_bps": -15i16,
+                            "taker_fee_tenth_bps": 15i16
+                        }],
+                        "im_bps": 16u32,
+                        "mm_bps": 17u32,
+                        "max_open_interest": 18u64,
+                        "impact_notional": 19u64,
+                        "funding_dead_band_bps": 20u32,
+                        "funding_interest_rate": -21i32
+                    }
+                } }
+            }),
+        ),
         codec_case(
             "approve_admin_action/rotate_registry",
             APPROVE_ADMIN_ACTION,

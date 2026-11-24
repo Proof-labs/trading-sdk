@@ -183,6 +183,84 @@ impl fmt::Display for CandleResolution {
     }
 }
 
+/// A positions-history bucket width: `count` of `unit`, e.g. 15 minutes; the
+/// widths `/v1/portfolio` takes. Build it with [`HistoryInterval::new`], which
+/// refuses zero or a width above 365 days.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct HistoryInterval {
+    count: u32,
+    unit: IntervalUnit,
+}
+
+/// The unit of a [`HistoryInterval`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum IntervalUnit {
+    Second,
+    Minute,
+    Hour,
+    Day,
+}
+
+impl HistoryInterval {
+    /// `15m`.
+    pub const FIFTEEN_MINUTES: Self = Self {
+        count: 15,
+        unit: IntervalUnit::Minute,
+    };
+    /// `1h`.
+    pub const ONE_HOUR: Self = Self {
+        count: 1,
+        unit: IntervalUnit::Hour,
+    };
+    /// `1d`.
+    pub const ONE_DAY: Self = Self {
+        count: 1,
+        unit: IntervalUnit::Day,
+    };
+
+    /// `count` of `unit`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidInput`] for zero or a width above 365 days.
+    pub fn new(count: u32, unit: IntervalUnit) -> Result<Self> {
+        let seconds_per_unit = match unit {
+            IntervalUnit::Second => 1_u64,
+            IntervalUnit::Minute => 60,
+            IntervalUnit::Hour => 3600,
+            IntervalUnit::Day => 86400,
+        };
+        if count == 0 || u64::from(count) * seconds_per_unit > 365 * 86400 {
+            return Err(Error::InvalidInput(
+                "history interval must be between 1 second and 365 days".into(),
+            ));
+        }
+        Ok(Self { count, unit })
+    }
+
+    #[must_use]
+    pub const fn count(self) -> u32 {
+        self.count
+    }
+
+    #[must_use]
+    pub const fn unit(self) -> IntervalUnit {
+        self.unit
+    }
+}
+
+impl fmt::Display for HistoryInterval {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let unit = match self.unit {
+            IntervalUnit::Second => 's',
+            IntervalUnit::Minute => 'm',
+            IntervalUnit::Hour => 'h',
+            IntervalUnit::Day => 'd',
+        };
+        write!(f, "{}{unit}", self.count)
+    }
+}
+
 /// Filters for the candle and BBO history. Without a window the gateway
 /// returns its default recent window.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -823,6 +901,10 @@ fn window(
 
 impl HistoryQuery {
     fn path(&self, base: &str) -> String {
+        self.path_with(base, None)
+    }
+
+    fn path_with(&self, base: &str, interval: Option<HistoryInterval>) -> String {
         let [from, to, limit] = window(self.from_ms, self.to_ms, self.limit);
         query(
             base,
@@ -831,6 +913,7 @@ impl HistoryQuery {
                 from,
                 to,
                 limit,
+                ("interval", interval.map(|i| i.to_string())),
                 ("cursor", self.cursor.clone()),
             ],
         )
@@ -909,8 +992,40 @@ impl InfoClient {
         owner: Address,
         q: &HistoryQuery,
     ) -> Result<HistoryPage<PositionSnapshot>> {
+        self.position_snapshots(owner, q, None).await
+    }
+
+    /// [`position_history`](Self::position_history) at `interval`: per
+    /// market, the last snapshot in each epoch-aligned bucket of
+    /// `[from_ms, to_ms)`. A bucket in which a market has no snapshot has no
+    /// row for it. With an interval, `to_ms` defaults to now and `from_ms` to
+    /// 24 hours before it; the raw read has no default window. The server
+    /// rejects more than 5,000 whole bucket widths with `invalid_interval`.
+    /// Keep the interval and filters with each cursor; explicit bounds prevent
+    /// the default window moving between pages. The cursor pins the first
+    /// page's snapshot height. Row shape and newest-first order are unchanged.
+    ///
+    /// # Errors
+    ///
+    /// As [`position_history`](Self::position_history); an interval the
+    /// indexer refuses is [`Error::Http`] carrying `invalid_interval`.
+    pub async fn position_history_by_interval(
+        &self,
+        owner: Address,
+        q: &HistoryQuery,
+        interval: HistoryInterval,
+    ) -> Result<HistoryPage<PositionSnapshot>> {
+        self.position_snapshots(owner, q, Some(interval)).await
+    }
+
+    async fn position_snapshots(
+        &self,
+        owner: Address,
+        q: &HistoryQuery,
+        interval: Option<HistoryInterval>,
+    ) -> Result<HistoryPage<PositionSnapshot>> {
         let body: Json = self
-            .get_json(&q.path(&format!("/v1/history/positions/{owner}")))
+            .get_json(&q.path_with(&format!("/v1/history/positions/{owner}"), interval))
             .await?;
         page(
             body,
@@ -1314,6 +1429,44 @@ mod tests {
         assert_eq!(whole("7"), Some(7));
         for bad in ["1.5", "1.", ".0", "-1", "", "1e3", "+1"] {
             assert_eq!(whole(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn history_interval_renders_as_the_indexer_names_it() {
+        assert_eq!(HistoryInterval::FIFTEEN_MINUTES.to_string(), "15m");
+        assert_eq!(HistoryInterval::ONE_HOUR.to_string(), "1h");
+        assert_eq!(HistoryInterval::ONE_DAY.to_string(), "1d");
+        assert_eq!(
+            HistoryInterval::new(30, IntervalUnit::Second)
+                .unwrap()
+                .to_string(),
+            "30s"
+        );
+        assert!(matches!(
+            HistoryInterval::new(0, IntervalUnit::Hour),
+            Err(Error::InvalidInput(_))
+        ));
+    }
+
+    #[test]
+    fn history_interval_limits_match_the_indexer_in_every_unit() {
+        for (unit, cap) in [
+            (IntervalUnit::Second, 31_536_000),
+            (IntervalUnit::Minute, 525_600),
+            (IntervalUnit::Hour, 8_760),
+            (IntervalUnit::Day, 365),
+        ] {
+            assert!(HistoryInterval::new(1, unit).is_ok());
+            assert!(HistoryInterval::new(cap, unit).is_ok());
+            assert!(matches!(
+                HistoryInterval::new(cap + 1, unit),
+                Err(Error::InvalidInput(_))
+            ));
+            assert!(matches!(
+                HistoryInterval::new(u32::MAX, unit),
+                Err(Error::InvalidInput(_))
+            ));
         }
     }
 

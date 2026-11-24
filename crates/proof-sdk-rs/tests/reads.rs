@@ -8,9 +8,10 @@ use std::sync::{Arc, Mutex};
 use base64::Engine as _;
 use proof_sdk_rs::{
     AccountEventsQuery, Address, CandleQuery, CandleResolution, ClientConfig, ClientTriggerId,
-    Conversion, Error, Event, EventId, HistoryQuery, InfoClient, OrderHistoryQuery, PositionEpoch,
-    ResolutionOutcome, ResolutionsQuery, Side, SnapshotPosition, SortOrder, TriggerAvailability,
-    TriggerLimbState, TriggerOutcomeReason, TriggerSlippageBps, WithdrawalStatus,
+    Conversion, Error, Event, EventId, HistoryInterval, HistoryQuery, InfoClient,
+    OrderHistoryQuery, PositionEpoch, ResolutionOutcome, ResolutionsQuery, Side, SnapshotPosition,
+    SortOrder, TriggerAvailability, TriggerLimbState, TriggerOutcomeReason, TriggerSlippageBps,
+    WithdrawalStatus,
 };
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -574,6 +575,101 @@ async fn position_history_reads_open_and_flat_snapshots() {
         requests(&log)[0].0,
         format!("GET /v1/history/positions/{MM}?market=1")
     );
+}
+
+#[tokio::test]
+async fn position_history_by_interval_sends_the_bucket_width() {
+    let empty = json!({"next_cursor":"","positions":[]});
+    let (info, log) = fixture(vec![(200, empty.clone()), (200, empty)]).await;
+    let q = HistoryQuery {
+        from_ms: Some(1_000),
+        to_ms: Some(3_000),
+        cursor: Some("next".into()),
+        ..HistoryQuery::default()
+    };
+    info.position_history_by_interval(mm(), &q, HistoryInterval::FIFTEEN_MINUTES)
+        .await
+        .unwrap();
+    info.position_history(mm(), &q).await.unwrap();
+    let sent = requests(&log);
+    assert_eq!(
+        sent[0].0,
+        format!("GET /v1/history/positions/{MM}?from=1000&to=3000&interval=15m&cursor=next")
+    );
+    assert_eq!(
+        sent[1].0,
+        format!("GET /v1/history/positions/{MM}?from=1000&to=3000&cursor=next")
+    );
+}
+
+#[tokio::test]
+async fn bucketed_positions_preserve_rows_and_page_filters() {
+    let contract: Value =
+        serde_json::from_str(include_str!("../../../conformance/positions-history.json")).unwrap();
+    let owner: Address = contract["owner"].as_str().unwrap().parse().unwrap();
+    let (info, log) = fixture(vec![
+        (200, contract["pages"][0].clone()),
+        (200, contract["pages"][1].clone()),
+        (400, json!({"error": "invalid_interval"})),
+        (400, json!({"error": "cursor_mismatch"})),
+    ])
+    .await;
+    let mut q = HistoryQuery {
+        from_ms: contract["from_ms"].as_u64(),
+        to_ms: contract["to_ms"].as_u64(),
+        limit: Some(2),
+        ..HistoryQuery::default()
+    };
+    let first = info
+        .position_history_by_interval(owner, &q, HistoryInterval::ONE_HOUR)
+        .await
+        .unwrap();
+    assert_eq!(first.rows[0].position, SnapshotPosition::Closed);
+    assert_eq!(
+        first.rows[1].position,
+        SnapshotPosition::Open {
+            side: Side::Buy,
+            size: 200,
+            entry_price: 9_007_199_254_740_993,
+        }
+    );
+    assert_eq!(first.rows[1].block_time_ns, 1_776_563_100_123_456_000);
+    q.cursor = first.next_cursor;
+    let last = info
+        .position_history_by_interval(owner, &q, HistoryInterval::ONE_HOUR)
+        .await
+        .unwrap();
+    let keys: Vec<_> = first
+        .rows
+        .iter()
+        .chain(last.rows.iter())
+        .map(|r| (r.market, r.block_height))
+        .collect();
+    assert_eq!(keys, vec![(2, 200), (1, 200), (1, 100)]);
+    assert!(last.next_cursor.is_none());
+    let sent = requests(&log);
+    let target = sent[1].0.strip_prefix("GET ").unwrap();
+    let url = url::Url::parse(&format!("http://gateway{target}")).unwrap();
+    assert_eq!(url.path(), format!("/v1/history/positions/{owner}"));
+    let params: std::collections::BTreeMap<_, _> = url.query_pairs().into_owned().collect();
+    assert_eq!(
+        params,
+        std::collections::BTreeMap::from([
+            ("from".into(), contract["from_ms"].to_string()),
+            ("to".into(), contract["to_ms"].to_string()),
+            ("limit".into(), "2".into()),
+            ("interval".into(), "1h".into()),
+            ("cursor".into(), "opaque+/=frontier".into()),
+        ])
+    );
+    for expected in ["invalid_interval", "cursor_mismatch"] {
+        let error = info
+            .position_history_by_interval(owner, &q, HistoryInterval::ONE_HOUR)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, Error::Http { .. }));
+        assert!(error.to_string().contains(expected));
+    }
 }
 
 #[tokio::test]

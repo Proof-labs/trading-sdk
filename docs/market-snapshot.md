@@ -35,7 +35,9 @@ type a `SetMarketStatus` action takes, or `"Unknown"` for a status this SDK
 does not name. Never read `"Unknown"` as trading. Kinds, mark sources, event
 statuses, outcomes and resolution sources also use the engine's names, with
 `"Unknown"` for a name this SDK does not know, and a value a market does not
-have is `null`. Every record in the view is a map keyed by field name, and
+have is `null`. A market's `settingsSequence` counts the settings changes
+recorded for it, 0 when none (and from a node that does not serve the
+field); a quorum `UpdateMarketFees` names it as its `predecessor`. Every record in the view is a map keyed by field name, and
 every name is a string. A record written as an array of its fields, as the
 version 1 snapshot writes them, or a name sent as anything else, such as a
 status sent as the integer 0, refuses the whole read. The read carries no
@@ -44,8 +46,9 @@ witness; the node refuses one on this route. `queryMarkets()`,
 
 `gateway-v2-markets-snapshot.json`, next to the engine fixtures below, is a
 byte-identical copy of the gateway's frozen example: BTC trading, ETH
-reduce-only, TEST delisted and the prediction binary of event 7 halted. The
-Rust and TypeScript tests decode it.
+reduce-only, TEST delisted and the prediction binary of event 7 halted, with
+ETH at settings sequence 1 and every other market at 0. The Rust and
+TypeScript tests decode it.
 
 ## TypeScript
 

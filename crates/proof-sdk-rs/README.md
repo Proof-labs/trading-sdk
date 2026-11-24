@@ -235,6 +235,7 @@ until it is `None`:
 | `fill_history(owner, &q)`          | `GET /v1/history/fills/{owner}`            | `HistoryFill`              |
 | `order_history(owner, &q)`         | `GET /v1/history/orders/{owner}`           | `HistoryEvent` (typed)     |
 | `position_history(owner, &q)`      | `GET /v1/history/positions/{owner}`        | `PositionSnapshot`         |
+| `position_history_by_interval(owner, &q, interval)` | `GET /v1/history/positions/{owner}?interval=` | `PositionSnapshot`, last per market per bucket |
 | `funding_history(owner, &q)`       | `GET /v1/history/funding-payments/{owner}` | `FundingPayment`           |
 | `account_event_history(owner, &q)` | `GET /v1/history/account-events`           | `HistoryEvent` (typed)     |
 | `trigger_history(owner, &q)`       | `GET /v1/history/triggers/{owner}`         | `TriggerHistoryEvent`      |
