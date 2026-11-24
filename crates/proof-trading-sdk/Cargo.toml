@@ -30,7 +30,7 @@ rmpv = { version = "1.3.1", features = ["with-serde"] }
 # In-progress pin: the unreleased wire of Proof-labs/exchange#1513 and #1514
 # (order lists on 0x01, 0x02 and 0x18, market orders and closes as list entries). Swaps
 # back to a Proof-labs/wire tag once it is released.
-proof-wire = { version = "12", git = "https://github.com/Proof-labs/exchange.git", rev = "cd73255795ac6a20d913c74b1f64a7ade64b6325", features = ["bridge"] }
+proof-wire = { version = "12", git = "https://github.com/Proof-labs/exchange.git", rev = "237d46cf7602d8eb811c50dec5e08fd4bd2fba73", features = ["bridge"] }
 ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
 # SHA-256 for the admin-proposal content hash (§2.4) — must match exchange-core.
 sha2 = "0.11"
