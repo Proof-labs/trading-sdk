@@ -89,11 +89,11 @@ On devnet, fund a new address with the faucet first:
 | `connect(&config, signer)`                      | reads `GET /v1/status` and `recent-nonces`, binds signatures to the chain |
 | `new(&config, signer)`                          | no request; signs for the config's chain id                               |
 | `limit_order(market, side, price, qty)`         | builds a GTC order for this account                                       |
-| `place_order(order)`                            | `PlaceOrders` of one; a refused order is the receipt's error              |
+| `place_order(order)`                            | `PlaceOrders` of one; a refused order is its entry in `placements()`      |
 | `place_orders(Vec<OrderEntry>)`                 | `PlaceOrders`: 1 to 100 limit or market orders, one signature, each placed or refused on its own (entries from `actions::order_entry` / `actions::market_entry`) |
-| `market_order(market, side, qty)`               | `PlaceOrders` of one market entry (IOC); a refused order is the receipt's error |
+| `market_order(market, side, qty)`               | `PlaceOrders` of one market entry (IOC); a refused order is its entry in `placements()` |
 | `place_entry(entry)`                            | `PlaceOrders` of one entry of any kind, e.g. `actions::market_entry(market, side, qty, Some(worst_price))` |
-| `cancel_order(order_id)`                        | `CancelOrders` of one; nothing to cancel is the receipt's error           |
+| `cancel_order(order_id)`                        | `CancelOrders` of one; nothing to cancel is its entry in `cancellations()` |
 | `cancel_order_by_client_id(client_order_id)`    | `CancelClientOrders` of one, same                                         |
 | `cancel_orders(Vec<OrderId>)`                   | `CancelOrders`: 1 to 100 order ids, each cancelled or refused on its own  |
 | `cancel_client_orders(Vec<u64>)`                | `CancelClientOrders`: 1 to 100 client order ids, the same                 |

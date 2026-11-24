@@ -18,7 +18,7 @@ use proof_trading_sdk::{decode_exec_error_kind, DecodedExecErrorKind, ErrorKind}
 use crate::actions;
 use crate::address::Address;
 use crate::error::{Error, Result};
-use crate::event::{CancelReason, Event, OrderCancellation, OrderPlacement, PlacementOutcome};
+use crate::event::{CancelReason, Event, OrderCancellation, OrderPlacement};
 use crate::info::{ClientConfig, InfoClient};
 use crate::nonce::NonceAllocator;
 
@@ -160,47 +160,44 @@ enum ListKind {
     Cancelled,
 }
 
-/// What an order helper sent: its list event and entry count.
+/// What an order action sent: its list event and entry count.
 #[derive(Clone, Copy, Debug)]
 struct Sent {
     list: ListKind,
     entries: usize,
-    /// A single order sent as a list of one: its refusal is the error.
-    single: bool,
 }
 
 impl Sent {
-    const PLACE: Self = Self {
-        list: ListKind::Placed,
-        entries: 1,
-        single: true,
-    };
-    const CANCEL: Self = Self {
-        list: ListKind::Cancelled,
-        entries: 1,
-        single: true,
-    };
+    const PLACE: Self = Self::list(ListKind::Placed, 1);
+    const CANCEL: Self = Self::list(ListKind::Cancelled, 1);
 
-    fn list(list: ListKind, entries: usize) -> Self {
-        Self {
-            list,
-            entries,
-            single: false,
-        }
+    const fn list(list: ListKind, entries: usize) -> Self {
+        Self { list, entries }
+    }
+
+    /// What `action` sends, if it is a list action.
+    fn of(action: &Action) -> Option<Self> {
+        let (list, entries) = match action {
+            Action::PlaceOrders(p) => (ListKind::Placed, p.orders.as_slice().len()),
+            Action::CancelOrders(c) => (ListKind::Cancelled, c.order_ids.as_slice().len()),
+            Action::CancelClientOrders(c) => {
+                (ListKind::Cancelled, c.client_order_ids.as_slice().len())
+            }
+            _ => return None,
+        };
+        Some(Self::list(list, entries))
     }
 }
 
-/// Read an executed code-0 receipt's order list: its `orders_placed`, else
-/// its user-requested `orders_cancelled`. A list of one whose entry was
-/// refused is that refusal's error, as the single-order actions always were,
-/// unless the helper sent a list. This reads the receipt, so a result
-/// reconciled without knowing what was sent (`sent` is `None`) gets it too:
-/// lists of one are how singles are sent.
+/// Check an executed code-0 receipt's order list. Every order action is a
+/// list, a single order a list of one, so a refused entry is reported in
+/// [`Receipt::placements`] / [`Receipt::cancellations`] and never fails the
+/// transaction.
 ///
 /// A list event that does not parse, or (when `sent` says what was sent) a
 /// list with the wrong number of entries, is [`Error::OrderResultUnreadable`]:
 /// the transaction executed, so it is never read as success or re-signed.
-fn read_order_lists(mut receipt: Receipt, sent: Option<Sent>) -> Result<Receipt> {
+fn read_order_lists(receipt: Receipt, sent: Option<Sent>) -> Result<Receipt> {
     if receipt.error.is_some() {
         return Ok(receipt);
     }
@@ -216,41 +213,16 @@ fn read_order_lists(mut receipt: Receipt, sent: Option<Sent>) -> Result<Receipt>
             format!("its {kind} event does not parse"),
         ));
     }
-    let (placed, cancelled) = (receipt.placements(), receipt.cancellations());
     if let Some(sent) = sent {
         let reported = match sent.list {
-            ListKind::Placed => placed.len(),
-            ListKind::Cancelled => cancelled.len(),
+            ListKind::Placed => receipt.placements().len(),
+            ListKind::Cancelled => receipt.cancellations().len(),
         };
         if reported != sent.entries {
             let reason = format!("{} sent, {reported} reported", sent.entries);
             return Err(unreadable(receipt, reason));
         }
-        if !sent.single {
-            return Ok(receipt);
-        }
     }
-    let list = sent.map_or(
-        if placed.is_empty() {
-            ListKind::Cancelled
-        } else {
-            ListKind::Placed
-        },
-        |s| s.list,
-    );
-    let refused = match (list, placed, cancelled) {
-        (
-            ListKind::Placed,
-            [OrderPlacement {
-                outcome: PlacementOutcome::Rejected(error),
-                ..
-            }],
-            _,
-        )
-        | (ListKind::Cancelled, _, [OrderCancellation::Refused { error, .. }]) => Some(*error),
-        _ => None,
-    };
-    receipt.error = refused.map(|e| EngineError::new(e.code(), Some(&receipt.log)));
     Ok(receipt)
 }
 
@@ -694,7 +666,8 @@ impl ExchangeClient {
     /// [`Error::NonceWindow`], [`Error::Encode`] or [`Error::Signer`] before
     /// anything is sent, then whatever [`Self::send`] returns.
     pub async fn submit(&self, action: &Action) -> Result<Submitted> {
-        self.send(&self.sign(action)?).await
+        self.send_orders(&self.sign(action)?, Sent::of(action))
+            .await
     }
 
     /// [`Self::submit`], then wait up to `timeout` for a pending result to
@@ -738,9 +711,8 @@ impl ExchangeClient {
     /// mid-request. A 404, a 5xx or a transport
     /// failure is retried until then; any other failure is returned at once.
     /// The receipt's order list is read as [`Self::send`] reads it, without
-    /// knowing what was sent: a list of one whose entry was refused is the
-    /// receipt's error, and a list event that does not parse is
-    /// [`Error::OrderResultUnreadable`].
+    /// knowing what was sent: refused entries are reported in their lists, and
+    /// a list event that does not parse is [`Error::OrderResultUnreadable`].
     pub async fn wait_for_receipt(&self, hash: TxHash, timeout: Duration) -> Result<Receipt> {
         let deadline = tokio::time::Instant::now() + timeout;
         let mut delay = RECEIPT_POLL_START;
@@ -777,8 +749,8 @@ impl ExchangeClient {
         actions::limit_order(self.address(), market, side, price, quantity)
     }
 
-    /// Place one limit order ([`actions::place_order`]). A refused order is
-    /// the receipt's error, as for any refused transaction.
+    /// Place one limit order ([`actions::place_order`]), a list of one: a
+    /// refused order is its entry in [`Receipt::placements`].
     ///
     /// # Errors
     ///
@@ -834,7 +806,8 @@ impl ExchangeClient {
     }
 
     /// Immediate-or-cancel at the best available prices
-    /// ([`actions::market_order`]). A refused order is the receipt's error.
+    /// ([`actions::market_order`]), a list of one: a refused order is its entry
+    /// in [`Receipt::placements`].
     /// For a worst price, use [`Self::place_entry`] with
     /// [`actions::market_entry`].
     ///
@@ -855,7 +828,8 @@ impl ExchangeClient {
     }
 
     /// Place one order of any kind, limit or market
-    /// ([`actions::place_entry`]). A refused order is the receipt's error.
+    /// ([`actions::place_entry`]), a list of one: a refused order is its entry
+    /// in [`Receipt::placements`].
     ///
     /// # Errors
     ///
@@ -959,8 +933,11 @@ impl ExchangeClient {
     /// Flatten this account's position on `market`: reads the position, then
     /// sends a reduce-only market entry on the other side for its size
     /// ([`actions::market_entry`]). A flat account sends nothing and returns
-    /// [`CloseOutcome::NothingToClose`]. A refusal is the receipt's error,
-    /// including code 35 when the position went flat before the close ran.
+    /// [`CloseOutcome::NothingToClose`]. A refused close is its entry in
+    /// [`Receipt::placements`], code 35 when the position went flat before the
+    /// close ran. The size and `NothingToClose` come from the account read,
+    /// which can trail a fill made just before; the close never sends more
+    /// than the position read.
     ///
     /// # Errors
     ///
@@ -1167,6 +1144,7 @@ impl ExchangeClient {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::panic)]
     use super::*;
+    use crate::event::PlacementOutcome;
     use proof_trading_sdk::{codec, LocalSigner};
 
     fn client() -> ExchangeClient {
@@ -1285,7 +1263,7 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_market_order_is_the_error_it_always_was() {
+    fn a_market_entry_reports_its_outcome_in_its_entry() {
         let no_liquidity = PlacementOutcome::Executed {
             order_id: 4,
             requested_quantity: 5,
@@ -1301,7 +1279,11 @@ mod tests {
             Some(Sent::PLACE),
         )
         .unwrap();
-        assert_eq!(refused.error, Some(margin));
+        assert!(refused.is_success(), "a refused entry never fails the list");
+        assert_eq!(
+            refused.placements()[0].outcome,
+            PlacementOutcome::Rejected(margin)
+        );
     }
 
     #[test]
@@ -1318,14 +1300,17 @@ mod tests {
             );
         }
 
-        // A position gone flat before the close ran is a genuine refusal.
+        // A position gone flat before the close ran is its entry's refusal.
         let gone = EngineError::new(35, None);
         let refused = read(
             vec![placed(&[PlacementOutcome::Rejected(gone)])],
             Some(Sent::PLACE),
         )
         .unwrap();
-        assert_eq!(refused.error, Some(gone));
+        assert_eq!(
+            refused.placements()[0].outcome,
+            PlacementOutcome::Rejected(gone)
+        );
     }
 
     #[test]
@@ -1356,24 +1341,25 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_single_is_the_error_it_always_was() {
+    fn every_order_action_is_a_list_its_entries_report() {
         let margin = EngineError::new(12, None);
-        let refused = read(
+        let one = read(
             vec![placed(&[PlacementOutcome::Rejected(margin)])],
             Some(Sent::PLACE),
         )
         .unwrap();
-        assert_eq!(refused.error, Some(margin));
-        assert!(!refused.is_success());
+        assert!(one.is_success(), "a list of one keeps code 0");
+        assert_eq!(
+            one.placements()[0].outcome,
+            PlacementOutcome::Rejected(margin)
+        );
 
         let not_found = EngineError::new(2, None);
         let cancel = cancelled(CancelReason::UserRequested, vec![refused_cancel(not_found)]);
-        let refused = read(vec![cancel], Some(Sent::CANCEL)).unwrap();
-        assert!(refused.error.is_some_and(EngineError::is_order_not_found));
+        let cancel = read(vec![cancel], Some(Sent::CANCEL)).unwrap();
+        assert!(cancel.is_success());
+        assert_eq!(cancel.cancellations().len(), 1);
 
-        let rested = read(vec![placed(&[executed(3)])], Some(Sent::PLACE)).unwrap();
-        assert!(rested.is_success());
-        // A list keeps code 0 whatever its entries did.
         let entries = [PlacementOutcome::Rejected(margin), executed(3)];
         let list = read(
             vec![placed(&entries)],
@@ -1382,13 +1368,10 @@ mod tests {
         .unwrap();
         assert!(list.is_success());
         assert_eq!(list.placements().len(), 2);
-        // So does a list of one sent as a list.
-        let one = read(
-            vec![placed(&[PlacementOutcome::Rejected(margin)])],
-            Some(Sent::list(ListKind::Placed, 1)),
-        )
-        .unwrap();
-        assert!(one.is_success());
+
+        // Reconciled by hash, without knowing what was sent, reads the same.
+        let reconciled = read(vec![placed(&[PlacementOutcome::Rejected(margin)])], None).unwrap();
+        assert!(reconciled.is_success());
     }
 
     #[test]
@@ -1416,29 +1399,6 @@ mod tests {
         let err = read(Vec::new(), Some(Sent::CANCEL)).unwrap_err();
         let shown = err.to_string();
         assert!(shown.contains("executed at height 9") && shown.contains("do not sign it again"));
-    }
-
-    #[test]
-    fn a_reconciled_list_of_one_is_the_error_without_knowing_what_was_sent() {
-        let margin = EngineError::new(12, None);
-        let refused = read(vec![placed(&[PlacementOutcome::Rejected(margin)])], None).unwrap();
-        assert_eq!(refused.error, Some(margin));
-
-        let not_found = EngineError::new(2, None);
-        let cancel = cancelled(CancelReason::UserRequested, vec![refused_cancel(not_found)]);
-        let refused = read(vec![cancel], None).unwrap();
-        assert!(refused.error.is_some_and(EngineError::is_order_not_found));
-
-        // Lists of more than one, and transactions with no list, stay as they are.
-        let two = placed(&[PlacementOutcome::Rejected(margin), executed(3)]);
-        assert!(read(vec![two], None).unwrap().is_success());
-        assert!(read(Vec::new(), None).unwrap().is_success());
-        // A placement's own cancel does not turn it into an error.
-        let replace = vec![
-            cancelled(CancelReason::UserRequested, vec![refused_cancel(not_found)]),
-            placed(&[executed(3)]),
-        ];
-        assert!(read(replace, None).unwrap().is_success());
     }
 
     #[test]

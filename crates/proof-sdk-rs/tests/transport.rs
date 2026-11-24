@@ -230,10 +230,10 @@ async fn a_pending_submission_reconciles_through_its_receipt() {
     assert_eq!(targets[1], format!("GET /v1/tx/{hash}"));
 }
 
-/// A single order sent while pending and reconciled by hash later still
-/// reads its refused entry as the engine error, without the action.
+/// A single order is a list of one: reconciled by hash later, its refused
+/// entry is reported in its placement and the transaction stays a success.
 #[tokio::test]
-async fn a_pending_single_reconciles_to_its_engine_error() {
+async fn a_pending_single_reconciles_to_its_refused_entry() {
     let c = client("http://127.0.0.1:1");
     let order = c.limit_order(1, Side::Buy, 66_000_000_000, 2);
     let tx = c.sign(&actions::place_order(order)).unwrap();
@@ -255,9 +255,10 @@ async fn a_pending_single_reconciles_to_its_engine_error() {
         .wait_for_receipt(hash, Duration::from_secs(5))
         .await
         .unwrap();
+    assert!(receipt.is_success(), "a refused entry never fails the list");
     assert_eq!(
-        receipt.error,
-        Some(EngineError::Known(ErrorKind::InsufficientMargin))
+        receipt.placements()[0].outcome,
+        PlacementOutcome::Rejected(EngineError::Known(ErrorKind::InsufficientMargin))
     );
 }
 
