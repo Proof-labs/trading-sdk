@@ -17,6 +17,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Every order call returns each order's outcome in the order sent: resting,
   executed (with requested and filled quantity and why the rest did not
   fill) or rejected with its error code; a cancel is cancelled or refused.
+  Without an executed verdict (pending, or refused as a whole) the outcomes
+  are `null` (TypeScript) or `None` (Python, Rust).
 - An executed transaction whose order event does not decode is reported as
   executed and unreadable (TypeScript `outcome: "unreadable"`, Python and
   Rust `OrderResultUnreadable`): reconcile by hash, never resubmit.

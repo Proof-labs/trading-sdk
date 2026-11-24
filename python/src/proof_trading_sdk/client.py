@@ -51,6 +51,7 @@ from proof_trading_sdk.order_lists import (
     OrderPlacement,
     PlaceOrdersResult,
     check_order_result,
+    executed,
     order_cancellations,
     order_placements,
 )
@@ -192,9 +193,7 @@ def _engine_refusal(code: int, error: str) -> dict[str, t.Any]:
 def _read_order_result(envelope: bytes, data: dict[str, t.Any]) -> dict[str, t.Any]:
     """Check an executed code-0 response's order list (see
     :func:`check_order_result`); any other response passes through."""
-    code = data.get("code")
-    executed = "height" in data or "events" in data
-    if isinstance(code, bool) or code != 0 or not executed:
+    if not executed(data):
         # A code-less acknowledgement has not executed yet.
         return data
     check_order_result(hashlib.sha256(envelope).hexdigest().upper(), data.get("events"))
@@ -794,8 +793,9 @@ class ExchangeClient:
         its own (market orders via :meth:`OrderEntry.market_order`).
 
         Returns the response and each order's outcome (:data:`OrderPlacement`),
-        in order; a rejected order is a :class:`RejectedOrder` with its code,
-        and a refused transaction has a non-zero ``tx["code"]`` and no orders.
+        in order; a rejected order is a :class:`RejectedOrder` with its code.
+        ``orders`` is ``None`` without an executed verdict: a refused
+        transaction (non-zero ``tx["code"]``) or a code-less acknowledgement.
         ``owner`` defaults to the signer. An executed batch whose results do
         not read raises :class:`OrderResultUnreadable`: reconcile by hash,
         never re-submit.
@@ -806,7 +806,7 @@ class ExchangeClient:
         tx = self._submit_with_signer_revision(
             PlaceOrders(owner=selected_owner, orders=list(orders)), revision
         )
-        return PlaceOrdersResult(tx, order_placements(tx))
+        return PlaceOrdersResult.of(tx)
 
     def cancel_orders(
         self, order_ids: t.Sequence[int], *, owner: bytes | None = None
@@ -823,7 +823,7 @@ class ExchangeClient:
         tx = self._submit_with_signer_revision(
             CancelOrders(owner=selected_owner, order_ids=list(order_ids)), revision
         )
-        return CancelOrdersResult(tx, order_cancellations(tx))
+        return CancelOrdersResult.of(tx)
 
     def cancel_client_orders(
         self, client_order_ids: t.Sequence[int], *, owner: bytes | None = None
@@ -839,7 +839,7 @@ class ExchangeClient:
             CancelClientOrders(owner=selected_owner, client_order_ids=list(client_order_ids)),
             revision,
         )
-        return CancelOrdersResult(tx, order_cancellations(tx))
+        return CancelOrdersResult.of(tx)
 
     # ── Write action ─────────────────────────────────────────────────────
 

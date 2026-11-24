@@ -183,6 +183,7 @@ PLACE = PlaceOrder(market=1, owner=OWNER, side="Buy", price=1, quantity=1)
     (PLACE, [_placed({**RESTING, "time_in_force": "day"})]),
     (PLACE, [_placed({k: v for k, v in RESTING.items() if k != "order_id"})]),
     (CancelOrder(order_id=42, owner=OWNER), [_cancelled({"outcome": "refused", "order_id": "42"})]),
+    (CancelOrder(order_id=42, owner=OWNER), [_cancelled({"outcome": "refused", "code": "2"})]),
 ])
 def test_an_executed_result_that_does_not_read_is_unreadable(answer, action, events):
     with pytest.raises(OrderResultUnreadable) as raised:
@@ -354,7 +355,25 @@ def test_a_refused_batch_returns_its_code_and_no_orders():
         entry = OrderEntry(market=1, side="Buy", price=100, quantity=5)
         result = client.place_orders([entry, entry])
         assert result.tx["code"] == 21
-        assert result.orders == []
-        assert client.place_order(entry).orders == []
+        assert result.orders is None
+        assert client.place_order(entry).orders is None
+    finally:
+        client.close()
+
+
+def test_an_acknowledged_batch_without_a_verdict_has_no_orders():
+    # A legacy code-less CheckTx acknowledgement has not executed: no
+    # outcomes yet, as TypeScript's null and Rust's None.
+    def handler(request):
+        return httpx.Response(200, json={"status": "ok"})
+
+    client = ExchangeClient(gateway_url="http://test-gateway", chain_id=b"\x00" * 32, secret_key=SEED)
+    client._http.close()
+    client._http = httpx.Client(base_url="http://test-gateway", transport=httpx.MockTransport(handler))
+    try:
+        entry = OrderEntry(market=1, side="Buy", price=100, quantity=5)
+        assert client.place_orders([entry]).orders is None
+        assert client.cancel_orders([42]).orders is None
+        assert client.cancel_client_orders([9]).orders is None
     finally:
         client.close()

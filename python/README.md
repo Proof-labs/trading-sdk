@@ -568,7 +568,8 @@ rejected order does not fail the batch. An order is a limit order
 optional `worst_price`). Its outcome is a `RestingOrder`, an `ExecutedOrder`
 (`unfilled` says why less than requested filled) or a `RejectedOrder` (`code`,
 `error_name`); a cancel's is a `CancelledOrder` or a `RefusedCancel`. A
-transaction refused as a whole has a non-zero `tx["code"]` and no outcomes.
+transaction refused as a whole has a non-zero `tx["code"]`, and `orders`
+is `None` whenever there is no executed verdict (refused or not yet executed).
 
 ```python
 from proof_trading_sdk import ExecutedOrder, OrderEntry, RejectedOrder, RestingOrder

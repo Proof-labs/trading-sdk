@@ -236,9 +236,13 @@ def _cancellation(entry: dict[str, t.Any]) -> OrderCancellation:
             filled_quantity=_int(entry, "filled_quantity"),
         )
     code = _int(entry, "code", _U32_MAX)
+    order_id = _opt_int(entry, "order_id")
+    client_order_id = _opt_int(entry, "client_order_id")
+    if order_id is None and client_order_id is None:
+        raise CodecError("order result: a refused cancel names no order_id or client_order_id")
     return RefusedCancel(
-        order_id=_opt_int(entry, "order_id"),
-        client_order_id=_opt_int(entry, "client_order_id"),
+        order_id=order_id,
+        client_order_id=client_order_id,
         code=code,
         error_name=get_error_name(code),
     )
@@ -259,15 +263,32 @@ def order_cancellations(response: dict[str, t.Any]) -> list[OrderCancellation]:
     ]
 
 
+def executed(response: dict[str, t.Any]) -> bool:
+    """Executed in a block with code 0, so its order events are its result."""
+    code = response.get("code")
+    return (
+        isinstance(code, int)
+        and not isinstance(code, bool)
+        and code == 0
+        and ("height" in response or "events" in response)
+    )
+
+
 @dataclass(frozen=True)
 class PlaceOrdersResult:
     """A ``place_orders`` call: its ``/exchange`` response and each order's
-    outcome, in the order sent. ``tx["code"]`` is non-zero when the engine
-    refused the whole transaction (a stale nonce, for example), and
-    ``orders`` is then empty. A rejected order leaves ``tx["code"]`` at 0."""
+    outcome, in the order sent. ``orders`` is ``None`` without an executed
+    verdict: a code-less acknowledgement, or a transaction the engine refused
+    as a whole (non-zero ``tx["code"]``, a stale nonce for example). A
+    rejected order leaves ``tx["code"]`` at 0."""
 
     tx: dict[str, t.Any]
-    orders: list[OrderPlacement]
+    orders: Optional[list[OrderPlacement]]
+
+    @classmethod
+    def of(cls, tx: dict[str, t.Any]) -> PlaceOrdersResult:
+        """The result of response ``tx``."""
+        return cls(tx, order_placements(tx) if executed(tx) else None)
 
 
 @dataclass(frozen=True)
@@ -276,7 +297,12 @@ class CancelOrdersResult:
     each cancel's outcome, in order; read as :class:`PlaceOrdersResult`."""
 
     tx: dict[str, t.Any]
-    orders: list[OrderCancellation]
+    orders: Optional[list[OrderCancellation]]
+
+    @classmethod
+    def of(cls, tx: dict[str, t.Any]) -> CancelOrdersResult:
+        """The result of response ``tx``."""
+        return cls(tx, order_cancellations(tx) if executed(tx) else None)
 
 
 def check_order_result(tx_hash: str, events: t.Any) -> None:
@@ -306,6 +332,7 @@ __all__ = [
     "RejectedOrder",
     "RestingOrder",
     "check_order_result",
+    "executed",
     "order_cancellations",
     "order_placements",
 ]
