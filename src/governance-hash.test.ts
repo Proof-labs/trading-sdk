@@ -122,7 +122,7 @@ describe("adminProposalContentHash (engine golden vectors)", () => {
       action: engineV2Attach(),
     });
     expect(bytesToHex(hash)).toBe(
-      "424729ae1b5fbbfd182d4e099ca565a06347fa68fb334fd325725d2a38eaa82a",
+      "9cfeb3a5bf64f0907540f7ea52308cc6e9540c942acb293cb30402c8f0af6c44",
     );
   });
 
@@ -134,7 +134,7 @@ describe("adminProposalContentHash (engine golden vectors)", () => {
       action: engineV2Batch(),
     });
     expect(bytesToHex(hash)).toBe(
-      "27b0091972e0da2193ba71736966457ccf2debbbf3b228fa9f3d263f93cbad1b",
+      "e89dc1ea32a9a063edc8d81cddda8575fe38ffa57c7cdace42ff446670ad3aa5",
     );
   });
 

@@ -384,6 +384,8 @@ describe("decodeAdminAction", () => {
         makerFeeBps: 2,
         signer: new Uint8Array(20),
         maxOpenInterest: 0n,
+        // The frozen bytes predate the cap: it decodes as unset.
+        maxPositionSize: null,
       },
     });
   });

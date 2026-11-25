@@ -13,6 +13,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   size in lots (DEC-137); the markets snapshot view carries `minOrderLots`, and
   engine code 157 `OrderBelowMinSize` joins the error table. Breaking on the
   wire with proof-wire 14: `UpdateMarketFees` gains a trailing field.
+- **TypeScript:** `AttachConditional.maxPositionSize` caps both conditional
+  books at creation; omitted, they take the underlying's cap. The attachment
+  encodes a trailing field, so its admin proposal content hash changes.
 
 ### Changed
 

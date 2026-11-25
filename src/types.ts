@@ -740,6 +740,9 @@ export interface AttachConditional {
   /** Impact notional for each conditional book, in micro-USDC. The current
    * engine requires a nonzero value; omission encodes the wire default 0. */
   impactNotional?: bigint;
+  /** Per-account position cap for each conditional book; omit to take the
+   * underlying's. */
+  maxPositionSize?: bigint | null;
 }
 
 /** Create a derived sub-account under the signing master (0x28). */

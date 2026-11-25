@@ -11,8 +11,8 @@ import proof_trading_sdk as pts
 GOLDEN_V3 = "a4de11bbe373974cae0de8f1116681cd7f08ecab07b007bea1067cbd0f19fb4f"
 GOLDEN_V4 = "da916970c56796acd6cc8a67bfba8430598c94dafaf5b1eb54f40479a380be9c"
 # Admin-actions v2 (engine's ``admin_proposal_content_hash_v2_golden_vectors``)
-GOLDEN_ATTACH = "424729ae1b5fbbfd182d4e099ca565a06347fa68fb334fd325725d2a38eaa82a"
-GOLDEN_BATCH = "27b0091972e0da2193ba71736966457ccf2debbbf3b228fa9f3d263f93cbad1b"
+GOLDEN_ATTACH = "9cfeb3a5bf64f0907540f7ea52308cc6e9540c942acb293cb30402c8f0af6c44"
+GOLDEN_BATCH = "e89dc1ea32a9a063edc8d81cddda8575fe38ffa57c7cdace42ff446670ad3aa5"
 # The one admin action that is NOT a map: a fieldless unit variant, whose
 # canonical bytes are the bare fixstr "UnpauseBridge". exchange-core has no
 # frozen content-hash vector for this arm yet, so the value comes from the
