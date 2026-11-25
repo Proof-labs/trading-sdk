@@ -82,6 +82,13 @@ describe("decodeExecError", () => {
     );
   });
 
+  it("names code 158, a proposal whose action now needs more approvals", () => {
+    expect(ExecErrorCode.ProposalThresholdRaised).toBe(158);
+    expect(execErrorName(158)).toBe("ProposalThresholdRaised");
+    expect(decodeExecError(158)?.description).toContain("Propose it again");
+    expect(execErrorName(157)).toBe("AuthorityDomainRetired");
+  });
+
   it("decodes the unavailable-mark rejection (97)", () => {
     expect(ExecErrorCode.UnpricedNoMark).toBe(97);
     const e97 = decodeExecError(97);

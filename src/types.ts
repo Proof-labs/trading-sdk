@@ -1356,6 +1356,23 @@ export interface AccountFeeOverrideChange {
   seq: bigint;
 }
 
+/** How many approvals each severity of admin action needs (inner tag 37,
+ *  `SetAdminThresholds`). The engine resolves each proposal's threshold from
+ *  this table when the proposal is made and checks it again at execution:
+ *  `stop` for actions that only stop or narrow (pausing a market,
+ *  reduce-only), `lowImpact` for routine changes, `highImpact` for anything
+ *  that moves money, decides who is paid, loosens a protection or changes
+ *  who holds power. With no table stored the engine uses 1, 2 and 3. The
+ *  engine refuses (code 71) a table unless `1 <= stop <= lowImpact <=
+ *  highImpact`, `lowImpact >= 2` and `highImpact` is at most the roster's
+ *  member count. Replacing the table expires every other pending
+ *  proposal. */
+export interface AdminThresholds {
+  stop: number;
+  lowImpact: number;
+  highImpact: number;
+}
+
 /** Voids an event (inner tag 29): every binary and conditional on it
  *  settles in cash at `yesPrice`. */
 export interface VoidEvent {
@@ -1431,6 +1448,7 @@ export type AdminAction =
   | { kind: "SetMarketStatus"; value: SetMarketStatus }
   | { kind: "UpdateMarketFees"; value: QuorumUpdateMarketFees }
   | { kind: "SetAccountFeeOverride"; value: AccountFeeOverrideChange }
+  | { kind: "SetAdminThresholds"; value: AdminThresholds }
   | { kind: "SetOracleGuards"; value: SetOracleGuards }
   | { kind: "CancelAllOrdersForAccount"; value: CancelAllOrdersForAccount }
   | { kind: "ConfigureOraclePolicy"; value: ConfigureOraclePolicy }
@@ -1629,7 +1647,10 @@ export interface NodeVersion {
 export interface AdminSignerRegistry {
   /** Monotone, starts at 1, never reused; a rotation assigns +1. */
   version: bigint;
-  /** Approvals required to execute a proposal (`2 <= threshold <= members`). */
+  /** The roster's single approval count. Proposals no longer use it: each
+   *  takes its own threshold from the action's severity (`AdminThresholds`)
+   *  and carries it as `ProposalDisplayInfo.threshold`. Kept on the wire
+   *  until the next major wire release. */
   threshold: number;
   /** Canonically sorted, duplicate-free roster (each a 20-byte address). */
   members: Address[];
@@ -1687,7 +1708,9 @@ export interface ProposalDisplayInfo {
   statusEffective: ProposalStatus;
   /** Registry version the proposal was created under. */
   registryVersion: bigint;
-  /** Approvals required, captured at creation. */
+  /** Approvals this proposal needs, resolved from its action's severity
+   *  when it was made. Proposals in one registry can need different counts,
+   *  so use this, not the registry's `threshold`. */
   threshold: number;
   proposer: Address;
   /** Distinct approving members. The proposer counts as approval #1. */

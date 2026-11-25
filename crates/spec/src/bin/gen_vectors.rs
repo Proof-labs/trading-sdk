@@ -907,6 +907,23 @@ fn main() -> Result<(), Box<dyn Error>> {
                 } }
             }),
         ),
+        // SetAdminThresholds (inner tag 0x25), the approvals each severity
+        // of admin action needs: three distinct counts, so a binding that
+        // swaps two of them changes the bytes. The engine's frozen proposal
+        // (the default table) is golden-vectors/propose_set_admin_thresholds.hex.
+        codec_case(
+            "propose_admin_action/set_admin_thresholds",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": { "SetAdminThresholds": {
+                    "stop": 1u32,
+                    "low_impact": 3u32,
+                    "high_impact": 4u32
+                } }
+            }),
+        ),
         codec_case(
             "approve_admin_action/rotate_registry",
             APPROVE_ADMIN_ACTION,

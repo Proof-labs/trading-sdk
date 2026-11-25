@@ -120,6 +120,9 @@
 {"case":"manifest/141","code":141,"log":null,"expect":{"name":"SubAccountCapReached"}}
 {"case":"manifest/142","code":142,"log":null,"expect":{"name":"WorkCapReached"}}
 {"case":"manifest/155","code":155,"log":null,"expect":{"name":"MarketSettingsChanged"}}
+{"case":"manifest/156","code":156,"log":null,"expect":{"name":"PostOnlyNotResting"}}
+{"case":"manifest/157","code":157,"log":null,"expect":{"name":"AuthorityDomainRetired"}}
+{"case":"manifest/158","code":158,"log":null,"expect":{"name":"ProposalThresholdRaised"}}
 {"case":"manifest/255","code":255,"log":null,"expect":{"name":"InternalError"}}
 {"case":"code50/oi_log","code":50,"log":"open interest limit exceeded on market 7: would be 4, cap 3","expect":{"name":"OpenInterestLimitExceeded"}}
 {"case":"code50/slippage_log","code":50,"log":"atomic basket aggregate slippage 51 bps exceeds budget 50 bps","expect":{"name":"SlippageExceeded"}}

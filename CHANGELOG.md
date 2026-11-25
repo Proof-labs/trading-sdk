@@ -45,6 +45,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - Python: `ProposeAdminAction(action={"SetAccountFeeOverride": {...}})`.
   - Tested against the engine's frozen `propose_set_account_fee_override.hex`
     in all three languages.
+- **All SDKs:** the admin quorum's `SetAdminThresholds` (inner tag 37),
+  which sets how many approvals each severity of admin action needs:
+  `AdminThresholds` (`stop`, `lowImpact`, `highImpact`). From the engine
+  release that carries it, each proposal takes its threshold from its
+  action's severity when it is made (with no table stored: stop 1, low
+  impact 2, high impact 3), so proposals in one registry can need different
+  counts. Use `ProposalDisplayInfo.threshold`, the proposal's own count; the
+  registry's `threshold` no longer decides any proposal. Error 158
+  (`ProposalThresholdRaised`): a proposal reached the approvals it was made
+  with, but the state it acts on now makes it a more severe change; propose
+  it again. Error 157 (`AuthorityDomainRetired`) is named too, and Rust now
+  names 156 (`PostOnlyNotResting`), which TypeScript already did. Needs the
+  proof-wire release that carries tag 37.
+  - TypeScript (MINOR): `AdminAction` gains the `SetAdminThresholds`
+    variant, with the `AdminThresholds` type. The encoder refuses a table
+    unless `1 <= stop <= lowImpact <= highImpact` and `lowImpact >= 2`; only
+    the engine checks `highImpact` against the member count. An exhaustive
+    `switch` on `action.kind` or a `Record<AdminAction["kind"], …>` table
+    needs a new entry.
+  - Rust: `governance` re-exports `AdminThresholds`. proof-wire's
+    `AdminAction` is not `#[non_exhaustive]`, so an exhaustive `match` on it
+    needs a new arm.
+  - Python: `ProposeAdminAction(action={"SetAdminThresholds": {...}})`.
+  - Tested against the engine's frozen `propose_set_admin_thresholds.hex`
+    in all three languages.
 - **`SettleEvent` docs:** from the engine release that carries exchange
   #1573, the quorum also settles an event without an oracle rule
   (`RelayerAttested`, or no source) from its settlement time; a price event

@@ -130,6 +130,24 @@ class TestGoldenVectors:
         assert decoded["registry_version"] == 1
         assert decoded["action"]["SetAccountFeeOverride"] == change
 
+    def test_propose_set_admin_thresholds_matches_engine_golden(self):
+        # propose_set_admin_thresholds.hex is proof-wire's frozen admin quorum
+        # proposal of the default table: stop 1, low impact 2, high impact 3.
+        table = {"stop": 1, "low_impact": 2, "high_impact": 3}
+        act = actions.ProposeAdminAction(
+            proposer=bytes([0xA1] * 20),
+            registry_version=1,
+            action={"SetAdminThresholds": table},
+        )
+        action_type, payload = actions.encode_action(act)
+        frozen = _golden("propose_set_admin_thresholds.hex")
+        assert _sign(action_type, payload, 501).hex() == frozen
+
+        envelope = pts.decode_tx(bytes.fromhex(frozen))
+        assert (envelope["action_type"], envelope["seq"]) == (action_type, 501)
+        decoded = actions.decode_action(action_type, envelope["payload"])
+        assert decoded["action"]["SetAdminThresholds"] == table
+
     def test_retired_action_bytes_do_not_codec(self):
         # OracleUpdate, MarketOrder, RunLiquidationSweep, RunFundingTick,
         # OracleUpdateComposite, ClosePosition.
