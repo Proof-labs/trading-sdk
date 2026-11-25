@@ -1297,9 +1297,10 @@ export interface SetMarginOffsetPolicy {
 
 /** Settles an unresolved event on the outcome the quorum names (inner tag
  *  30): a price event (`MarketOracle`) once its resolution window has
- *  closed, and an event without an oracle rule (`RelayerAttested`, or no
- *  source) from its settlement time. `Yes` or `No` only: the encoder and the
- *  engine refuse `Void`. */
+ *  closed and, on an engine whose `SettleEvent` accepts it, an event without
+ *  an oracle rule (`RelayerAttested`, or no source) from its settlement time;
+ *  an older engine refuses that event as not a price event. `Yes` or `No`
+ *  only: the encoder and the engine refuse `Void`. */
 export interface SettleEvent {
   eventId: number;
   outcome: Outcome;

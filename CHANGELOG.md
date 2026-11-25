@@ -22,26 +22,34 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **`SetAccountFeeOverride` admin action** (inner tag 36): the admin quorum
-  sets one account's taker and maker fee, the fee tier a market maker trades
-  at. The payload is `AccountFeeOverrideChange` (`account`, `takerFeeBps`,
-  `makerFeeBps`, `seq`): the engine's outer `SetAccountFeeOverride` without
-  its `signer`, because the quorum is the authorization. TypeScript checks
-  each fee is `0..=10_000` basis points or the revert sentinel `0xFFFF_FFFF`
-  before encoding, as the engine does (code 42); the `seq` replay guard
-  (code 43) needs the stored sequence, so only the engine checks it. A
-  tag-36 proposal lists under its own kind in `decodeProposalDisplayInfo` and
-  `decodeProposalPage`. Rust re-exports `AccountFeeOverrideChange` from
-  `governance`; Python builds it as
-  `ProposeAdminAction(action={"SetAccountFeeOverride": {...}})`. Tested
-  against the engine's frozen `propose_set_account_fee_override.hex` in all
-  three languages. Additive (MINOR); needs the proof-wire release that
-  carries tag 36.
-- **`SettleEvent` docs:** the quorum also settles an event without an oracle
-  rule (`RelayerAttested`, or no source) from its settlement time; a price
-  event still waits for its resolution window to close. No code change: the
-  SDK never restricted `SettleEvent` to price events.
-
+- **All SDKs:** the admin quorum's `SetAccountFeeOverride` (inner tag 36),
+  which sets one account's taker and maker fee, the fee tier a market maker
+  trades at. A `ProposeAdminAction` carries `AccountFeeOverrideChange`
+  (`account`, `takerFeeBps`, `makerFeeBps`, `seq`): the engine's outer
+  `SetAccountFeeOverride` without its `signer`, because the quorum is the
+  authorization. The engine refuses a fee above 10,000 basis points that is
+  not the revert sentinel `0xFFFF_FFFF` (code 42), and a `seq` at or below
+  the account's stored one (code 43), at proposal and again at execution.
+  Needs the proof-wire release that carries tag 36.
+  - TypeScript (MINOR): `AdminAction` gains the `SetAccountFeeOverride`
+    variant, with the `AccountFeeOverrideChange` type, and a tag-36 proposal
+    reads back under that kind in `decodeAdminAction`,
+    `decodeProposalDisplayInfo` and `decodeProposalPage`. The fee-range check
+    (code 42) runs before encoding and again when a stored action is decoded;
+    only the engine checks `seq`, which needs the stored sequence. An
+    exhaustive `switch` on `action.kind` (one that assigns the remainder to
+    `never`) or a `Record<AdminAction["kind"], …>` table needs a new entry.
+  - Rust: `governance` re-exports `AccountFeeOverrideChange`. proof-wire's
+    `AdminAction` is not `#[non_exhaustive]`, so an exhaustive `match` on it
+    needs a new arm.
+  - Python: `ProposeAdminAction(action={"SetAccountFeeOverride": {...}})`.
+  - Tested against the engine's frozen `propose_set_account_fee_override.hex`
+    in all three languages.
+- **`SettleEvent` docs:** from the engine release that carries exchange
+  #1573, the quorum also settles an event without an oracle rule
+  (`RelayerAttested`, or no source) from its settlement time; a price event
+  still waits for its resolution window to close. No code change: the SDK
+  never restricted `SettleEvent` to price events.
 - **Rust core:** `market_snapshot::decode_snapshot_view` decodes a complete
   `GET /v2/markets-snapshot` body, bound to a chain, into proof-wire's
   `query_v2` view (`market_snapshot::MarketsSnapshotView`). A record that is
