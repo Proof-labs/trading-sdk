@@ -9,7 +9,7 @@ members = [
 ]
 resolver = "2"
 
-# Local only: build against the exchange min-order-lots branch until its wire
-# is released; replace with a pin bump to the new proof-wire tag.
+# In-progress pin: proof-wire from the exchange feat/min-order-lots head while
+# it is in review; replaced by a pin bump to the released proof-wire tag.
 [patch."https://github.com/Proof-labs/wire.git"]
-proof-wire = { path = "../exchange-min-order-notional/exchange-wire" }
+proof-wire = { git = "https://github.com/Proof-labs/exchange.git", rev = "6f8b3a8452e660384e6c874a044b8d3cb12f241c" }
