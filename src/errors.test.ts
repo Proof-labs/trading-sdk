@@ -82,10 +82,7 @@ describe("decodeExecError", () => {
     );
   });
 
-  it("names code 158, a proposal whose action now needs more approvals", () => {
-    expect(ExecErrorCode.ProposalThresholdRaised).toBe(158);
-    expect(execErrorName(158)).toBe("ProposalThresholdRaised");
-    expect(decodeExecError(158)?.description).toContain("Propose it again");
+  it("names code 157, a retired authority list", () => {
     expect(execErrorName(157)).toBe("AuthorityDomainRetired");
   });
 

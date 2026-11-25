@@ -203,7 +203,6 @@ define_error_kinds! {
     155 => MarketSettingsChanged ~ "A quorum UpdateMarketFees names a settings sequence its market is not at, as when the settings changed after the proposal was made. Re-read the market's settings_sequence and propose the change again.",
     156 => PostOnlyNotResting ~ "A post-only order with IOC or FOK time in force: it may neither take nor rest, so it could never fill.",
     157 => AuthorityDomainRetired ~ "UpdateAuthoritySet names a retired authority list (composite feeder or scheduled operations). No action reads either list; nothing was written.",
-    158 => ProposalThresholdRaised ~ "The proposal reached the approvals it was made with, but the state it acts on has changed so that the action now needs more. Propose it again.",
     255 => InternalError                ~ "Catch-all for unexpected runtime failures (panics caught by the FFI boundary, etc.). Treat as a server bug.",
 }
 
@@ -694,9 +693,8 @@ mod exec_error_meaning_tests {
     /// RunFundingTick), 78-81 (reserved for oracle errors), 90 (the retired
     /// sub-account switch), 101 (unassigned), 112 (the retired PLP
     /// configuration), 117-122 and 126-127 (claimed elsewhere, unassigned on the
-    /// wire). Above 142 it names 155-158 (`MarketSettingsChanged`,
-    /// `PostOnlyNotResting`, `AuthorityDomainRetired`,
-    /// `ProposalThresholdRaised`) and 255: the
+    /// wire). Above 142 it names 155-157 (`MarketSettingsChanged`,
+    /// `PostOnlyNotResting`, `AuthorityDomainRetired`) and 255: the
     /// wire's 143 (`UserImAboveNotional`) is not named yet, and 144-154 are
     /// reserved for the bridge vote errors.
     /// Catches the case where a code is reserved by the mirrored engine error
@@ -708,7 +706,7 @@ mod exec_error_meaning_tests {
         codes.dedup();
         let expected: Vec<u32> = (1u32..=142)
             .filter(|c| !matches!(c, 24 | 25 | 30 | 31 | 36 | 41 | 78..=81 | 90 | 101 | 112 | 117..=122 | 126..=127))
-            .chain([155, 156, 157, 158, 255])
+            .chain([155, 156, 157, 255])
             .collect();
         assert_eq!(
             codes, expected,

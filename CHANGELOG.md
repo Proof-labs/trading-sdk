@@ -52,10 +52,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   action's severity when it is made (with no table stored: stop 1, low
   impact 2, high impact 3), so proposals in one registry can need different
   counts. Use `ProposalDisplayInfo.threshold`, the proposal's own count; the
-  registry's `threshold` no longer decides any proposal. Error 158
-  (`ProposalThresholdRaised`): a proposal reached the approvals it was made
-  with, but the state it acts on now makes it a more severe change; propose
-  it again. Error 157 (`AuthorityDomainRetired`) is named too, and Rust now
+  registry's `threshold` no longer decides any proposal. Error 157 (`AuthorityDomainRetired`) is named too, and Rust now
   names 156 (`PostOnlyNotResting`), which TypeScript already did. Needs the
   proof-wire release that carries tag 37.
   - TypeScript (MINOR): `AdminAction` gains the `SetAdminThresholds`
