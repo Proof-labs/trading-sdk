@@ -8,3 +8,8 @@ members = [
     "crates/spec",
 ]
 resolver = "2"
+
+# Local only: build against the exchange min-order-lots branch until its wire
+# is released; replace with a pin bump to the new proof-wire tag.
+[patch."https://github.com/Proof-labs/wire.git"]
+proof-wire = { path = "../exchange-min-order-notional/exchange-wire" }
