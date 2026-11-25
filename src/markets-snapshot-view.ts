@@ -66,6 +66,9 @@ export interface MarketView {
   /** Effective funding interest leg per 8 hours, in units of 1e-8; `null`
    *  when the market pays no funding. */
   fundingInterestRate: number | null;
+  /** Minimum order size in lots of `lotSize`; `null` when the market has no
+   *  minimum. */
+  minOrderLots: bigint | null;
   /** The market's settings sequence (`MarketSettingsSequence` in
    *  proof-wire): the settings changes recorded for it, 0 when none (and
    *  from a node that does not serve the field). A quorum `UpdateMarketFees`

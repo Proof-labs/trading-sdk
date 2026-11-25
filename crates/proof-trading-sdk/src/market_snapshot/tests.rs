@@ -41,6 +41,7 @@ fn market() -> MarketConfig {
         impact_notional: 1_000_000_000,
         funding_dead_band_bps: None,
         funding_interest_rate: None,
+        min_order_lots: None,
     }
 }
 

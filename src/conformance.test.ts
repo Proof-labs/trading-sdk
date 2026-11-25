@@ -783,6 +783,7 @@ function toMarketSettingsChange(
     impactNotional: bigOrNull(c.impact_notional),
     fundingDeadBandBps: num(c.funding_dead_band_bps),
     fundingInterestRate: num(c.funding_interest_rate),
+    minOrderLots: bigOrNull(c.min_order_lots),
   };
 }
 

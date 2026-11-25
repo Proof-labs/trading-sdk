@@ -103,6 +103,7 @@ describe("reads().marketsSnapshotView", () => {
       status: "Trading",
       fundingDeadBandBps: 5,
       fundingInterestRate: 0,
+      minOrderLots: null,
       settingsSequence: 0n,
     });
     expect(snapshot.markets[3]).toMatchObject({

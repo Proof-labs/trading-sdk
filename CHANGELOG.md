@@ -7,6 +7,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **TypeScript:** `UpdateMarketFees.minOrderLots` sets a market's minimum order
+  size in lots (DEC-137); the markets snapshot view carries `minOrderLots`, and
+  engine code 157 `OrderBelowMinSize` joins the error table. Breaking on the
+  wire with proof-wire 14: `UpdateMarketFees` gains a trailing field.
+
 ### Changed
 
 - **Breaking, TypeScript and Python:** the authorities read no longer exposes the retired

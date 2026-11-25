@@ -884,7 +884,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                         "max_open_interest": 18u64,
                         "impact_notional": 19u64,
                         "funding_dead_band_bps": 20u32,
-                        "funding_interest_rate": -21i32
+                        "funding_interest_rate": -21i32,
+                        "min_order_lots": 22u64
                     }
                 } }
             }),

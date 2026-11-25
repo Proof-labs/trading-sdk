@@ -57,6 +57,7 @@ const RAISE_CAP_DECODED: MarketSettingsChange = {
   impactNotional: null,
   fundingDeadBandBps: null,
   fundingInterestRate: null,
+  minOrderLots: null,
 };
 
 /** Every field set to its own value, as in the shared conformance vector
@@ -86,6 +87,7 @@ const EVERY_FIELD: MarketSettingsChange = {
   impactNotional: 19n,
   fundingDeadBandBps: 20,
   fundingInterestRate: -21,
+  minOrderLots: 22n,
 };
 
 const admin = (

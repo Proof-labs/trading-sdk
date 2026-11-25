@@ -987,6 +987,12 @@ export interface UpdateMarketFees {
   fundingDeadBandBps?: number | null;
   /** Signed funding interest rate per 8h in units of 1e-8 (1 bps = 10,000). */
   fundingInterestRate?: number | null;
+  /**
+   * Minimum order size in lots of the market's lot size; must be greater
+   * than 0. An order below it is refused (code 157) unless it closes its
+   * position or leaves at least the minimum. Omit to leave unchanged.
+   */
+  minOrderLots?: bigint | null;
 }
 
 /** Lifecycle status of an event: `Trading` until its settlement time,

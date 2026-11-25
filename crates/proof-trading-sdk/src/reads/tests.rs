@@ -199,11 +199,12 @@ fn appended(value: &Value) -> Value {
 #[test]
 fn a_market_list_with_appended_fields_decodes_as_the_pinned_rows() {
     let mut row = value(MARKET);
-    // Retain all three current tail fields before trimming only future data.
+    // Retain all four current tail fields before trimming only future data.
     fields(&mut row).extend([
         Value::from(1_000_000_000u64),
         Value::from(10),
         Value::from(-12_500),
+        Value::from(3),
     ]);
     fields(&mut row)[13] = Value::Array(vec![Value::Array(vec![
         Value::from(0),
@@ -222,6 +223,7 @@ fn a_market_list_with_appended_fields_decodes_as_the_pinned_rows() {
     assert_eq!(decoded[0].impact_notional, 1_000_000_000);
     assert_eq!(decoded[0].funding_dead_band_bps.unwrap().0, 10);
     assert_eq!(decoded[0].funding_interest_rate.unwrap().0, -12_500);
+    assert_eq!(decoded[0].min_order_lots.unwrap().0, 3);
     assert_eq!(
         rmp_serde::to_vec(&decoded).unwrap(),
         rmp_serde::to_vec(&expected).unwrap()
@@ -340,7 +342,7 @@ fn a_market_listing_keeps_the_rows_it_decodes_and_reports_the_rest() {
             rmp_serde::to_vec(&expected).unwrap()
         );
     }
-    assert_eq!(decoded.row_field_counts, vec![24, 28]);
+    assert_eq!(decoded.row_field_counts, vec![24, 29]);
     let refused: Vec<(u32, u32, u32)> = decoded
         .refused_rows
         .iter()

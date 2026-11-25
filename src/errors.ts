@@ -205,6 +205,7 @@ export enum ExecErrorCode {
   // the wire for the bridge vote errors.
   MarketSettingsChanged = 155,
   PostOnlyNotResting = 156,
+  OrderBelowMinSize = 157,
   InternalError = 255,
 }
 
@@ -735,6 +736,11 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "PostOnlyNotResting",
     description:
       "A post-only order with IOC or FOK time in force: it may neither take nor rest, so it could never fill.",
+  },
+  157: {
+    name: "OrderBelowMinSize",
+    description:
+      "Order quantity is below the market minimum order size; a smaller order must close its position or leave at least the minimum.",
   },
   255: { name: "InternalError", description: "unexpected runtime failure" },
 };
