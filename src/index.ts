@@ -140,6 +140,7 @@ export {
   type SetMarketStatus,
   type SetDepositLimit,
   type QuorumUpdateMarketFees,
+  type AccountFeeOverrideChange,
   type MarketSettingsChange,
   type MarketStatus,
   type LiquidationConfig,

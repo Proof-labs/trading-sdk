@@ -43,6 +43,7 @@ import {
   type SetLiquidationConfig,
   type SetOperatorReceiptRegistry,
   type SettleEvent,
+  type AccountFeeOverrideChange,
   type VoidEvent,
 } from "./types.js";
 import {
@@ -210,6 +211,34 @@ function validateGovernanceAction(v: { kind: string; value?: unknown }): void {
   }
   if (v.kind === "SettleEvent") {
     validateSettleEvent(v.value as SettleEvent);
+  }
+  if (v.kind === "SetAccountFeeOverride") {
+    validateAccountFeeOverrideChange(v.value as AccountFeeOverrideChange);
+  }
+}
+
+/** The revert sentinel: the account's fills go back to the market's fee. */
+const FEE_OVERRIDE_REVERT_SENTINEL = 0xffff_ffff;
+
+/** The engine's fee checks (code 42): each fee `0..=10_000` basis points or
+ *  the revert sentinel. The `seq` replay guard needs the stored sequence, so
+ *  only the engine checks it. */
+function validateAccountFeeOverrideChange(
+  change: AccountFeeOverrideChange,
+): void {
+  for (const [name, bps] of [
+    ["takerFeeBps", change.takerFeeBps],
+    ["makerFeeBps", change.makerFeeBps],
+  ] as const) {
+    if (
+      !Number.isInteger(bps) ||
+      bps < 0 ||
+      (bps > 10_000 && bps !== FEE_OVERRIDE_REVERT_SENTINEL)
+    ) {
+      throw new Error(
+        `setAccountFeeOverride ${name} ${bps} is outside 0..=10000 and is not the revert sentinel ${FEE_OVERRIDE_REVERT_SENTINEL}`,
+      );
+    }
   }
 }
 
@@ -508,6 +537,8 @@ const BYTE_FIELDS = new Set([
   "approver",
   "rejecter",
   "contentHash",
+  // AccountFeeOverrideChange's 20-byte account.
+  "account",
   // Receipt-proof bitmap (raw `Vec<u8>` on the wire → number[] on decode).
   // The receipt's own byte fields decode as `Uint8Array` (newtype
   // serialize_bytes) and hit the early `instanceof Uint8Array` return, so only

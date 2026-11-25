@@ -889,6 +889,24 @@ fn main() -> Result<(), Box<dyn Error>> {
                 } }
             }),
         ),
+        // SetAccountFeeOverride (inner tag 0x24), one account's fee tier
+        // through the admin quorum: each field holds its own value, so a
+        // binding that swaps the two fees changes the bytes. The engine's
+        // frozen proposal is golden-vectors/propose_set_account_fee_override.hex.
+        codec_case(
+            "propose_admin_action/set_account_fee_override",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": { "SetAccountFeeOverride": {
+                    "account": vec![0xDDu8; 20],
+                    "taker_fee_bps": 7u32,
+                    "maker_fee_bps": 4294967295u32,
+                    "seq": 9u64
+                } }
+            }),
+        ),
         codec_case(
             "approve_admin_action/rotate_registry",
             APPROVE_ADMIN_ACTION,

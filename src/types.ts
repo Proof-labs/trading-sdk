@@ -1295,9 +1295,12 @@ export interface SetMarginOffsetPolicy {
   pairs: MarginOffsetPair[];
 }
 
-/** Settles a price event whose resolution window closed unresolved
- *  (inner tag 30), on the outcome the quorum names. `Yes` or `No` only:
- *  the encoder and the engine refuse `Void`. */
+/** Settles an unresolved event on the outcome the quorum names (inner tag
+ *  30): a price event (`MarketOracle`) once its resolution window has
+ *  closed and, on an engine whose `SettleEvent` accepts it, an event without
+ *  an oracle rule (`RelayerAttested`, or no source) from its settlement time;
+ *  an older engine refuses that event as not a price event. `Yes` or `No`
+ *  only: the encoder and the engine refuse `Void`. */
 export interface SettleEvent {
   eventId: number;
   outcome: Outcome;
@@ -1332,6 +1335,25 @@ export interface QuorumUpdateMarketFees {
    *  (`MarketView`). */
   predecessor: bigint;
   change: MarketSettingsChange;
+}
+
+/** Sets one account's taker and maker fee through the admin quorum (inner
+ *  tag 36): the per-account fee tier a market maker trades at. The quorum is
+ *  the authorization, so the change names no signer. The engine refuses a
+ *  fee above 10,000 basis points that is not the revert sentinel
+ *  `0xFFFF_FFFF` (code 42), and a `seq` at or below the account's stored one
+ *  (code 43), at proposal and again at execution. */
+export interface AccountFeeOverrideChange {
+  /** The account whose fees change (20-byte address). */
+  account: Address;
+  /** Taker fee in basis points, `0..=10_000`, or `0xFFFF_FFFF` to return
+   *  the account's taker fills to the market's fee. */
+  takerFeeBps: number;
+  /** Maker fee in basis points, `0..=10_000`, or `0xFFFF_FFFF` to return
+   *  the account's maker fills to the market's fee. */
+  makerFeeBps: number;
+  /** Replay guard: must exceed the account's stored sequence. */
+  seq: bigint;
 }
 
 /** Voids an event (inner tag 29): every binary and conditional on it
@@ -1408,6 +1430,7 @@ export type AdminAction =
   | { kind: "SettleEvent"; value: SettleEvent }
   | { kind: "SetMarketStatus"; value: SetMarketStatus }
   | { kind: "UpdateMarketFees"; value: QuorumUpdateMarketFees }
+  | { kind: "SetAccountFeeOverride"; value: AccountFeeOverrideChange }
   | { kind: "SetOracleGuards"; value: SetOracleGuards }
   | { kind: "CancelAllOrdersForAccount"; value: CancelAllOrdersForAccount }
   | { kind: "ConfigureOraclePolicy"; value: ConfigureOraclePolicy }

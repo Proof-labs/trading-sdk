@@ -1003,6 +1003,18 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
       },
     };
   }
+  if (v.SetAccountFeeOverride) {
+    const f = v.SetAccountFeeOverride as Record<string, unknown>;
+    return {
+      kind: "SetAccountFeeOverride",
+      value: {
+        account: bytes(f.account),
+        takerFeeBps: f.taker_fee_bps as number,
+        makerFeeBps: f.maker_fee_bps as number,
+        seq: big(f.seq),
+      },
+    };
+  }
   if (v.WithdrawInsuranceFund) {
     const w = v.WithdrawInsuranceFund as Record<string, unknown>;
     return {
@@ -1384,9 +1396,10 @@ describe("conformance vectors (TypeScript)", () => {
     // -account scoped and unscoped, four set-oracle-guards shapes, and
     // oracle policy, two schedule-upgrade shapes, cancel-upgrade, and
     // insurance fund and withdraw, void-event, settle-event,
-    // set-deposit-limit, set-market-status, update-market-fees), approve,
-    // reject, and the PauseMarket emergency arm.
-    expect(govCases.length).toBe(35);
+    // set-deposit-limit, set-market-status, update-market-fees,
+    // set-account-fee-override), approve, reject, and the PauseMarket
+    // emergency arm.
+    expect(govCases.length).toBe(36);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(
