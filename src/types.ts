@@ -1630,9 +1630,10 @@ export interface AdminSignerRegistry {
   /** Monotone, starts at 1, never reused; a rotation assigns +1. */
   version: bigint;
   /** The roster's single approval count. From the engine release with
-   *  exchange #1577, each proposal takes its own threshold from its action's
+   *  exchange #1593, each proposal takes its own threshold from its action's
    *  severity (stop 1, low impact 2, high impact 3, with low and high never
-   *  below this count) and carries it as `ProposalDisplayInfo.threshold`. */
+   *  below this count, and never more than the roster has members) and
+   *  carries it as `ProposalDisplayInfo.threshold`. */
   threshold: number;
   /** Canonically sorted, duplicate-free roster (each a 20-byte address). */
   members: Address[];
