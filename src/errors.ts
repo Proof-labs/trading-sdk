@@ -205,6 +205,7 @@ export enum ExecErrorCode {
   // the wire for the bridge vote errors.
   MarketSettingsChanged = 155,
   PostOnlyNotResting = 156,
+  AuthorityDomainRetired = 157,
   InternalError = 255,
 }
 
@@ -735,6 +736,11 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "PostOnlyNotResting",
     description:
       "A post-only order with IOC or FOK time in force: it may neither take nor rest, so it could never fill.",
+  },
+  157: {
+    name: "AuthorityDomainRetired",
+    description:
+      "UpdateAuthoritySet names a retired authority list (composite feeder or scheduled operations). No action reads either list; nothing was written.",
   },
   255: { name: "InternalError", description: "unexpected runtime failure" },
 };

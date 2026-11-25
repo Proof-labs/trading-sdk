@@ -45,6 +45,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - Python: `ProposeAdminAction(action={"SetAccountFeeOverride": {...}})`.
   - Tested against the engine's frozen `propose_set_account_fee_override.hex`
     in all three languages.
+- **Per-proposal thresholds:** from the engine release that carries
+  exchange #1593, each proposal takes its threshold from its action's
+  severity when it is made (stop 1, low impact 2, high impact 3, with low
+  and high never below the registry's count, and never more than the
+  registry has members), so proposals in one registry
+  can need different counts. Use `ProposalDisplayInfo.threshold`, the
+  proposal's own count. The counts are engine constants: there is no
+  action or read for a table. Error 157 (`AuthorityDomainRetired`) is named
+  too, and Rust now names 156 (`PostOnlyNotResting`), which TypeScript
+  already did.
 - **`SettleEvent` docs:** from the engine release that carries exchange
   #1573, the quorum also settles an event without an oracle rule
   (`RelayerAttested`, or no source) from its settlement time; a price event

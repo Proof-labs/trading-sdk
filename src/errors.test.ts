@@ -82,6 +82,10 @@ describe("decodeExecError", () => {
     );
   });
 
+  it("names code 157, a retired authority list", () => {
+    expect(execErrorName(157)).toBe("AuthorityDomainRetired");
+  });
+
   it("decodes the unavailable-mark rejection (97)", () => {
     expect(ExecErrorCode.UnpricedNoMark).toBe(97);
     const e97 = decodeExecError(97);

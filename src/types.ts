@@ -1629,7 +1629,11 @@ export interface NodeVersion {
 export interface AdminSignerRegistry {
   /** Monotone, starts at 1, never reused; a rotation assigns +1. */
   version: bigint;
-  /** Approvals required to execute a proposal (`2 <= threshold <= members`). */
+  /** The roster's single approval count. From the engine release with
+   *  exchange #1593, each proposal takes its own threshold from its action's
+   *  severity (stop 1, low impact 2, high impact 3, with low and high never
+   *  below this count, and never more than the roster has members) and
+   *  carries it as `ProposalDisplayInfo.threshold`. */
   threshold: number;
   /** Canonically sorted, duplicate-free roster (each a 20-byte address). */
   members: Address[];
@@ -1687,7 +1691,9 @@ export interface ProposalDisplayInfo {
   statusEffective: ProposalStatus;
   /** Registry version the proposal was created under. */
   registryVersion: bigint;
-  /** Approvals required, captured at creation. */
+  /** Approvals this proposal needs, resolved from its action's severity
+   *  when it was made. Proposals in one registry can need different counts,
+   *  so use this, not the registry's `threshold`. */
   threshold: number;
   proposer: Address;
   /** Distinct approving members. The proposer counts as approval #1. */
