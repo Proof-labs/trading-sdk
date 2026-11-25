@@ -44,7 +44,6 @@ import {
   type SetOperatorReceiptRegistry,
   type SettleEvent,
   type AccountFeeOverrideChange,
-  type AdminThresholds,
   type VoidEvent,
 } from "./types.js";
 import {
@@ -215,37 +214,6 @@ function validateGovernanceAction(v: { kind: string; value?: unknown }): void {
   }
   if (v.kind === "SetAccountFeeOverride") {
     validateAccountFeeOverrideChange(v.value as AccountFeeOverrideChange);
-  }
-  if (v.kind === "SetAdminThresholds") {
-    validateAdminThresholds(v.value as AdminThresholds);
-  }
-}
-
-/** The engine's table checks that need no chain state (code 71):
- *  `1 <= stop <= lowImpact <= highImpact` and `lowImpact >= 2`, so only a
- *  stopping action can ever execute on one approval. The engine also caps
- *  `highImpact` at the roster's member count, which needs the registry. */
-function validateAdminThresholds(t: AdminThresholds): void {
-  for (const [name, n] of [
-    ["stop", t.stop],
-    ["lowImpact", t.lowImpact],
-    ["highImpact", t.highImpact],
-  ] as const) {
-    if (!Number.isInteger(n) || n < 1 || n > 0xffff_ffff) {
-      throw new Error(
-        `setAdminThresholds ${name} ${n} is not a count of at least 1`,
-      );
-    }
-  }
-  if (t.lowImpact < 2) {
-    throw new Error(
-      `setAdminThresholds lowImpact ${t.lowImpact} is below 2: only stopping actions may execute on one approval`,
-    );
-  }
-  if (!(t.stop <= t.lowImpact && t.lowImpact <= t.highImpact)) {
-    throw new Error(
-      `setAdminThresholds must rise with severity: stop ${t.stop} <= lowImpact ${t.lowImpact} <= highImpact ${t.highImpact}`,
-    );
   }
 }
 

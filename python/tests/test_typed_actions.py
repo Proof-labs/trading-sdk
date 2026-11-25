@@ -164,9 +164,6 @@ BUILDERS = {
     "propose_admin_action/set_account_fee_override": lambda i: actions.ProposeAdminAction(
         **_admin(i, "proposer")
     ),
-    "propose_admin_action/set_admin_thresholds": lambda i: actions.ProposeAdminAction(
-        **_admin(i, "proposer")
-    ),
 }
 
 

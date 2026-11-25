@@ -22,8 +22,8 @@ pub use proof_wire::market_settings::{
     MarketSettingsChange, MarketSettingsSequence, QuorumUpdateMarketFees,
 };
 pub use proof_wire::types::{
-    AccountFeeOverrideChange, AdminAction, AdminActionType, AdminBatchItem, AdminThresholds,
-    ApproveAdminAction, CancelUpgrade, ConfigureOraclePolicy, EmergencyAction, EmergencyActionType,
+    AccountFeeOverrideChange, AdminAction, AdminActionType, AdminBatchItem, ApproveAdminAction,
+    CancelUpgrade, ConfigureOraclePolicy, EmergencyAction, EmergencyActionType,
     EmergencyAdminAction, FundInsuranceFund, InsuranceFundAllocation, InsuranceFundingId,
     InsurancePoolId, InsuranceWithdrawalId, MarketStatus, ProposalId, ProposeAdminAction,
     RegistryVersion, RejectAdminAction, ScheduleUpgrade, SetMarketStatus, SetOracleGuards,
@@ -274,74 +274,5 @@ mod set_account_fee_override_tests {
             panic!("expected SetAccountFeeOverride, got {:?}", propose.action);
         };
         assert_eq!(decoded_change, change());
-    }
-}
-
-#[cfg(test)]
-mod set_admin_thresholds_tests {
-    use super::{
-        AdminAction, AdminActionType, AdminThresholds, ProposeAdminAction, RegistryVersion,
-        SignatureThreshold, SignerAddress,
-    };
-    use crate::signer::{sign_action, LocalSigner};
-    use crate::types::Action;
-    use crate::{codec, crypto};
-
-    /// proof-wire's frozen `vectors/propose_set_admin_thresholds.hex`, copied
-    /// byte for byte: the default table (stop 1, low impact 2, high impact
-    /// 3), proposed by `[0xA1; 20]` under registry version 1. Key
-    /// `[0x42; 32]` signs it on the unbound chain at seq 501.
-    const FROZEN: &str = include_str!("../../spec/golden-vectors/propose_set_admin_thresholds.hex");
-
-    fn proposal() -> ProposeAdminAction {
-        ProposeAdminAction {
-            proposer: SignerAddress([0xA1; 20]),
-            registry_version: RegistryVersion(1),
-            action: AdminAction::SetAdminThresholds(AdminThresholds::DEFAULT),
-        }
-    }
-
-    #[test]
-    fn set_admin_thresholds_tag_preserves_the_wire_allocation() {
-        assert_eq!(AdminActionType::SetAdminThresholds as u8, 37);
-        assert_eq!(proposal().action.action_tag(), 37);
-    }
-
-    #[test]
-    fn the_default_table_is_stop_one_low_two_high_three() {
-        assert_eq!(
-            AdminThresholds::DEFAULT,
-            AdminThresholds {
-                stop: SignatureThreshold(1),
-                low_impact: SignatureThreshold(2),
-                high_impact: SignatureThreshold(3),
-            }
-        );
-    }
-
-    #[test]
-    fn the_sdk_signs_the_frozen_proposal_byte_for_byte() {
-        let wire = sign_action(
-            &LocalSigner::from_bytes(&[0x42; 32]),
-            &crypto::UNBOUND_CHAIN_ID,
-            &Action::ProposeAdminAction(proposal()),
-            501,
-        )
-        .expect("the proposal signs");
-        assert_eq!(hex::encode(wire), FROZEN.trim());
-    }
-
-    #[test]
-    fn the_frozen_proposal_decodes_to_its_inputs() {
-        let bytes = hex::decode(FROZEN.trim()).expect("the vector is hex");
-        let decoded = codec::decode_tx(&bytes).expect("the frozen proposal decodes");
-        assert_eq!(decoded.seq, 501);
-        let Action::ProposeAdminAction(propose) = decoded.action else {
-            panic!("expected a ProposeAdminAction, got {:?}", decoded.action);
-        };
-        let AdminAction::SetAdminThresholds(table) = propose.action else {
-            panic!("expected SetAdminThresholds, got {:?}", propose.action);
-        };
-        assert_eq!(table, AdminThresholds::DEFAULT);
     }
 }

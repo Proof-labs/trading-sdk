@@ -141,7 +141,6 @@ export {
   type SetDepositLimit,
   type QuorumUpdateMarketFees,
   type AccountFeeOverrideChange,
-  type AdminThresholds,
   type MarketSettingsChange,
   type MarketStatus,
   type LiquidationConfig,
