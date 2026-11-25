@@ -73,9 +73,10 @@ config = client.liquidation_config()
 print(authorities.relayer, config.sequence, config.config.takeover_discount_bps)
 ```
 
-`authorities()` reads `/v1/admin/authorities` as `AuthoritiesSnapshot`: six
-lists of 20-byte addresses (`relayer`, `oracle`, `cex_composite`, `custody`,
-`market_params`, `scheduled_ops`). Empty sets are valid; a failed read raises
+`authorities()` reads `/v1/admin/authorities` as `AuthoritiesSnapshot`: four
+lists of 20-byte addresses (`relayer`, `oracle`, `custody`, `market_params`);
+the retired composite-feeder and scheduled-operations slots are dropped. Empty
+sets are valid; a failed read raises
 instead of returning empty sets. Membership facts do not prove that a proposed
 action is authorized or that the response is authentic.
 

@@ -12,12 +12,13 @@ from proof_trading_sdk.errors import CodecError
 
 @dataclass(frozen=True)
 class AuthoritiesSnapshot:
+    """The live authority sets. The engine's retired composite-feeder and
+    scheduled-operations slots are decoded and dropped."""
+
     relayer: list[bytes]
     oracle: list[bytes]
-    cex_composite: list[bytes]
     custody: list[bytes]
     market_params: list[bytes]
-    scheduled_ops: list[bytes]
 
 
 @dataclass(frozen=True)
@@ -65,7 +66,12 @@ def decode_authorities_snapshot(value: t.Any) -> AuthoritiesSnapshot:
         raw = _native.decode_authorities(_payload(value))
     except ValueError as err:
         raise CodecError("invalid authority snapshot") from err
-    return AuthoritiesSnapshot(**raw)
+    return AuthoritiesSnapshot(
+        relayer=raw["relayer"],
+        oracle=raw["oracle"],
+        custody=raw["custody"],
+        market_params=raw["market_params"],
+    )
 
 
 def decode_liquidation_config_info(value: t.Any) -> LiquidationConfigInfo:

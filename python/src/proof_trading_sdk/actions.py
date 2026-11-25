@@ -1147,6 +1147,10 @@ AdminActionWire = dict[str, Any] | str
 
 RETIRED_ADMIN_KINDS = frozenset({"SetTriggerMarketConfig"})
 
+# Authority lists the engine refuses in an ``UpdateAuthoritySet``. They still
+# decode, so a historical proposal naming one can be read and rejected.
+RETIRED_AUTHORITY_DOMAINS = frozenset({"CexComposite", "ScheduledOps"})
+
 
 def _admin_action_kind(action: AdminActionWire) -> str | None:
     if isinstance(action, str):
@@ -1158,14 +1162,27 @@ def _admin_action_kind(action: AdminActionWire) -> str | None:
     return kind if isinstance(kind, str) and kind else None
 
 
-def is_submittable_admin_action(action: AdminActionWire) -> bool:
-    """Exclude retired kinds from typed proposals and approvals.
+def _names_retired_authority_list(action: AdminActionWire) -> bool:
+    if not isinstance(action, dict):
+        return False
+    payload = action.get("UpdateAuthoritySet")
+    return isinstance(payload, dict) and payload.get("domain") in RETIRED_AUTHORITY_DOMAINS
 
-    This checks the enum tag only, not payload validity or engine admission.
-    Historical decoding and low-level encoding/signing remain available.
+
+def is_submittable_admin_action(action: AdminActionWire) -> bool:
+    """Exclude retired kinds, and an ``UpdateAuthoritySet`` naming a retired
+    authority list, from typed proposals and approvals.
+
+    This checks the enum tag and that one domain only, not payload validity or
+    engine admission. Historical decoding and low-level encoding/signing
+    remain available.
     """
     kind = _admin_action_kind(action)
-    return kind is not None and kind not in RETIRED_ADMIN_KINDS
+    return (
+        kind is not None
+        and kind not in RETIRED_ADMIN_KINDS
+        and not _names_retired_authority_list(action)
+    )
 
 
 def _require_submittable_admin_action(action: AdminActionWire) -> None:
@@ -1174,6 +1191,8 @@ def _require_submittable_admin_action(action: AdminActionWire) -> None:
         raise ValueError("admin action must be a non-empty kind string or a single-key dict")
     if kind in RETIRED_ADMIN_KINDS:
         raise ValueError("retired admin actions cannot be proposed or approved")
+    if _names_retired_authority_list(action):
+        raise ValueError("an UpdateAuthoritySet naming a retired authority list cannot be proposed or approved")
 
 
 @dataclass

@@ -221,6 +221,32 @@ describe("adminProposalContentHash (engine golden vectors)", () => {
     );
   });
 
+  it("still hashes an UpdateAuthoritySet naming a retired list", () => {
+    // A pending proposal naming a retired list must still hash, so an admin
+    // can verify and reject it. Python pins the same values.
+    const cases = [
+      {
+        domain: "CexComposite" as const,
+        add: [new Uint8Array(20).fill(0xb2)],
+        remove: [],
+        hash: "c1a08060eea60d4f64a05d0660593871de7860757b87290fcbf47ff4029b6ce5",
+      },
+      {
+        domain: "ScheduledOps" as const,
+        add: [],
+        remove: [new Uint8Array(20).fill(0xc3)],
+        hash: "edcf4d95670bed907cc111554e2914798d98c60a7d9e65d4421826f23bd3e1f1",
+      },
+    ];
+    for (const { domain, add, remove, hash } of cases) {
+      const got = adminProposalContentHash({
+        ...goldenContext(),
+        action: { kind: "UpdateAuthoritySet", value: { domain, add, remove } },
+      });
+      expect(bytesToHex(got)).toBe(hash);
+    }
+  });
+
   it("reproduces the SetMarginOffsetPolicy hash bit-for-bit", () => {
     // The authority is exchange-wire's `codec::admin_proposal_content_hash`
     // over the canonical action bytes; the Rust and Python suites pin the
