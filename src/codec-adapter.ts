@@ -223,7 +223,9 @@ const FEE_OVERRIDE_REVERT_SENTINEL = 0xffff_ffff;
 /** The engine's fee checks (code 42): each fee `0..=10_000` basis points or
  *  the revert sentinel. The `seq` replay guard needs the stored sequence, so
  *  only the engine checks it. */
-function validateAccountFeeOverrideChange(change: AccountFeeOverrideChange): void {
+function validateAccountFeeOverrideChange(
+  change: AccountFeeOverrideChange,
+): void {
   for (const [name, bps] of [
     ["takerFeeBps", change.takerFeeBps],
     ["makerFeeBps", change.makerFeeBps],
