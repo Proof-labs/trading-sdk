@@ -22,17 +22,80 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Rust core:** `market_snapshot::decode_snapshot_view` decodes a complete
+  `GET /v2/markets-snapshot` body, bound to a chain, into proof-wire's
+  `query_v2` view (`market_snapshot::MarketsSnapshotView`). A record that is
+  not a map keyed by field name, or a name that is not a string (a status
+  sent as the integer 0, for example), refuses the whole read.
+
+### Changed
+
+- **Breaking (Python):** a transaction the engine refused is returned with its
+  non-zero `code` instead of raising `EngineError`, as in TypeScript and Rust.
+- **Breaking (Rust):** `UnfilledReason` is the SDK's own open enum,
+  `Known(<wire reason>)` or `Other(String)`, so a reason newer than the SDK
+  still reads. `PlacementOutcome` and `OrderPlacement` are no longer `Copy`.
+- **Breaking (Rust):** `Error::OrderResultUnreadable` carries only the
+  receipt; the event that did not parse is in `receipt.events`.
+
+### Fixed
+
+- Python order results reject malformed or out-of-range integer attributes,
+  a non-string `unfilled` reason and non-string order lists as
+  `OrderResultUnreadable`, preserving the executed transaction's hash for
+  reconciliation.
+
+## [15.0.0] — 2026-11-24
+
+npm only: a MAJOR on proof-wire 13.0.0 (exchange 2.28.0). Every order and
+cancel is a batch of 1 to 100, and a refused order is its outcome rather than
+a failed transaction. The Rust and Python entries above stay under
+[Unreleased].
+
+### Added
+
+- Orders and cancels in batches (exchange#1513, #1514): place or cancel 1 to
+  100 orders for one account under one signature (`placeOrders` /
+  `cancelOrders` / `cancelClientOrders`, Python and Rust `place_orders` /
+  `cancel_orders` / `cancel_client_orders`). An order is a limit or a market
+  order; a market order takes an optional worst price.
+- Every order call returns each order's outcome in the order sent: resting,
+  executed (with requested and filled quantity and why the rest did not
+  fill) or rejected with its error code; a cancel is cancelled or refused.
+  Without an executed verdict (pending, or refused as a whole) the outcomes
+  are `null` (TypeScript) or `None` (Python, Rust).
+- An executed transaction whose order event does not decode is reported as
+  executed and unreadable (TypeScript `outcome: "unreadable"`, Python and
+  Rust `OrderResultUnreadable`): reconcile by hash, never resubmit.
 - **TypeScript:** `ExchangeClient.queryOrderSummaries(address?, filters)` reads
   `GET /v1/history/order-summaries/{owner}`: the owner's fills grouped into one
   row per order (`OrderSummary`: order id, market, side, filled quantity,
   average price, notional, fees, first/last fill time, fill count), filtered by
   a market list (`markets`, at most 200), `fromMs`/`toMs` and an opaque cursor.
   `orderSummarySearchParams` and `decodeOrderSummaryPage` are exported.
-- **Rust core:** `market_snapshot::decode_snapshot_view` decodes a complete
-  `GET /v2/markets-snapshot` body, bound to a chain, into proof-wire's
-  `query_v2` view (`market_snapshot::MarketsSnapshotView`). A record that is
-  not a map keyed by field name, or a name that is not a string (a status
-  sent as the integer 0, for example), refuses the whole read.
+- Error code 156 `PostOnlyNotResting`: a post-only order that would not rest.
+
+### Changed
+
+- **Breaking:** every order call is a batch; a single order is a batch of
+  one. A rejected order or refused cancel no longer fails the transaction: it
+  is its outcome. Single-order calls return the batch result (`{ tx, orders }`
+  / `PlaceOrdersResult`; Rust `Submitted::placements`): read `orders[0]`.
+  Code that detects a refused order with `tx.code !== 0` / `code != 0` now
+  misses it: check each order's outcome. A non-zero transaction code remains
+  for a batch refused as a whole (for example an agent without authority for
+  the owner), which applies nothing.
+- **Breaking:** close position reads the position and sends a reduce-only
+  market order against it, returning the close's outcome (code 12 when
+  unaffordable, 35 when the position went flat first) or nothing-to-close on
+  a flat account. The raw `ClosePosition` action is gone.
+- Basket legs and account-stream order updates read from `orders_placed` /
+  `orders_cancelled`; the retired single-order events still decode from
+  history. Needs the wire of exchange#1514.
+- **Breaking (TypeScript):** `orderPlacements`, `orderCancellations`,
+  `placementsOf` and `cancellationsOf` take only the transaction. They read a
+  transaction you submitted; for another, match the event's `owner`.
+- Pins proof-wire 13.0.0 (exchange 2.28.0).
 
 ## [14.1.0] — 2026-11-20
 

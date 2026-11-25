@@ -132,6 +132,8 @@ function familyOf(eventType: string): string {
   switch (eventType) {
     case "trade_executed":
       return "fill";
+    case "orders_placed":
+    case "orders_cancelled":
     case "order_placed":
     case "order_cancelled":
     case "order_amended":

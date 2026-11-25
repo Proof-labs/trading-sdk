@@ -51,7 +51,9 @@ export function exchangeHttpPriorityForAction(
   action: Action,
 ): ExchangeHttpPriority {
   return action.type === "CancelOrder" ||
+    action.type === "CancelOrders" ||
     action.type === "CancelClientOrder" ||
+    action.type === "CancelClientOrders" ||
     action.type === "CancelAllOrders"
     ? "urgent"
     : "critical";

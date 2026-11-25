@@ -164,8 +164,24 @@ class TestBinaryVectors:
                         stop_loss=_limb_from(i["stop_loss"]),
                         take_profit=_limb_from(i["take_profit"]),
                     )
-                    fields = order.fields()
-                    fields["owner"] = list(fields["owner"])
+                    # One order is a `PlaceOrders` of one limit entry; compare
+                    # it with the vector's single-order fields.
+                    listed = order.fields()
+                    (entry,) = listed["orders"]
+                    limit = entry["kind"]["Limit"]
+                    fields = {
+                        "owner": list(listed["owner"]),
+                        "market": entry["market"],
+                        "side": entry["side"],
+                        "price": limit["price"],
+                        "quantity": entry["quantity"],
+                        "client_order_id": entry["client_order_id"],
+                        "post_only": limit["post_only"],
+                        "reduce_only": entry["reduce_only"],
+                        "time_in_force": limit["time_in_force"],
+                        "stop_loss": entry["stop_loss"],
+                        "take_profit": entry["take_profit"],
+                    }
                     assert fields == expect["yes_order"]["fields"], where
                     payload = _native.encode_action(order.action_type, order.fields())
                     assert payload.hex() == expect["yes_order"]["payload_hex"], where

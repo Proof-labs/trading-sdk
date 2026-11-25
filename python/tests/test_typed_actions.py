@@ -61,6 +61,54 @@ def _admin(i: dict, *byte_keys: str) -> dict:
     return {k: _b(v) if k in byte_keys else v for k, v in i.items()}
 
 
+def _limb(limb: dict | None) -> actions.TriggerLimb | None:
+    return None if limb is None else actions.TriggerLimb(**limb)
+
+
+def _entry(order: dict) -> actions.OrderEntry:
+    shared = {
+        "client_order_id": order["client_order_id"],
+        "reduce_only": order["reduce_only"],
+        "stop_loss": _limb(order["stop_loss"]),
+        "take_profit": _limb(order["take_profit"]),
+    }
+    kind = order["kind"]
+    if "Market" in kind:
+        return actions.OrderEntry.market_order(
+            order["market"],
+            order["side"],
+            order["quantity"],
+            worst_price=kind["Market"]["worst_price"],
+            **shared,
+        )
+    limit = kind["Limit"]
+    return actions.OrderEntry(
+        market=order["market"],
+        side=order["side"],
+        price=limit["price"],
+        quantity=order["quantity"],
+        post_only=limit["post_only"],
+        time_in_force=limit["time_in_force"],
+        **shared,
+    )
+
+
+def _place_orders(i: dict) -> actions.PlaceOrders:
+    return actions.PlaceOrders(
+        owner=_b(i["owner"]), orders=[_entry(order) for order in i["orders"]]
+    )
+
+
+def _cancel_orders(i: dict) -> actions.CancelOrders:
+    return actions.CancelOrders(owner=_b(i["owner"]), order_ids=i["order_ids"])
+
+
+def _cancel_client_orders(i: dict) -> actions.CancelClientOrders:
+    return actions.CancelClientOrders(
+        owner=_b(i["owner"]), client_order_ids=i["client_order_ids"]
+    )
+
+
 BUILDERS = {
     "create_market/full": lambda i: actions.CreateMarket(**_admin(i, "signer")),
     "authorize_withdrawal/operator": lambda i: actions.AuthorizeWithdrawal(
@@ -93,10 +141,81 @@ BUILDERS = {
     "propose_admin_action/set_market_status": lambda i: actions.ProposeAdminAction(
         **_admin(i, "proposer")
     ),
+    **{
+        f"place_orders/{name}": _place_orders
+        for name in (
+            "limit_min",
+            "limit_flags_cloid_ioc",
+            "limit_max_u64",
+            "limit_with_triggers",
+            "market_basic",
+            "market_worst_price_with_triggers",
+            "close",
+            "engine_list",
+        )
+    },
+    "cancel_orders/one": _cancel_orders,
+    "cancel_orders/two_orders": _cancel_orders,
+    "cancel_client_orders/one": _cancel_client_orders,
+    "cancel_client_orders/two_orders": _cancel_client_orders,
     "propose_admin_action/update_market_fees": lambda i: actions.ProposeAdminAction(
         **_admin(i, "proposer")
     ),
 }
+
+
+def _single_from_list(c: dict) -> actions.Action:
+    """The single-order action whose list of one is vector *c*."""
+    i = c["input"]
+    owner = _b(i["owner"])
+    if "order_ids" in i:
+        (order_id,) = i["order_ids"]
+        return actions.CancelOrder(order_id=order_id, owner=owner)
+    if "client_order_ids" in i:
+        (client_order_id,) = i["client_order_ids"]
+        return actions.CancelClientOrder(owner=owner, client_order_id=client_order_id)
+    (entry,) = [_entry(order) for order in i["orders"]]
+    shared = {
+        "market": entry.market,
+        "owner": owner,
+        "side": entry.side,
+        "quantity": entry.quantity,
+        "client_order_id": entry.client_order_id,
+        "stop_loss": entry.stop_loss,
+        "take_profit": entry.take_profit,
+    }
+    if entry.kind == actions.ORDER_KIND_MARKET:
+        return actions.MarketOrder(
+            **shared, worst_price=entry.worst_price, reduce_only=entry.reduce_only
+        )
+    return actions.PlaceOrder(
+        **shared,
+        price=entry.price,
+        post_only=entry.post_only,
+        reduce_only=entry.reduce_only,
+        time_in_force=entry.time_in_force,
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "place_orders/limit_min",
+        "place_orders/limit_flags_cloid_ioc",
+        "place_orders/limit_max_u64",
+        "place_orders/limit_with_triggers",
+        "place_orders/market_basic",
+        "place_orders/market_worst_price_with_triggers",
+        "place_orders/close",
+        "cancel_orders/one",
+        "cancel_client_orders/one",
+    ],
+)
+def test_single_actions_send_the_list_of_one(case):
+    c = _vector(case)
+    action_type, payload = actions.encode_action(_single_from_list(c))
+    assert action_type == c["action_type"]
+    assert payload.hex() == c["expect"]["payload_hex"]
 
 
 @pytest.mark.parametrize("case", sorted(BUILDERS))
@@ -136,3 +255,37 @@ def test_every_published_action_has_a_typed_builder():
     }
     missing = _typescript_action_names() - built
     assert missing == set(), "actions reachable only through RawAction"
+
+
+_ENTRY = actions.OrderEntry(market=1, side="Buy", price=1, quantity=1)
+_LISTS = {
+    "place": lambda n: actions.PlaceOrders(owner=bytes(20), orders=[_ENTRY] * n),
+    "cancel": lambda n: actions.CancelOrders(owner=bytes(20), order_ids=[1] * n),
+    "cancel_client": lambda n: actions.CancelClientOrders(
+        owner=bytes(20), client_order_ids=[1] * n
+    ),
+}
+
+
+@pytest.mark.parametrize("kind", sorted(_LISTS))
+@pytest.mark.parametrize("count", [0, 101])
+def test_a_list_out_of_range_does_not_encode(kind, count):
+    with pytest.raises(ValueError, match=rf"orders per call, got {count}"):
+        actions.encode_action(_LISTS[kind](count))
+
+
+@pytest.mark.parametrize("kind", sorted(_LISTS))
+def test_a_full_list_encodes(kind):
+    action_type, _ = actions.encode_action(_LISTS[kind](actions.MAX_ORDERS_PER_BATCH))
+    assert action_type == _LISTS[kind](1).action_type
+
+
+def test_an_entry_is_a_limit_or_a_market_order():
+    with pytest.raises(ValueError, match="needs a price"):
+        actions.OrderEntry(market=1, side="Buy", price=None, quantity=1)
+    with pytest.raises(ValueError, match="worst_price is for market orders"):
+        actions.OrderEntry(market=1, side="Buy", price=1, quantity=1, worst_price=2)
+    with pytest.raises(ValueError, match="has no price"):
+        actions.OrderEntry(market=1, side="Buy", price=1, quantity=1, kind="market")
+    with pytest.raises(ValueError, match="unknown order kind"):
+        actions.OrderEntry(market=1, side="Buy", price=1, quantity=1, kind="stop")

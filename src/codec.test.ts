@@ -914,6 +914,25 @@ describe("codec v1 all action types", () => {
     expect(decoded.data.legs[0].reduceOnly).toBe(false);
   });
 
+  it("decodes a cancel list of one as the single cancel", () => {
+    const cancels: Action = {
+      type: "CancelOrders",
+      data: { owner: SIGNER, orderIds: [42n] },
+    };
+    expect(decodeTx(encodeTx(cancels, 1n)).action).toEqual({
+      type: "CancelOrder",
+      data: { orderId: 42n, owner: SIGNER },
+    });
+    const byClients: Action = {
+      type: "CancelClientOrders",
+      data: { owner: SIGNER, clientOrderIds: [9n] },
+    };
+    expect(decodeTx(encodeTx(byClients, 1n)).action).toEqual({
+      type: "CancelClientOrder",
+      data: { owner: SIGNER, clientOrderId: 9n },
+    });
+  });
+
   // Deeper round-trip: field-by-field equality for UpdateMarketFees
   // (the shape the shallow type-name check doesn't cover). Catches
   // silent serialization drift in the Option<T> fields.
@@ -1679,31 +1698,36 @@ describe("decodeSigningMessage", () => {
     // so the canonical re-encode check must refuse to display it. (The
     // trailing-fields test above dies earlier, at strict length-checked
     // decode; this one exercises the re-encode comparison itself.)
-    const payload = encodePayloadBytes({
-      type: "PlaceOrder",
-      data: {
-        market: 1,
-        owner: OWNER,
-        side: Side.Buy,
-        price: 100_000_000n,
-        quantity: 1n,
-      },
-    });
-    expect(payload[1]).toBe(0x01); // market=1 as a minimal positive fixint
+    const order = (market: number) =>
+      encodePayloadBytes({
+        type: "PlaceOrder",
+        data: {
+          market,
+          owner: OWNER,
+          side: Side.Buy,
+          price: 100_000_000n,
+          quantity: 1n,
+        },
+      });
+    const payload = order(1);
+    // The market id is the first byte where market 1 and market 2 differ.
+    const other = order(2);
+    const at = payload.findIndex((byte, i) => byte !== other[i]);
+    expect(payload[at]).toBe(0x01); // market=1 as a minimal positive fixint
     const bloated = new Uint8Array([
-      payload[0],
+      ...payload.slice(0, at),
       0xce, // …re-encoded as a msgpack uint32: same value, non-minimal bytes
       0x00,
       0x00,
       0x00,
       0x01,
-      ...payload.slice(2),
+      ...payload.slice(at + 1),
     ]);
     const msg = signingMessage(chainId, ActionType.PlaceOrder, 5n, bloated);
 
     const d = decodeSigningMessage(msg);
 
-    expect(d.actionName).toBe("PlaceOrder");
+    expect(d.actionName).toBe("PlaceOrders");
     expect(d.action).toBeNull();
     expect(d.decodeError).toMatch(/not the canonical representation/);
   });
@@ -1858,24 +1882,18 @@ describe("legacy short-payload decode compatibility", () => {
     ]);
   };
 
-  it("decodes a pre-TIF 6-field PlaceOrder, defaulting the appended flags", () => {
-    // [market, owner, side, price, quantity, client_order_id] — no post_only /
-    // reduce_only / time_in_force (the shape older SDKs emitted).
-    const bytes = envelope(ActionType.PlaceOrder, [
-      1,
-      OWNER,
-      "Buy",
-      66_750_000_000n,
-      5n,
-      null,
-    ]);
-    const { action } = decodeTx(bytes);
-    expect(action.type).toBe("PlaceOrder");
-    if (action.type === "PlaceOrder") {
-      expect(action.data.price).toBe(66_750_000_000n);
-      expect(action.data.postOnly).toBe(false);
-      expect(action.data.reduceOnly).toBe(false);
-      expect(action.data.timeInForce).toBe(TimeInForce.Gtc);
+  it("refuses the retired single-order bytes", () => {
+    // 0x01 PlaceOrder, 0x02 CancelOrder, 0x04 MarketOrder, 0x17
+    // ClosePosition and 0x18 CancelClientOrder no longer decode.
+    const retired: [number, unknown[]][] = [
+      [0x01, [1, OWNER, "Buy", 100n, 5n, null, false, false, "Gtc"]],
+      [0x02, [42n, OWNER]],
+      [0x04, [1, OWNER, "Buy", 5n, null, null, null]],
+      [0x17, [1, OWNER]],
+      [0x18, [OWNER, 9n]],
+    ];
+    for (const [byte, fields] of retired) {
+      expect(() => decodeTx(envelope(byte, fields)), `0x${byte}`).toThrow();
     }
   });
 
@@ -1904,25 +1922,6 @@ describe("legacy short-payload decode compatibility", () => {
       expect(action.data.maxOpenInterest).toBe(1_000_000n);
       expect(action.data.tickSize).toBe(0n);
       expect(action.data.lotSize).toBe(0n);
-    }
-  });
-
-  it("decodes an 8-field PlaceOrder missing only time_in_force", () => {
-    const bytes = envelope(ActionType.PlaceOrder, [
-      1,
-      OWNER,
-      "Sell",
-      100n,
-      2n,
-      7n,
-      true,
-      false,
-    ]);
-    const { action } = decodeTx(bytes);
-    expect(action.type).toBe("PlaceOrder");
-    if (action.type === "PlaceOrder") {
-      expect(action.data.postOnly).toBe(true);
-      expect(action.data.timeInForce).toBe(TimeInForce.Gtc);
     }
   });
 
