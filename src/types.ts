@@ -1647,10 +1647,11 @@ export interface NodeVersion {
 export interface AdminSignerRegistry {
   /** Monotone, starts at 1, never reused; a rotation assigns +1. */
   version: bigint;
-  /** The roster's single approval count. Proposals no longer use it: each
-   *  takes its own threshold from the action's severity (`AdminThresholds`)
-   *  and carries it as `ProposalDisplayInfo.threshold`. Kept on the wire
-   *  until the next major wire release. */
+  /** The roster's single approval count. From the engine release with
+   *  exchange #1577, proposals no longer use it: each takes its own
+   *  threshold from the action's severity (`AdminThresholds`) and carries it
+   *  as `ProposalDisplayInfo.threshold`. Kept on the wire until the next
+   *  major wire release. */
   threshold: number;
   /** Canonically sorted, duplicate-free roster (each a 20-byte address). */
   members: Address[];
