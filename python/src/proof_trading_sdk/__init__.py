@@ -141,6 +141,7 @@ from proof_trading_sdk.finalized_markets import (
 from proof_trading_sdk.governance_reads import (
     AuthoritiesSnapshot,
     FullCloseThreshold,
+    FundLimits,
     LiquidationConfig,
     LiquidationConfigInfo,
     decode_authorities_snapshot,
@@ -335,6 +336,7 @@ __all__ = [
     "decode_finalized_orderbook", "decode_finalized_markets_snapshot",
     "AuthoritiesSnapshot",
     "FullCloseThreshold",
+    "FundLimits",
     "LiquidationConfig",
     "LiquidationConfigInfo",
     "decode_authorities_snapshot",

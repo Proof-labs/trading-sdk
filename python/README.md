@@ -83,10 +83,14 @@ action is authorized or that the response is authentic.
 `liquidation_config()` reads `/v1/liquidation-config` as `LiquidationConfigInfo`
 with exact integer `sequence` and typed `config`. The config includes
 `target_ratio_bps`, `full_close_threshold` (numerator/denominator),
-`partial_penalty_bps`, `max_book_orders`, `max_committed_fills`, and
-`takeover_discount_bps`. The two pacing fields remain readable for wire
-compatibility; the engine no longer applies those caps. Legacy five-field
-configs default the takeover discount to 50, matching the canonical wire type.
+`partial_penalty_bps`, `max_book_orders`, `max_committed_fills`,
+`takeover_discount_bps`, and `fund_limits` (`gross_bps` over all markets and
+`market_bps` on one, in basis points of the pool insurance fund's equity). The
+two pacing fields remain readable for wire compatibility; the engine no longer
+applies those caps. A config written before a trailing field existed takes its
+initial value, matching the canonical wire type: five-field configs default the
+takeover discount to 50, and five- or six-field configs default the fund limits
+to 10,000 and 5,000.
 Read decoding preserves numeric facts without enforcing action-admission rules.
 For example, a structurally valid `full_close_threshold` with denominator zero
 is returned unchanged, matching TypeScript. Check the denominator before division;

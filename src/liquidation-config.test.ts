@@ -21,6 +21,7 @@ function config(): LiquidationConfig {
     maxBookOrders: 20,
     maxCommittedFills: 10,
     takeoverDiscountBps: 50,
+    fundLimits: { grossBps: 10_000, marketBps: 5_000 },
   };
 }
 
@@ -54,8 +55,9 @@ function propose(action: AdminAction): Action {
 const FROZEN_ACTION_HEX =
   "81b45365744c69717569646174696f6e436f6e666967" +
   "930102" +
-  "96cd29049202036414" +
-  "0a32";
+  "97cd29049202036414" +
+  "0a32" +
+  "92cd2710cd1388";
 
 describe("SetLiquidationConfig governance action", () => {
   it("carries inner tag 17", () => {
@@ -74,6 +76,7 @@ describe("SetLiquidationConfig governance action", () => {
           max_book_orders: 20,
           max_committed_fills: 10,
           takeover_discount_bps: 50,
+          fund_limits: { gross_bps: 10_000, market_bps: 5_000 },
         },
       },
     });
@@ -108,16 +111,38 @@ describe("SetLiquidationConfig governance action", () => {
       action: update(),
     });
     expect(bytesToHex(hash)).toBe(
-      "1759bbe56cdd4604699aa7fc464b04fa8e79f055a23b26c9b4f25d386943136c",
+      "9267b43a18d3eb0b50049821f466217f5b445a90309562e5037f4d3173a969ca",
     );
   });
 
   it("decodes a proposal from its wire tuple", () => {
     expect(
       decodeAdminAction({
+        SetLiquidationConfig: [
+          1,
+          2n,
+          [10_500, [2, 3], 100, 20, 10, 50, [8_000, 2_000]],
+        ],
+      }),
+    ).toEqual(
+      update({}, { fundLimits: { grossBps: 8_000, marketBps: 2_000 } }),
+    );
+  });
+
+  it("decodes a proposal written before the fund limits", () => {
+    expect(
+      decodeAdminAction({
         SetLiquidationConfig: [1, 2n, [10_500, [2, 3], 100, 20, 10, 50]],
       }),
     ).toEqual(update());
+  });
+
+  it("encodes a configuration without fund limits with the initial ones", () => {
+    const { fundLimits: _omitted, ...withoutLimits } = config();
+    const payload = bytesToHex(
+      encodePayloadBytes(propose(update({ config: withoutLimits }))),
+    );
+    expect(payload.endsWith(`01${FROZEN_ACTION_HEX}`)).toBe(true);
   });
 
   it("decodes a proposal written before the takeover discount", () => {
@@ -135,6 +160,18 @@ describe("SetLiquidationConfig governance action", () => {
           1,
           2,
           [10_500, [2, 3], 100, 20, 20, 10, 10_000, 1_000_000],
+        ],
+      }),
+    ).toThrow(/expected struct FundLimits/);
+  });
+
+  it("refuses a configuration with a field after the fund limits", () => {
+    expect(() =>
+      decodeAdminAction({
+        SetLiquidationConfig: [
+          1,
+          2,
+          [10_500, [2, 3], 100, 20, 10, 50, [10_000, 5_000], 0],
         ],
       }),
     ).toThrow(/incorrect length/);
@@ -215,6 +252,21 @@ describe("validateSetLiquidationConfig mirrors the wire bounds", () => {
       "a non-integer limit",
       update({}, { maxBookOrders: 1.5 }),
       /maxBookOrders/,
+    ],
+    [
+      "a zero fund limit on one market",
+      update({}, { fundLimits: { grossBps: 10_000, marketBps: 0 } }),
+      /fundLimits\.marketBps must be above zero/,
+    ],
+    [
+      "a fund limit on one market above the limit over all markets",
+      update({}, { fundLimits: { grossBps: 5_000, marketBps: 5_001 } }),
+      /at most fundLimits\.grossBps/,
+    ],
+    [
+      "a fund limit outside u32",
+      update({}, { fundLimits: { grossBps: 2 ** 32, marketBps: 5_000 } }),
+      /fundLimits\.grossBps/,
     ],
   ])("refuses %s", (_name, action, message) => {
     expect(() => validateSetLiquidationConfig(value(action))).toThrow(message);

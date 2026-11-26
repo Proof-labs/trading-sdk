@@ -95,34 +95,55 @@ describe("decodeVoidSettlementEvent", () => {
     });
   });
 
-  it("decodes conditional_void_settled with a signed result", () => {
+  const voidSettled = {
+    event_id: "4",
+    market: "9",
+    owner: "ab".repeat(20),
+    side: "sell",
+    size: "5",
+    entry_price: "60000000",
+    settlement_price: "64000000",
+    branch_weight: "650000",
+    realized_pnl: "-13000000",
+  };
+  const voidSettledDecoded = {
+    type: "ConditionalVoidSettled",
+    eventId: 4,
+    market: 9,
+    owner: "ab".repeat(20),
+    side: "sell",
+    size: 5n,
+    entryPrice: 60_000_000n,
+    settlementPrice: 64_000_000n,
+    branchWeight: 650_000n,
+    realizedPnl: -13_000_000n,
+  };
+
+  it("decodes conditional_void_settled with a signed result and its fund charge", () => {
     expect(
       decodeVoidSettlementEvent({
         type: "conditional_void_settled",
-        attributes: {
-          event_id: "4",
-          market: "9",
-          owner: "ab".repeat(20),
-          side: "sell",
-          size: "5",
-          entry_price: "60000000",
-          settlement_price: "64000000",
-          branch_weight: "650000",
-          realized_pnl: "-13000000",
-        },
+        attributes: { ...voidSettled, fund_charged: "2520000" },
       }),
-    ).toEqual({
-      type: "ConditionalVoidSettled",
-      eventId: 4,
-      market: 9,
-      owner: "ab".repeat(20),
-      side: "sell",
-      size: 5n,
-      entryPrice: 60_000_000n,
-      settlementPrice: 64_000_000n,
-      branchWeight: 650_000n,
-      realizedPnl: -13_000_000n,
-    });
+    ).toEqual({ ...voidSettledDecoded, fundCharged: 2_520_000n });
+  });
+
+  it("decodes a conditional_void_settled from before the fund charge as 0", () => {
+    expect(
+      decodeVoidSettlementEvent({
+        type: "conditional_void_settled",
+        attributes: voidSettled,
+      }),
+    ).toEqual({ ...voidSettledDecoded, fundCharged: 0n });
+  });
+
+  it("refuses an unreadable fund charge", () => {
+    expect(() =>
+      decodeVoidSettlementEvent({
+        type: "conditional_void_settled",
+        attributes: { ...voidSettled, fund_charged: "-1" },
+      }),
+    ).toThrow(/fund_charged/);
   });
 
   it("returns null for another event and throws on a missing attribute", () => {

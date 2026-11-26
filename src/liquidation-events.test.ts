@@ -105,6 +105,51 @@ describe("decodeLiquidationEvent", () => {
     });
   });
 
+  it("decodes the fund limits LiquidationConfigSet carries from proof-wire 14", () => {
+    // exchange-wire's `liquidation_config_set_attributes_are_exact`.
+    const event = txEvent("liquidation_config_set", [
+      ["sequence", "2"],
+      ["target_ratio_bps", "10500"],
+      ["full_close_numerator", "2"],
+      ["full_close_denominator", "3"],
+      ["partial_penalty_bps", "100"],
+      ["max_book_orders", "20"],
+      ["max_committed_fills", "10"],
+      ["proposal_id", "7"],
+      ["takeover_discount_bps", "50"],
+      ["fund_gross_limit_bps", "10000"],
+      ["fund_market_limit_bps", "5000"],
+    ]);
+    const decoded = decodeLiquidationEvent(event);
+    expect(decoded?.type === "LiquidationConfigSet" && decoded.config).toEqual({
+      targetRatioBps: 10_500,
+      fullCloseThreshold: { numerator: 2, denominator: 3 },
+      partialPenaltyBps: 100,
+      maxBookOrders: 20,
+      maxCommittedFills: 10,
+      takeoverDiscountBps: 50,
+      fundLimits: { grossBps: 10_000, marketBps: 5_000 },
+    });
+  });
+
+  it("refuses a LiquidationConfigSet whose fund limits break the wire bound", () => {
+    const event = txEvent("liquidation_config_set", [
+      ["sequence", "2"],
+      ["target_ratio_bps", "10500"],
+      ["full_close_numerator", "2"],
+      ["full_close_denominator", "3"],
+      ["partial_penalty_bps", "100"],
+      ["max_book_orders", "20"],
+      ["max_committed_fills", "10"],
+      ["proposal_id", "7"],
+      ["takeover_discount_bps", "50"],
+      ["fund_gross_limit_bps", "5000"],
+    ]);
+    expect(() => decodeLiquidationEvent(event)).toThrow(
+      /fund_market_limit_bps is missing/,
+    );
+  });
+
   it("decodes PartialLiquidationFee", () => {
     expect(decodeLiquidationEvent(partialFee())).toEqual({
       type: "PartialLiquidationFee",
