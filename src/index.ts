@@ -277,6 +277,7 @@ export {
   type TriggerMarketHistoryPage,
   type AccountInfo,
   type AccountView,
+  type AccountSnapshot,
   type PositionSummary,
   type PositionInfo,
   type MarketConfig,

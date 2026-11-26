@@ -3269,8 +3269,9 @@ export interface PositionSummary {
   adlScore: bigint;
   /** Exact micro-USDC valuation reference; binary firing payout, not trading mark.
    * Null when absent from older v2 responses. */
-  settlePrice: bigint | null;
-  /** Conditional taker/trigger restriction; null for other kinds or older responses. */
+  valuationPrice: bigint | null;
+  /** Conditional thin-book restriction; market reduce-only/halted status is separate.
+   * Null for other kinds or older responses. */
   bookRestricted: boolean | null;
 }
 
@@ -3287,6 +3288,12 @@ export interface AccountView {
   volume30dMicroUsdc: bigint;
   cashoutEquity: bigint;
   positions: PositionSummary[];
+}
+
+/** Account valuation and the block height of that same response. */
+export interface AccountSnapshot {
+  height: number;
+  account: AccountView;
 }
 
 /** Full account information including balance, positions, and margin state. */

@@ -88,8 +88,8 @@ pub use history::{
 };
 pub use ids::{IndexerEventId, SubAccountId, TriggerGroupId, TriggerLimbId};
 pub use info::{
-    AccountState, ChainStatus, ClientConfig, InfoClient, Level, Orderbook, Trade, DEVNET_CHAIN_ID,
-    DEVNET_GATEWAY_URL,
+    AccountSnapshot, AccountState, ChainStatus, ClientConfig, InfoClient, Level, Orderbook, Trade,
+    DEVNET_CHAIN_ID, DEVNET_GATEWAY_URL,
 };
 pub use nonce::{NonceAllocator, MAX_CLOCK_LEAD_MS};
 pub use state::{

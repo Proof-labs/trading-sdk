@@ -125,7 +125,7 @@ import type {
   OrderEntry,
   MarketOrder,
   AccountInfo,
-  AccountView,
+  AccountSnapshot,
   HistoryCashFlow,
   HistoryFillsPage,
   HistoryPositionSnapshot,
@@ -2232,8 +2232,8 @@ export class ExchangeClient {
     );
   }
 
-  /** Account valuation with exact settlement prices, from `GET /v2/account/{owner}`. */
-  async queryAccountV2(addressHex?: string): Promise<AccountView | null> {
+  /** Account valuation and its block height, from `GET /v2/account/{owner}`. */
+  async queryAccountV2(addressHex?: string): Promise<AccountSnapshot | null> {
     const hex = addressHex ?? this.addressHex;
     if (!hex) return null;
     const owner = hex.replace(/^0x/i, "").toLowerCase();
@@ -2244,12 +2244,21 @@ export class ExchangeClient {
       `${this.readBaseUrl}/v2/account/${owner}`,
       "account",
     );
-    return accountViewFromWasm(
+    const height = json.height;
+    if (
+      typeof height !== "number" ||
+      !Number.isSafeInteger(height) ||
+      height < 0
+    ) {
+      throw new Error("account v2 height must be a non-negative safe integer");
+    }
+    const account = accountViewFromWasm(
       await this.decodeRead(
         "AccountV2",
         fromBase64(requireEncodedData(json, "account v2")),
       ),
     );
+    return { height, account };
   }
 
   /** Convenience: fetch just the USDC balance (microUSDC) for an address. */

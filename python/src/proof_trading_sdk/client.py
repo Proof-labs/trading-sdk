@@ -1141,7 +1141,8 @@ class ExchangeClient:
     def account_v2(self, owner: bytes | str | None = None) -> dict[str, t.Any]:
         """Map-encoded account valuation via ``GET /v2/account/{owner}``.
 
-        Returns snake_case wire fields with exact integers. ``settle_price``
+        Returns ``{"height": int, "account": dict}`` from one response.
+        Account fields use snake_case with exact integers. ``valuation_price``
         is the valuation reference (binary firing payout, not trading mark).
         Missing references/restrictions remain None. A positional v1 account is refused.
         This read does not verify a finalized-state witness.
@@ -1154,8 +1155,12 @@ class ExchangeClient:
         encoded = payload.get("data")
         if not isinstance(encoded, str):
             raise CodecError("invalid account v2 data envelope")
+        height = payload.get("height")
+        if type(height) is not int or not 0 <= height <= 2**64 - 1:
+            raise CodecError("account v2 height must be an unsigned 64-bit integer")
         try:
-            return decode_account_view(base64.b64decode(encoded, validate=True))
+            account = decode_account_view(base64.b64decode(encoded, validate=True))
+            return {"height": height, "account": account}
         except (ValueError, binascii.Error) as exc:
             raise CodecError("invalid account v2 response") from exc
 

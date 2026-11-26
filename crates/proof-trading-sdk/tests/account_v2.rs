@@ -21,7 +21,7 @@ fn engine_vector_preserves_exact_valuation_fields() {
     let view = decode_account_view(&fixture()).expect("engine v2 vector must decode");
     assert_eq!(view.cashout_equity, 1_000_090);
     let position = &view.positions[0];
-    assert_eq!(position.settle_price, Some(55));
+    assert_eq!(position.valuation_price, Some(55));
     assert_eq!(position.book_restricted, Some(true));
     assert_eq!(position.upnl_now, Some(150));
 }
@@ -32,25 +32,25 @@ fn older_maps_unknown_fields_and_nullable_values_remain_distinct() {
     let p = raw["positions"][0]
         .as_object_mut()
         .expect("position must be a map");
-    p.remove("settle_price");
+    p.remove("valuation_price");
     p.remove("book_restricted");
     p.insert("future_field".into(), json!(123));
     p.insert("upnl_now".into(), Value::Null);
     raw["margin_ratio_bps"] = Value::Null;
     let view = decode(&raw).expect("older map must decode");
-    assert_eq!(view.positions[0].settle_price, None);
+    assert_eq!(view.positions[0].valuation_price, None);
     assert_eq!(view.positions[0].book_restricted, None);
     assert_eq!(view.positions[0].upnl_now, None);
     assert_eq!(view.margin_ratio_bps, None);
-    raw["positions"][0]["settle_price"] = json!(0);
+    raw["positions"][0]["valuation_price"] = json!(0);
     raw["positions"][0]["book_restricted"] = json!(false);
     let view = decode(&raw).expect("zero and false must decode");
-    assert_eq!(view.positions[0].settle_price, Some(0));
+    assert_eq!(view.positions[0].valuation_price, Some(0));
     assert_eq!(view.positions[0].book_restricted, Some(false));
-    raw["positions"][0]["settle_price"] = json!(u64::MAX);
+    raw["positions"][0]["valuation_price"] = json!(u64::MAX);
     raw["positions"][0]["pnl_if_dies"] = json!(i64::MIN);
     let view = decode(&raw).expect("full width integers must decode");
-    assert_eq!(view.positions[0].settle_price, Some(u64::MAX));
+    assert_eq!(view.positions[0].valuation_price, Some(u64::MAX));
     assert_eq!(view.positions[0].pnl_if_dies, i64::MIN);
     raw["positions"] = json!([]);
     assert!(decode(&raw)
@@ -62,9 +62,9 @@ fn older_maps_unknown_fields_and_nullable_values_remain_distinct() {
 #[test]
 fn malformed_fields_and_v1_arrays_are_never_silently_accepted() {
     for (field, bad) in [
-        ("settle_price", json!(-1)),
-        ("settle_price", json!("55")),
-        ("settle_price", json!(1.5)),
+        ("valuation_price", json!(-1)),
+        ("valuation_price", json!("55")),
+        ("valuation_price", json!(1.5)),
         ("book_restricted", json!(0)),
     ] {
         let mut raw = value();

@@ -1046,7 +1046,7 @@ export function accountViewFromWasm(value: unknown): AccountView {
       pnlIfDies: p.pnl_if_dies as bigint,
       fundingSince: p.funding_since as bigint,
       adlScore: p.adl_score as bigint,
-      settlePrice: (p.settle_price ?? null) as bigint | null,
+      valuationPrice: (p.valuation_price ?? null) as bigint | null,
       bookRestricted: (p.book_restricted ?? null) as boolean | null,
     })),
   };

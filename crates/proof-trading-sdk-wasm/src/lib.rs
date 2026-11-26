@@ -118,7 +118,7 @@ pub enum ReadKind {
     /// `query_v2::InsuranceFundState` (`GET /v2/insurance-fund/{pool}?witness=1`).
     InsuranceFundState = 7,
     /// `query_v2::Account` (`GET /v2/account/{owner}`).
-    AccountV2 = 8,
+    AccountV2 = 15,
 }
 
 fn decode_as<T: serde::de::DeserializeOwned + serde::Serialize>(

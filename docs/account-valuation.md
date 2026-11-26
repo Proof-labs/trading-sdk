@@ -3,20 +3,29 @@
 Use `queryAccountV2(ownerHex)` in TypeScript, `account_v2(owner)` in Python,
 or `InfoClient::account_v2(owner)` in Rust. Each reads the gateway's
 `GET /v2/account/{owner}`, which the gateway forwards to the node unchanged.
-The SDK chooses the route; there is no version parameter.
+The SDK chooses the route; there is no version parameter. The returned snapshot
+contains `{ height, account }`, using the height from the same HTTP response.
+TypeScript and Rust export `AccountSnapshot`; Python returns a dictionary.
+Missing or malformed heights fail. TypeScript accepts safe nonnegative integers
+(up to `Number.MAX_SAFE_INTEGER`); Python and Rust preserve the full `u64` range.
 
 ```ts
-const account = await client.queryAccountV2(ownerHex);
-for (const position of account?.positions ?? []) {
-  console.log(position.market, position.settlePrice, position.bookRestricted);
+const snapshot = await client.queryAccountV2(ownerHex);
+console.log(snapshot?.height);
+for (const position of snapshot?.account.positions ?? []) {
+  console.log(
+    position.market,
+    position.valuationPrice,
+    position.bookRestricted,
+  );
 }
 ```
 
-- `settlePrice` is the exact micro-USDC reference used for position PnL and
+- `valuationPrice` is the exact micro-USDC reference used for position PnL and
   margin. For prediction binaries it is the firing payout, not a trading mark;
   `upnlNow` is null.
-- `bookRestricted` reports the conditional book's taker/trigger restriction.
-  It is null for other market kinds.
+- `bookRestricted` reports only the conditional thin-book restriction;
+  `marketReduceOnly` and `marketHalted` remain separate. It is null for other kinds.
 - Older v2 maps omit these fields; missing values stay null, never zero or false.
 - Account margins are scenario-aware; per-position margins do not sum to them.
 - Integer amounts remain `bigint` in TypeScript and exact integers in Python/Rust.
