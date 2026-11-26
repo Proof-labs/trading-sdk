@@ -1,4 +1,8 @@
-import type { LiquidationConfig, SetLiquidationConfig } from "./types.js";
+import type {
+  FundLimits,
+  LiquidationConfig,
+  SetLiquidationConfig,
+} from "./types.js";
 
 const U32_MAX = 0xffff_ffff;
 const U64_MAX = (1n << 64n) - 1n;
@@ -14,6 +18,13 @@ export const MAX_TAKEOVER_DISCOUNT_BPS = 100;
 
 /** Takeover discount a configuration without one carries. */
 export const INITIAL_TAKEOVER_DISCOUNT_BPS = 50;
+
+/** Fund limits a configuration without them carries: 1.0 × the fund's
+ *  equity over all markets, 0.5 × on one. */
+export const INITIAL_FUND_LIMITS: Readonly<FundLimits> = Object.freeze({
+  grossBps: 10_000,
+  marketBps: 5_000,
+});
 
 function u32(value: number, field: string): void {
   if (!Number.isInteger(value) || value < 0 || value > U32_MAX) {
@@ -61,6 +72,16 @@ export function validateLiquidationConfig(config: LiquidationConfig): void {
     if (config.takeoverDiscountBps > MAX_TAKEOVER_DISCOUNT_BPS) {
       throw new Error(
         `takeoverDiscountBps must be at most ${MAX_TAKEOVER_DISCOUNT_BPS}`,
+      );
+    }
+  }
+  if (config.fundLimits !== undefined) {
+    const { grossBps, marketBps } = config.fundLimits;
+    u32(grossBps, "fundLimits.grossBps");
+    u32(marketBps, "fundLimits.marketBps");
+    if (marketBps === 0 || marketBps > grossBps) {
+      throw new Error(
+        "fundLimits.marketBps must be above zero and at most fundLimits.grossBps",
       );
     }
   }

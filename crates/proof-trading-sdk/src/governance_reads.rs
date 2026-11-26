@@ -49,9 +49,11 @@ pub fn decode_authorities(bytes: &[u8]) -> Result<AuthoritiesSnapshot, &'static 
     rmp_serde::from_slice(bytes).map_err(|_| "invalid authority fields")
 }
 
-/// The engine's stored pair wraps canonical sequence/config types. Legacy
-/// five-field configs default the takeover discount through proof-wire serde.
-/// Numeric facts are decoded without applying action-admission policy.
+/// The engine's stored pair wraps canonical sequence/config types. Configs
+/// written before a trailing field existed default it through proof-wire
+/// serde: five fields take the initial takeover discount, five or six take
+/// the initial fund limits. Numeric facts are decoded without applying
+/// action-admission policy.
 pub fn decode_liquidation_config(
     bytes: &[u8],
 ) -> Result<(LiquidationConfigSequence, LiquidationConfig), &'static str> {
@@ -59,9 +61,12 @@ pub fn decode_liquidation_config(
     let fields = tuple(&value, 2)?;
     let config = fields[1]
         .as_array()
-        .filter(|v| (5..=6).contains(&v.len()))
+        .filter(|v| (5..=7).contains(&v.len()))
         .ok_or("invalid liquidation configuration shape")?;
     tuple(&config[1], 2)?;
+    if let Some(fund_limits) = config.get(6) {
+        tuple(fund_limits, 2)?;
+    }
     rmp_serde::from_slice(bytes).map_err(|_| "invalid liquidation configuration fields")
 }
 
