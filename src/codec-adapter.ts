@@ -22,7 +22,11 @@ import {
   type ActionTypeValue,
   type AdminAction,
   type EmergencyAction,
+  type AgreedDeposit,
   type BridgePayoutConfig,
+  type ParkCause,
+  type ParkedDepositPage,
+  type QueuedDepositPage,
   type BridgeStatus,
   type DepositLocator,
   type EventInfo,
@@ -305,10 +309,19 @@ function validateSetOperatorReceiptRegistry(
   }
 }
 
-/** The vault and the rent wallet are 32-byte Solana addresses, and differ. */
+/** The wire's rule: both addresses are 32 non-zero bytes and differ, so the
+ *  vault check stays on and the rent wallet is never the payout path. */
 function validateSetBridgePayoutConfig(config: SetBridgePayoutConfig): void {
-  if (config.payoutMultisig.length !== 32 || config.opsWallet.length !== 32) {
-    throw new Error("setBridgePayoutConfig addresses must be 32 bytes");
+  for (const [name, address] of [
+    ["payoutMultisig", config.payoutMultisig],
+    ["opsWallet", config.opsWallet],
+  ] as const) {
+    if (address.length !== 32) {
+      throw new Error(`setBridgePayoutConfig ${name} must be 32 bytes`);
+    }
+    if (!address.some((byte) => byte !== 0)) {
+      throw new Error(`setBridgePayoutConfig ${name} must not be zero`);
+    }
   }
   if (bytesToHex(config.payoutMultisig) === bytesToHex(config.opsWallet)) {
     throw new Error(
@@ -1089,9 +1102,9 @@ function payoutVoteFromWasm(v: WasmRecord): WithdrawalPayoutVote {
   };
 }
 
-/// The v2 views spell the withdrawal status in snake_case (`"pending"`),
-/// unlike the v1 record's title-case serde default; map it onto the shared
-/// TS union, loudly.
+/** The v2 views spell the withdrawal status in snake_case (`"pending"`),
+ *  unlike the v1 record's title-case serde default; map it onto the shared
+ *  TS union, loudly. */
 function withdrawalStatusFromWasm(v: unknown): WithdrawalRecord["status"] {
   switch (v) {
     case "pending":
@@ -1115,7 +1128,7 @@ function withdrawalFromWasm(w: WasmRecord): WithdrawalRecord {
     solanaDestination: bytesOf(w.solana_destination),
     status: withdrawalStatusFromWasm(w.status),
     requestHeight: w.request_height as bigint,
-    quarantined: w.quarantined === true,
+    quarantined: w.quarantined as boolean,
   };
 }
 
@@ -1168,6 +1181,13 @@ export function depositCursorHex(
   if (solanaTxSig.length !== 64) {
     throw new Error("deposit cursor: solanaTxSig must be 64 bytes");
   }
+  const u16 = (v: number) => Number.isInteger(v) && v >= 0 && v <= 0xffff;
+  if (
+    !u16(locator.topIndex) ||
+    (locator.innerIndex != null && !u16(locator.innerIndex))
+  ) {
+    throw new Error("deposit cursor: locator indexes must be u16");
+  }
   const suffix = new Uint8Array(4);
   const view = new DataView(suffix.buffer);
   view.setUint16(0, locator.topIndex);
@@ -1206,6 +1226,58 @@ export function pendingDepositsFromWasm(v: unknown): PendingDepositPage {
           ),
   };
 }
+function agreedDepositFromWasm(d: WasmRecord): AgreedDeposit {
+  return {
+    owner: bytesOf(d.owner),
+    amountMicroUsdc: d.amount_micro_usdc as bigint,
+    solanaTxSig: bytesOf(d.solana_tx_sig),
+    locator: d.locator == null ? null : locatorFromWasm(d.locator),
+    registryEpoch: d.registry_epoch as bigint,
+    agreedHeight: d.agreed_height as bigint,
+    agreedAtMs: d.agreed_at_ms as bigint,
+  };
+}
+
+/** One `/v2/bridge/agreed-deposits` page; `next_cursor` is the last scanned
+ *  queue sequence. */
+export function agreedDepositsFromWasm(v: unknown): QueuedDepositPage {
+  const p = v as WasmRecord;
+  return {
+    rows: (p.rows as WasmRecord[]).map((r) => ({
+      sequence: r.sequence as bigint,
+      deposit: agreedDepositFromWasm(r.deposit as WasmRecord),
+    })),
+    nextCursor: (p.next_cursor as bigint | undefined) ?? null,
+  };
+}
+
+const PARK_CAUSES: ReadonlyMap<unknown, ParkCause> = new Map([
+  ["over_per_receipt_max", "OverPerReceiptMax"],
+  ["over_window_cap", "OverWindowCap"],
+  ["unknown", "Unknown"],
+]);
+
+/** One `/v2/bridge/parked-deposits` page; `next_cursor` is the raw store key
+ *  of the last scanned row, returned as the route's hex cursor. */
+export function parkedDepositsFromWasm(v: unknown): ParkedDepositPage {
+  const p = v as WasmRecord;
+  return {
+    rows: (p.rows as WasmRecord[]).map((r) => {
+      const cause = PARK_CAUSES.get(r.cause);
+      if (cause === undefined) {
+        throw new Error(`unknown park cause: ${JSON.stringify(r.cause)}`);
+      }
+      return {
+        deposit: agreedDepositFromWasm(r.deposit as WasmRecord),
+        cause,
+        parkedHeight: r.parked_height as bigint,
+      };
+    }),
+    nextCursor:
+      p.next_cursor == null ? null : bytesToHex(bytesOf(p.next_cursor)),
+  };
+}
+
 /** The engine's names, keyed by the version 2 view's spelling of them. */
 const VIEW_MARKET_STATUSES: ReadonlyMap<unknown, MarketStatus> = new Map([
   ["trading", "Trading"],

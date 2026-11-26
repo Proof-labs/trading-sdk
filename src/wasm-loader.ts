@@ -39,6 +39,8 @@ export interface WasmCore {
     readonly PendingWithdrawals: number;
     readonly PendingDeposits: number;
     readonly BridgePayoutConfig: number;
+    readonly AgreedDeposits: number;
+    readonly ParkedDeposits: number;
     readonly AuthorizedAgents: number;
     readonly InsuranceFundDirectory: number;
     readonly InsuranceFundState: number;

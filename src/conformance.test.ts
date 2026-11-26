@@ -26,6 +26,7 @@ import { bytesToHex, pubkeyToOwner, ownerToHex } from "./crypto.js";
 import { ExecErrorCode, execErrorName } from "./errors.js";
 import { BinaryPriceError, binaryPositionView, yesOrder } from "./binary.js";
 import {
+  bridgeMessagePreimage,
   signRecordWithdrawalPayout,
   signVoteDeposit,
   signVotePauseBridge,
@@ -1562,6 +1563,42 @@ describe("conformance vectors (TypeScript)", () => {
     await expect(
       signVotePauseBridge(async () => new Uint8Array(63), 1n, binding),
     ).rejects.toThrow("64 signature bytes");
+  });
+
+  it("a bridge message takes only bytes, known fields and a signable locator", () => {
+    const base = {
+      kind: "withdrawalPaid" as const,
+      withdrawalId: 7n,
+      vault: new Uint8Array(32),
+      squadsTransactionIndex: 3,
+      deploymentId: new Uint8Array(32),
+      chainId: new Uint8Array(32),
+      registryEpoch: 1n,
+    };
+    expect(() =>
+      bridgeMessagePreimage({
+        ...base,
+        vault: "a".repeat(32) as unknown as Uint8Array,
+      }),
+    ).toThrow();
+    expect(() =>
+      bridgeMessagePreimage({
+        ...base,
+        locator: null,
+      } as unknown as typeof base),
+    ).toThrow(/locator/);
+    expect(() =>
+      bridgeMessagePreimage({
+        kind: "deposit",
+        owner: new Uint8Array(20),
+        amountMicroUsdc: 1n,
+        solanaTxSig: new Uint8Array(64),
+        locator: { topIndex: 0, innerIndex: 65535 },
+        deploymentId: new Uint8Array(32),
+        chainId: new Uint8Array(32),
+        registryEpoch: 1n,
+      }),
+    ).toThrow(/sentinel/);
   });
 
   it("a bridge message refuses a wrong-width field before signing", async () => {

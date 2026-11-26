@@ -1,3 +1,4 @@
+import { depositCursorHex } from "./codec-adapter.js";
 // Reads whose response type is in proof-wire decode in the Rust core. Each
 // vector is `rmp_serde::to_vec` of the wire type, as the engine serves it.
 
@@ -366,6 +367,25 @@ const PENDING_DEPOSITS = wire({
   },
 });
 const PENDING_DEPOSITS_EXHAUSTED = wire({ rows: [], next_cursor: null });
+const AGREED = {
+  owner: new Uint8Array(20).fill(0x66),
+  amount_micro_usdc: 20_000_000_000n,
+  solana_tx_sig: new Uint8Array(64).fill(0x99),
+  locator: null,
+  registry_epoch: 3n,
+  agreed_height: 50n,
+  agreed_at_ms: 1_700_000_000_000n,
+};
+const AGREED_DEPOSITS = wire({
+  rows: [{ sequence: 7n, deposit: AGREED }],
+  next_cursor: 7n,
+});
+const PARKED_DEPOSITS = wire({
+  rows: [
+    { deposit: AGREED, cause: "over_per_receipt_max", parked_height: 51n },
+  ],
+  next_cursor: new Uint8Array([0xde, 0xad]),
+});
 
 describe("queryBridgeStatus", () => {
   it("decodes the paused bridge", async () => {
@@ -502,5 +522,52 @@ describe("queryPendingDeposits", () => {
       rows: [],
       nextCursor: null,
     });
+  });
+});
+
+describe("queryAgreedDeposits and queryParkedDeposits", () => {
+  const agreed = {
+    owner: new Uint8Array(20).fill(0x66),
+    amountMicroUsdc: 20_000_000_000n,
+    solanaTxSig: new Uint8Array(64).fill(0x99),
+    locator: null,
+    registryEpoch: 3n,
+    agreedHeight: 50n,
+    agreedAtMs: 1_700_000_000_000n,
+  };
+
+  it("decodes the credit queue", async () => {
+    serve(AGREED_DEPOSITS);
+    expect(await client().queryAgreedDeposits()).toEqual({
+      rows: [{ sequence: 7n, deposit: agreed }],
+      nextCursor: 7n,
+    });
+  });
+
+  it("decodes a parked deposit with its cause and a hex cursor", async () => {
+    serve(PARKED_DEPOSITS);
+    expect(await client().queryParkedDeposits()).toEqual({
+      rows: [
+        { deposit: agreed, cause: "OverPerReceiptMax", parkedHeight: 51n },
+      ],
+      nextCursor: "dead",
+    });
+  });
+});
+
+describe("depositCursorHex", () => {
+  it("refuses an index outside u16 instead of wrapping it", () => {
+    const sig = new Uint8Array(64);
+    expect(() =>
+      depositCursorHex(sig, { topIndex: 65536, innerIndex: null }),
+    ).toThrow(/u16/);
+    expect(() =>
+      depositCursorHex(sig, { topIndex: 0, innerIndex: -1 }),
+    ).toThrow(/u16/);
+    expect(
+      depositCursorHex(sig, { topIndex: 2, innerIndex: 5 }).endsWith(
+        "00020005",
+      ),
+    ).toBe(true);
   });
 });

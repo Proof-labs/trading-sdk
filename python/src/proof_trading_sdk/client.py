@@ -1258,6 +1258,15 @@ class ExchangeClient:
         return raw
 
     @staticmethod
+    def _bridge_enum(value: t.Any, names: dict[str, str], name: str) -> str:
+        """A view enum spelled in snake_case. A value this SDK does not name
+        reads as ``"Unknown"``, as the wire's ``#[serde(other)]`` does, so a
+        newer engine's value never fails the whole page."""
+        if not isinstance(value, str):
+            raise CodecError(f"bridge decode: {name} must be a string")
+        return names.get(value, "Unknown")
+
+    @staticmethod
     def _bridge_uint(value: t.Any, name: str) -> int:
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
             raise CodecError(f"bridge decode: {name} must be a u64")
@@ -1269,25 +1278,28 @@ class ExchangeClient:
             raise CodecError(f"bridge decode: {path} (expected a field map)")
         return raw
 
+    def _bridge_u16(self, value: t.Any, name: str) -> int:
+        index = self._bridge_uint(value, name)
+        if index > 0xFFFF:
+            raise CodecError(f"bridge decode: {name} must be a u16")
+        return index
+
     def _bridge_locator(self, value: t.Any) -> dict[str, t.Any]:
         if not isinstance(value, dict):
             raise CodecError("bridge decode: locator (expected a field map)")
         inner = value.get("inner_index")
         return {
-            "top_index": self._bridge_uint(value.get("top_index"), "top_index"),
-            "inner_index": None if inner is None else self._bridge_uint(inner, "inner_index"),
+            "top_index": self._bridge_u16(value.get("top_index"), "top_index"),
+            "inner_index": None if inner is None else self._bridge_u16(inner, "inner_index"),
         }
 
     def _payout_vote(self, value: t.Any) -> dict[str, t.Any]:
         if not isinstance(value, dict):
             raise CodecError("bridge decode: vote (expected a field map)")
-        verdict = self._PAYOUT_VERDICTS.get(value.get("verdict"))
-        if verdict is None:
-            raise CodecError(f"bridge decode: unknown payout verdict {value.get('verdict')!r}")
         return {
             "voter": self._bridge_bytes(value.get("voter"), 32, "voter"),
             "registry_epoch": self._bridge_uint(value.get("registry_epoch"), "registry_epoch"),
-            "verdict": verdict,
+            "verdict": self._bridge_enum(value.get("verdict"), self._PAYOUT_VERDICTS, "verdict"),
             "vault": self._bridge_bytes(value.get("vault"), 32, "vault"),
             "squads_transaction_index": self._bridge_uint(
                 value.get("squads_transaction_index"), "squads_transaction_index"
@@ -1364,11 +1376,12 @@ class ExchangeClient:
             withdrawal = row.get("withdrawal")
             if not isinstance(withdrawal, dict):
                 raise CodecError("bridge decode: withdrawal (expected a field map)")
-            status = self._WITHDRAWAL_STATUSES.get(withdrawal.get("status"))
-            if status is None:
-                raise CodecError(
-                    f"bridge decode: unknown withdrawal status {withdrawal.get('status')!r}"
-                )
+            status = self._bridge_enum(
+                withdrawal.get("status"), self._WITHDRAWAL_STATUSES, "status"
+            )
+            quarantined = withdrawal.get("quarantined", False)
+            if not isinstance(quarantined, bool):
+                raise CodecError("bridge decode: quarantined must be a boolean")
             decoded: dict[str, t.Any] = {
                 "withdrawal": {
                     "withdrawal_id": self._bridge_uint(
@@ -1383,8 +1396,8 @@ class ExchangeClient:
                     "request_height": self._bridge_uint(
                         withdrawal.get("request_height"), "request_height"
                     ),
-                    # Absent on an engine before the quarantine flag.
-                    "quarantined": withdrawal.get("quarantined") is True,
+                    # The view's serde default: absent reads as not quarantined.
+                    "quarantined": quarantined,
                 },
                 "payout": None,
             }
@@ -1462,6 +1475,88 @@ class ExchangeClient:
                 }
             )
         return {"rows": rows, "next_cursor": self._deposit_cursor(raw.get("next_cursor"))}
+
+    def _agreed_deposit(self, value: t.Any) -> dict[str, t.Any]:
+        if not isinstance(value, dict):
+            raise CodecError("bridge decode: agreed deposit (expected a field map)")
+        locator = value.get("locator")
+        return {
+            "owner": self._bridge_bytes(value.get("owner"), 20, "owner"),
+            "amount_micro_usdc": self._bridge_uint(value.get("amount_micro_usdc"), "amount_micro_usdc"),
+            "solana_tx_sig": self._bridge_bytes(value.get("solana_tx_sig"), 64, "solana_tx_sig"),
+            "locator": None if locator is None else self._bridge_locator(locator),
+            "registry_epoch": self._bridge_uint(value.get("registry_epoch"), "registry_epoch"),
+            "agreed_height": self._bridge_uint(value.get("agreed_height"), "agreed_height"),
+            "agreed_at_ms": self._bridge_uint(value.get("agreed_at_ms"), "agreed_at_ms"),
+        }
+
+    def _bridge_rows(self, raw: dict[str, t.Any]) -> list[t.Any]:
+        rows = raw.get("rows")
+        if not isinstance(rows, list):
+            raise CodecError("bridge decode: rows (expected a list)")
+        for row in rows:
+            if not isinstance(row, dict):
+                raise CodecError("bridge decode: row (expected a field map)")
+        return rows
+
+    _PARK_CAUSES = {
+        "over_per_receipt_max": "OverPerReceiptMax",
+        "over_window_cap": "OverWindowCap",
+        "unknown": "Unknown",
+    }
+
+    def agreed_deposits(
+        self, cursor: int | None = None, limit: int | None = None
+    ) -> dict[str, t.Any]:
+        """One page of the agreed-deposit credit queue
+        (`/v2/bridge/agreed-deposits`), oldest first: deposits the operator
+        threshold agreed on whose credit waits for a deposit cap's window or
+        an unpause. ``cursor`` is the previous page's ``next_cursor``."""
+        params: dict[str, t.Any] = {}
+        if cursor is not None:
+            params["cursor"] = int(cursor)
+        if limit is not None:
+            params["limit"] = int(limit)
+        raw = self._bridge_view("/v2/bridge/agreed-deposits", params or None)
+        next_cursor = raw.get("next_cursor")
+        return {
+            "rows": [
+                {
+                    "sequence": self._bridge_uint(row.get("sequence"), "sequence"),
+                    "deposit": self._agreed_deposit(row.get("deposit")),
+                }
+                for row in self._bridge_rows(raw)
+            ],
+            "next_cursor": None if next_cursor is None else self._bridge_uint(next_cursor, "next_cursor"),
+        }
+
+    def parked_deposits(
+        self, cursor: str | None = None, limit: int | None = None
+    ) -> dict[str, t.Any]:
+        """One page of parked deposits (`/v2/bridge/parked-deposits`): agreed
+        deposits over the per-deposit maximum or the window cap, which no
+        window can admit. ``cursor`` is the previous page's ``next_cursor``,
+        already in the route's hex form; pass it back verbatim."""
+        params: dict[str, t.Any] = {}
+        if cursor is not None:
+            params["cursor"] = str(cursor)
+        if limit is not None:
+            params["limit"] = int(limit)
+        raw = self._bridge_view("/v2/bridge/parked-deposits", params or None)
+        next_cursor = raw.get("next_cursor")
+        if next_cursor is not None and not isinstance(next_cursor, (bytes, bytearray)):
+            raise CodecError("bridge decode: next_cursor must be bytes")
+        return {
+            "rows": [
+                {
+                    "deposit": self._agreed_deposit(row.get("deposit")),
+                    "cause": self._bridge_enum(row.get("cause"), self._PARK_CAUSES, "cause"),
+                    "parked_height": self._bridge_uint(row.get("parked_height"), "parked_height"),
+                }
+                for row in self._bridge_rows(raw)
+            ],
+            "next_cursor": None if next_cursor is None else bytes(next_cursor).hex(),
+        }
 
     def _deposit_cursor(self, value: t.Any) -> str | None:
         """The route's pending-deposits cursor from the view's last scanned

@@ -42,122 +42,131 @@ fn codec_vectors() {
     }
 }
 
+/// One `vote-preimages.ndjson` row. Ids, epochs, amounts and times are
+/// decimal strings; byte fields are lowercase hex.
+#[derive(serde::Deserialize)]
+struct PreimageRow {
+    case: String,
+    preimage_hex: String,
+    deployment_id: String,
+    chain_id: String,
+    registry_epoch: String,
+    #[serde(flatten)]
+    body: PreimageBody,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum PreimageBody {
+    WithdrawalPaid(PayoutRow),
+    WithdrawalPayoutDead(PayoutRow),
+    PayoutRecord(PayoutRow),
+    Deposit {
+        owner: String,
+        amount_micro_usdc: String,
+        solana_tx_sig: String,
+        locator: Option<LocatorRow>,
+    },
+    PauseBridge {
+        signed_at_ms: String,
+    },
+}
+
+#[derive(serde::Deserialize)]
+struct PayoutRow {
+    withdrawal_id: String,
+    vault: String,
+    squads_transaction_index: u32,
+}
+
+#[derive(serde::Deserialize)]
+struct LocatorRow {
+    top_index: u16,
+    inner_index: Option<u16>,
+}
+
+fn hex_array<const N: usize>(text: &str) -> [u8; N] {
+    hex::decode(text)
+        .expect("vector byte fields are hex")
+        .try_into()
+        .expect("a vector byte field has its wire width")
+}
+
+fn decimal(text: &str) -> u64 {
+    text.parse()
+        .expect("vector integers are u64 decimal strings")
+}
+
+impl PreimageRow {
+    /// The core message this row describes, built the way every binding
+    /// builds it.
+    fn message(&self) -> proof_trading_sdk::bridge_votes::BridgeMessage {
+        use proof_trading_sdk::bridge::{
+            DeploymentId, MicroUsdc, ProofOwner, RegistryEpoch, SolanaPubkey, TxSignature,
+            WithdrawalId,
+        };
+        use proof_trading_sdk::bridge_votes::{
+            BridgeBinding, BridgeMessage, DepositObservation, PayoutIdentity,
+        };
+        let binding = BridgeBinding {
+            deployment_id: DeploymentId::new(hex_array(&self.deployment_id)),
+            chain_id: hex_array(&self.chain_id),
+            registry_epoch: RegistryEpoch::new(decimal(&self.registry_epoch)),
+        };
+        let payout = |row: &PayoutRow| PayoutIdentity {
+            withdrawal_id: WithdrawalId::new(decimal(&row.withdrawal_id)),
+            vault: SolanaPubkey::new(hex_array(&row.vault)),
+            squads_transaction_index: row.squads_transaction_index,
+        };
+        match &self.body {
+            PreimageBody::WithdrawalPaid(row) => BridgeMessage::WithdrawalPaid {
+                payout: payout(row),
+                binding,
+            },
+            PreimageBody::WithdrawalPayoutDead(row) => BridgeMessage::WithdrawalPayoutDead {
+                payout: payout(row),
+                binding,
+            },
+            PreimageBody::PayoutRecord(row) => BridgeMessage::PayoutRecord {
+                payout: payout(row),
+                binding,
+            },
+            PreimageBody::Deposit {
+                owner,
+                amount_micro_usdc,
+                solana_tx_sig,
+                locator,
+            } => BridgeMessage::Deposit {
+                deposit: DepositObservation {
+                    owner: ProofOwner::new(hex_array(owner)),
+                    amount: MicroUsdc::new(decimal(amount_micro_usdc)),
+                    solana_tx_sig: TxSignature::new(hex_array(solana_tx_sig)),
+                    locator: locator.as_ref().map(|l| {
+                        DepositObservation::checked_locator(l.top_index, l.inner_index)
+                            .expect("vector locators are signable")
+                    }),
+                },
+                binding,
+            },
+            PreimageBody::PauseBridge { signed_at_ms } => BridgeMessage::PauseBridge {
+                signed_at_ms: decimal(signed_at_ms),
+                binding,
+            },
+        }
+    }
+}
+
 #[test]
 fn bridge_message_preimages_match_shared_vectors() {
-    use proof_trading_sdk::bridge::{
-        DeploymentId, MicroUsdc, OperatorSignature, RegistryEpoch, SolanaPubkey, TxSignature,
-        WithdrawalId,
-    };
-    use proof_trading_sdk::types::{
-        DepositLocator, RecordWithdrawalPayout, VoteDeposit, VotePauseBridge, VoteWithdrawalPaid,
-        VoteWithdrawalPayoutDead,
-    };
-    const UNSIGNED: OperatorSignature = OperatorSignature::new([0; 64]);
-
     let rows = lines("vote-preimages.ndjson");
     assert!(!rows.is_empty(), "no bridge message vectors");
     for line in rows {
-        let row: serde_json::Value = serde_json::from_str(&line).expect("parse vote preimage");
-        let case = row["case"].as_str().expect("case string").to_owned();
-        let bytes = |name: &str| -> Vec<u8> {
-            hex::decode(row[name].as_str().expect("hex string field"))
-                .expect("valid vote preimage hex")
-        };
-        let array32 = |name: &str| -> [u8; 32] { bytes(name).try_into().expect("a 32-byte field") };
-        let decimal = |name: &str| -> u64 {
-            row[name]
-                .as_str()
-                .expect("a decimal string")
-                .parse()
-                .expect("a u64 in decimal")
-        };
-        let small = |value: &serde_json::Value| -> u16 {
-            u16::try_from(value.as_u64().expect("an index")).expect("an index fits u16")
-        };
-        let deployment_id = DeploymentId::new(array32("deployment_id"));
-        let chain_id = array32("chain_id");
-        let registry_epoch = RegistryEpoch::new(decimal("registry_epoch"));
-        let payout = || {
-            (
-                WithdrawalId::new(decimal("withdrawal_id")),
-                SolanaPubkey::new(array32("vault")),
-                u32::try_from(row["squads_transaction_index"].as_u64().expect("an index"))
-                    .expect("the transaction index fits u32"),
-            )
-        };
-        let message = match row["kind"].as_str().expect("kind string") {
-            "withdrawal_paid" => {
-                let (withdrawal_id, vault, squads_transaction_index) = payout();
-                VoteWithdrawalPaid {
-                    withdrawal_id,
-                    vault,
-                    squads_transaction_index,
-                    deployment_id,
-                    chain_id,
-                    registry_epoch,
-                    signature: UNSIGNED,
-                }
-                .vote_message()
-            }
-            "withdrawal_payout_dead" => {
-                let (withdrawal_id, vault, squads_transaction_index) = payout();
-                VoteWithdrawalPayoutDead {
-                    withdrawal_id,
-                    vault,
-                    squads_transaction_index,
-                    deployment_id,
-                    chain_id,
-                    registry_epoch,
-                    signature: UNSIGNED,
-                }
-                .vote_message()
-            }
-            "payout_record" => {
-                let (withdrawal_id, vault, squads_transaction_index) = payout();
-                RecordWithdrawalPayout {
-                    withdrawal_id,
-                    vault,
-                    squads_transaction_index,
-                    deployment_id,
-                    chain_id,
-                    registry_epoch,
-                    signature: UNSIGNED,
-                }
-                .record_message()
-            }
-            "deposit" => VoteDeposit {
-                owner: bytes("owner").try_into().expect("owner is 20 bytes"),
-                amount_micro_usdc: MicroUsdc::new(decimal("amount_micro_usdc")),
-                solana_tx_sig: TxSignature::new(
-                    bytes("solana_tx_sig")
-                        .try_into()
-                        .expect("the transaction signature is 64 bytes"),
-                ),
-                locator: (!row["locator"].is_null()).then(|| DepositLocator {
-                    top_index: small(&row["locator"]["top_index"]),
-                    inner_index: (!row["locator"]["inner_index"].is_null())
-                        .then(|| small(&row["locator"]["inner_index"])),
-                }),
-                deployment_id,
-                chain_id,
-                registry_epoch,
-                signature: UNSIGNED,
-            }
-            .vote_message(),
-            "pause_bridge" => VotePauseBridge {
-                signed_at_ms: decimal("signed_at_ms"),
-                deployment_id,
-                chain_id,
-                registry_epoch,
-                signature: UNSIGNED,
-            }
-            .vote_message(),
-            other => panic!("[{case}] unknown bridge message kind {other}"),
-        };
+        let row: PreimageRow = serde_json::from_str(&line).expect("a bridge message vector row");
         assert_eq!(
-            hex::encode(message),
-            row["preimage_hex"].as_str().expect("expected hex"),
-            "[{case}] preimage mismatch"
+            hex::encode(row.message().preimage()),
+            row.preimage_hex,
+            "[{}] preimage mismatch",
+            row.case
         );
     }
 }

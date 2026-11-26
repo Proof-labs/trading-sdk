@@ -25,6 +25,7 @@ from enum import StrEnum
 from typing import Any, Optional
 
 import proof_trading_sdk._native as _native
+from proof_trading_sdk.external_signer import ExternalSigner
 
 # ── Wire-string enums (match the Rust serde unit-variant names) ──────────────
 
@@ -489,25 +490,6 @@ class SubAccountTransfer(Action):
         }
 
 
-BRIDGE_VOTE_DOMAIN = b"PROOF_BRIDGE_VOTE_V1"
-"""Domain separator at the front of every bridge-operator message."""
-
-BRIDGE_VOTE_KIND_WITHDRAWAL_PAID = 1
-"""Message kind byte: settle one withdrawal as ``Paid``."""
-
-BRIDGE_VOTE_KIND_DEPOSIT_CREDIT = 2
-"""Message kind byte: credit one observed deposit."""
-
-BRIDGE_VOTE_KIND_PAYOUT_DEAD = 4
-"""Message kind byte: a recorded payout is dead."""
-
-BRIDGE_VOTE_KIND_PAYOUT_RECORD = 5
-"""Message kind byte: one operator records the payout it proposed."""
-
-BRIDGE_VOTE_KIND_PAUSE = 6
-"""Message kind byte: one operator votes to pause the bridge."""
-
-
 def bridge_message_preimage(fields: dict[str, Any]) -> bytes:
     """The canonical bytes a bridge operator signs for one message: the wire
     contract's ``vote_message`` / ``record_message``, built in the Rust core.
@@ -515,22 +497,36 @@ def bridge_message_preimage(fields: dict[str, Any]) -> bytes:
     ``withdrawal_payout_dead``, ``payout_record``, ``deposit``,
     ``pause_bridge``). Raises ``ValueError`` naming a field of the wrong
     width."""
-    from proof_trading_sdk import _native
-
     return bytes(_native.bridge_message_preimage(fields))
 
 
-def _sign_bridge_message(signer: Any, fields: dict[str, Any]) -> bytes:
-    """Sign one bridge-operator message. A key handle signs it in Rust; any
-    other signer (an :class:`ExternalSigner`) signs the core-built preimage
-    through its ``sign_raw`` callback, and must return 64 bytes."""
-    if hasattr(signer, "sign_bridge_message"):
-        signature = signer.sign_bridge_message(fields)
-    else:
-        signature = signer.sign_raw(bridge_message_preimage(fields))
+def _sign_bridge_message(
+    signer: "_native.SigningHandle | ExternalSigner", fields: dict[str, Any]
+) -> bytes:
+    """Sign one bridge-operator message. A key handle signs it in Rust. An
+    :class:`ExternalSigner` signs the core-built preimage through its
+    ``sign_raw`` callback; its signature must be 64 bytes and verify against
+    its ``public_key``, so a wrong key is caught here, not by the engine."""
+    if isinstance(signer, _native.SigningHandle):
+        return bytes(signer.sign_bridge_message(fields))
+    if not isinstance(signer, ExternalSigner):
+        raise TypeError("signer must be a SigningHandle or an ExternalSigner")
+    preimage = bridge_message_preimage(fields)
+    signature = signer.sign_raw(preimage)
     if not isinstance(signature, (bytes, bytearray)) or len(signature) != 64:
         raise ValueError("bridge message signer must return exactly 64 signature bytes")
-    return bytes(signature)
+    signature = bytes(signature)
+    if not _native.verify_raw_signature(bytes(signer.public_key), signature, preimage):
+        raise ValueError("bridge message signature does not verify against the signer's public_key")
+    return signature
+
+
+def _as_bytes(value: Any, name: str) -> bytes:
+    """A byte field: ``bytes``, ``bytearray`` or ``memoryview`` only, so an
+    integer or a string can never become the bytes an operator signs."""
+    if not isinstance(value, (bytes, bytearray, memoryview)):
+        raise TypeError(f"{name} must be bytes, not {type(value).__name__}")
+    return bytes(value)
 
 
 def _payout_fields(
@@ -545,10 +541,10 @@ def _payout_fields(
     return {
         "kind": kind,
         "withdrawal_id": withdrawal_id,
-        "vault": bytes(vault),
+        "vault": _as_bytes(vault, "vault"),
         "squads_transaction_index": squads_transaction_index,
-        "deployment_id": bytes(deployment_id),
-        "chain_id": bytes(chain_id),
+        "deployment_id": _as_bytes(deployment_id, "deployment_id"),
+        "chain_id": _as_bytes(chain_id, "chain_id"),
         "registry_epoch": registry_epoch,
     }
 
@@ -631,12 +627,12 @@ def _deposit_fields(
 ) -> dict[str, Any]:
     return {
         "kind": "deposit",
-        "owner": bytes(owner),
+        "owner": _as_bytes(owner, "owner"),
         "amount_micro_usdc": amount_micro_usdc,
-        "solana_tx_sig": bytes(solana_tx_sig),
+        "solana_tx_sig": _as_bytes(solana_tx_sig, "solana_tx_sig"),
         "locator": None if locator is None else locator.as_wire(),
-        "deployment_id": bytes(deployment_id),
-        "chain_id": bytes(chain_id),
+        "deployment_id": _as_bytes(deployment_id, "deployment_id"),
+        "chain_id": _as_bytes(chain_id, "chain_id"),
         "registry_epoch": registry_epoch,
     }
 
@@ -665,8 +661,8 @@ def _pause_fields(
     return {
         "kind": "pause_bridge",
         "signed_at_ms": signed_at_ms,
-        "deployment_id": bytes(deployment_id),
-        "chain_id": bytes(chain_id),
+        "deployment_id": _as_bytes(deployment_id, "deployment_id"),
+        "chain_id": _as_bytes(chain_id, "chain_id"),
         "registry_epoch": registry_epoch,
     }
 
@@ -732,10 +728,10 @@ class _PayoutMessage(Action):
         )
         return cls(
             withdrawal_id=withdrawal_id,
-            vault=bytes(vault),
+            vault=_as_bytes(vault, "vault"),
             squads_transaction_index=squads_transaction_index,
-            deployment_id=bytes(deployment_id),
-            chain_id=bytes(chain_id),
+            deployment_id=_as_bytes(deployment_id, "deployment_id"),
+            chain_id=_as_bytes(chain_id, "chain_id"),
             registry_epoch=registry_epoch,
             signature=_sign_bridge_message(signer, fields),
         )
@@ -816,12 +812,12 @@ class VoteDeposit(Action):
             owner, amount_micro_usdc, solana_tx_sig, locator, deployment_id, chain_id, registry_epoch
         )
         return cls(
-            owner=bytes(owner),
+            owner=_as_bytes(owner, "owner"),
             amount_micro_usdc=amount_micro_usdc,
-            solana_tx_sig=bytes(solana_tx_sig),
+            solana_tx_sig=_as_bytes(solana_tx_sig, "solana_tx_sig"),
             locator=locator,
-            deployment_id=bytes(deployment_id),
-            chain_id=bytes(chain_id),
+            deployment_id=_as_bytes(deployment_id, "deployment_id"),
+            chain_id=_as_bytes(chain_id, "chain_id"),
             registry_epoch=registry_epoch,
             signature=_sign_bridge_message(signer, fields),
         )
@@ -863,8 +859,8 @@ class VotePauseBridge(Action):
         fields = _pause_fields(signed_at_ms, deployment_id, chain_id, registry_epoch)
         return cls(
             signed_at_ms=signed_at_ms,
-            deployment_id=bytes(deployment_id),
-            chain_id=bytes(chain_id),
+            deployment_id=_as_bytes(deployment_id, "deployment_id"),
+            chain_id=_as_bytes(chain_id, "chain_id"),
             registry_epoch=registry_epoch,
             signature=_sign_bridge_message(signer, fields),
         )
@@ -1443,6 +1439,24 @@ def _require_submittable_admin_action(action: AdminActionWire) -> None:
         raise ValueError("retired admin actions cannot be proposed or approved")
     if _names_retired_authority_list(action):
         raise ValueError("an UpdateAuthoritySet naming a retired authority list cannot be proposed or approved")
+    if kind == "SetBridgePayoutConfig" and isinstance(action, dict):
+        _check_bridge_payout_config(action["SetBridgePayoutConfig"])
+
+
+def _check_bridge_payout_config(config: Any) -> None:
+    """The wire's rule: both addresses are 32 non-zero bytes and differ, so
+    the vault check stays on and the rent wallet is never the payout path."""
+    if not isinstance(config, dict):
+        raise ValueError("SetBridgePayoutConfig must be a field map")
+    vault = config.get("payout_multisig")
+    ops = config.get("ops_wallet")
+    for name, value in (("payout_multisig", vault), ("ops_wallet", ops)):
+        if not isinstance(value, (bytes, bytearray)) or len(value) != 32:
+            raise ValueError(f"SetBridgePayoutConfig {name} must be 32 bytes")
+        if not any(value):
+            raise ValueError(f"SetBridgePayoutConfig {name} must not be zero")
+    if bytes(vault) == bytes(ops):
+        raise ValueError("SetBridgePayoutConfig ops_wallet must differ from payout_multisig")
 
 
 @dataclass
@@ -1589,12 +1603,6 @@ __all__ = [
     "VoteWithdrawalPayoutDead",
     "VoteDeposit",
     "VotePauseBridge",
-    "BRIDGE_VOTE_DOMAIN",
-    "BRIDGE_VOTE_KIND_WITHDRAWAL_PAID",
-    "BRIDGE_VOTE_KIND_DEPOSIT_CREDIT",
-    "BRIDGE_VOTE_KIND_PAYOUT_DEAD",
-    "BRIDGE_VOTE_KIND_PAYOUT_RECORD",
-    "BRIDGE_VOTE_KIND_PAUSE",
     "bridge_message_preimage",
     "vote_withdrawal_paid_message",
     "vote_withdrawal_payout_dead_message",

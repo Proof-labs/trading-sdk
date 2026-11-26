@@ -70,14 +70,11 @@ export type BridgeMessageFields =
 
 /** The canonical bytes an operator signs for one message: the wire
  *  contract's `vote_message` / `record_message`. Throws naming the field on
- *  a wrong-width input. */
+ *  a wrong-width input, on a byte field that is not a `Uint8Array`, on a
+ *  field the message does not have, and on an inner index of 65535 (the
+ *  wire's absent-index sentinel). */
 export function bridgeMessagePreimage(fields: BridgeMessageFields): Uint8Array {
-  const { locator, ...rest } = fields as BridgeMessageFields & {
-    locator?: DepositLocator | null;
-  };
-  return getWasm().bridge_message_preimage(
-    fields.kind === "deposit" && locator != null ? { ...rest, locator } : rest,
-  );
+  return getWasm().bridge_message_preimage(fields);
 }
 
 async function sign(

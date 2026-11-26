@@ -172,16 +172,30 @@ class TestPendingWithdrawals:
         page = _client(handler).pending_withdrawals()
         assert page == {"rows": [], "next_cursor": None}
 
-    def test_rejects_an_unknown_withdrawal_status(self):
+    def test_an_unknown_status_or_verdict_reads_as_unknown(self):
         payload = self._page()
-        payload["rows"][0]["withdrawal"]["status"] = "mystery"
+        payload["rows"][0]["withdrawal"]["status"] = "expired"
+        payload["rows"][0]["votes"][0] = VOTE_A | {"verdict": "expired"}
 
         def handler(request: httpx.Request) -> httpx.Response:
             return _view(payload)
 
+        row = _client(handler).pending_withdrawals()["rows"][0]
+        assert row["withdrawal"]["status"] == "Unknown"
+        assert row["votes"][0]["verdict"] == "Unknown"
+
+    def test_absent_quarantine_reads_false_and_a_non_bool_is_refused(self):
+        payload = self._page()
+        del payload["rows"][0]["withdrawal"]["quarantined"]
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return _view(payload)
+
+        assert _client(handler).pending_withdrawals()["rows"][0]["withdrawal"]["quarantined"] is False
+        payload["rows"][0]["withdrawal"]["quarantined"] = 1
         import pytest
 
-        with pytest.raises(CodecError, match="unknown withdrawal status"):
+        with pytest.raises(CodecError, match="quarantined"):
             _client(handler).pending_withdrawals()
 
 
@@ -248,3 +262,46 @@ class TestPendingDeposits:
             assert "solana_tx_sig" in str(e)
         else:
             raise AssertionError("expected a CodecError")
+
+
+AGREED = {
+    "owner": b"\x66" * 20, "amount_micro_usdc": 20_000_000_000, "solana_tx_sig": b"\x99" * 64,
+    "locator": None, "registry_epoch": 3, "agreed_height": 50, "agreed_at_ms": 1_700_000_000_000,
+}
+
+
+class TestAgreedAndParkedDeposits:
+    def test_decodes_the_credit_queue(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.path == "/v2/bridge/agreed-deposits"
+            return _view({"rows": [{"sequence": 7, "deposit": AGREED}], "next_cursor": 7})
+
+        page = _client(handler).agreed_deposits()
+        assert page == {"rows": [{"sequence": 7, "deposit": AGREED}], "next_cursor": 7}
+
+    def test_decodes_a_parked_deposit_with_its_cause_and_a_hex_cursor(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.path == "/v2/bridge/parked-deposits"
+            return _view({
+                "rows": [{"deposit": AGREED, "cause": "over_window_cap", "parked_height": 51}],
+                "next_cursor": b"\xde\xad",
+            })
+
+        page = _client(handler).parked_deposits()
+        assert page["rows"][0]["cause"] == "OverWindowCap"
+        assert page["rows"][0]["deposit"] == AGREED
+        assert page["next_cursor"] == "dead"
+
+
+class TestDepositCursorBounds:
+    def test_an_index_outside_u16_is_a_codec_error(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return _view({
+                "rows": [],
+                "next_cursor": {"solana_tx_sig": b"\x99" * 64, "locator": {"top_index": 70000, "inner_index": None}},
+            })
+
+        import pytest
+
+        with pytest.raises(CodecError, match="u16"):
+            _client(handler).pending_deposits()

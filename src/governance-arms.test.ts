@@ -130,6 +130,14 @@ describe("decode side of the two arms", () => {
     });
   });
 
+  it("refuses a payout config with a zero address", () => {
+    expect(() =>
+      decodeAdminAction({
+        SetBridgePayoutConfig: [Array(32).fill(0), Array(32).fill(0xb3)],
+      }),
+    ).toThrow(/payoutMultisig must not be zero/);
+  });
+
   it("refuses a payout config whose rent wallet is the vault", () => {
     expect(() =>
       decodeAdminAction({

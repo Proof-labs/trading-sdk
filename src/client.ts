@@ -74,6 +74,8 @@ import {
   marketConfigFromWasm,
   bridgeStatusFromWasm,
   bridgePayoutConfigFromWasm,
+  agreedDepositsFromWasm,
+  parkedDepositsFromWasm,
   bridgeRegistryFromWasm,
   pendingWithdrawalsFromWasm,
   pendingDepositsFromWasm,
@@ -156,6 +158,8 @@ import type {
   BridgeStatus,
   BridgePayoutConfig,
   OperatorRegistry,
+  ParkedDepositPage,
+  QueuedDepositPage,
   PendingWithdrawalPage,
   PendingDepositPage,
 } from "./types.js";
@@ -2082,38 +2086,48 @@ export class ExchangeClient {
   // helpers in `bridge.ts`.
   // -------------------------------------------------------------------------
 
+  /** GET one `/v2/bridge/*` read and decode it in the core as `kind`.
+   *  `params` become the query string (a cursor and a page limit). */
+  private async readBridge(
+    path: string,
+    kind: keyof WasmCore["ReadKind"],
+    params?: { cursor?: bigint | string; limit?: number },
+  ): Promise<unknown> {
+    const query = new URLSearchParams();
+    if (params?.cursor != null) query.set("cursor", String(params.cursor));
+    if (params?.limit != null) query.set("limit", String(params.limit));
+    const qs = query.toString();
+    const route = `${path}${qs ? `?${qs}` : ""}`;
+    const json = await this.apiJson(`${this.readBaseUrl}${route}`);
+    return this.decodeRead(kind, fromBase64(requireEncodedData(json, route)));
+  }
+
   /** The bridge's state: `Active`, `Paused`, or `WithdrawalBacklog` (active,
    *  with the pending withdrawal count at or above the alert level). */
   async queryBridgeStatus(): Promise<BridgeStatus> {
-    const path = "/v2/bridge/status";
-    const json = await this.apiJson(`${this.readBaseUrl}${path}`);
-    const bytes = fromBase64(requireEncodedData(json, path));
-    return bridgeStatusFromWasm(await this.decodeRead("BridgeStatus", bytes));
+    return bridgeStatusFromWasm(
+      await this.readBridge("/v2/bridge/status", "BridgeStatus"),
+    );
   }
 
   /** The governed Squads payout vault and its rent wallet, or `null` while
    *  the admin quorum has not set them. Every payout record must name this
    *  vault. */
   async queryBridgePayoutConfig(): Promise<BridgePayoutConfig | null> {
-    const path = "/v2/bridge/payout-config";
-    const json = await this.apiJson(`${this.readBaseUrl}${path}`);
-    const bytes = fromBase64(requireEncodedData(json, path));
     return bridgePayoutConfigFromWasm(
-      await this.decodeRead("BridgePayoutConfig", bytes),
+      await this.readBridge("/v2/bridge/payout-config", "BridgePayoutConfig"),
     );
   }
 
-  /** The operator receipt registry — the roster every payout gate and vote
+  /** The operator receipt registry: the roster every vote and payout record
    *  verifies against. Omit `epoch` for the current one. */
   async queryBridgeRegistry(epoch?: bigint): Promise<OperatorRegistry> {
     const path =
       epoch === undefined
         ? "/v2/bridge/registry"
         : `/v2/bridge/registry/${epoch}`;
-    const json = await this.apiJson(`${this.readBaseUrl}${path}`);
-    const bytes = fromBase64(requireEncodedData(json, path));
     return bridgeRegistryFromWasm(
-      await this.decodeRead("BridgeRegistry", bytes),
+      await this.readBridge(path, "BridgeRegistry"),
     );
   }
 
@@ -2125,15 +2139,12 @@ export class ExchangeClient {
     cursor?: bigint;
     limit?: number;
   }): Promise<PendingWithdrawalPage> {
-    const params = new URLSearchParams();
-    if (opts?.cursor != null) params.set("cursor", String(opts.cursor));
-    if (opts?.limit != null) params.set("limit", String(opts.limit));
-    const qs = params.toString();
-    const path = `/v2/bridge/pending-withdrawals${qs ? `?${qs}` : ""}`;
-    const json = await this.apiJson(`${this.readBaseUrl}${path}`);
-    const bytes = fromBase64(requireEncodedData(json, path));
     return pendingWithdrawalsFromWasm(
-      await this.decodeRead("PendingWithdrawals", bytes),
+      await this.readBridge(
+        "/v2/bridge/pending-withdrawals",
+        "PendingWithdrawals",
+        opts,
+      ),
     );
   }
 
@@ -2144,15 +2155,44 @@ export class ExchangeClient {
     cursor?: string;
     limit?: number;
   }): Promise<PendingDepositPage> {
-    const params = new URLSearchParams();
-    if (opts?.cursor != null) params.set("cursor", opts.cursor);
-    if (opts?.limit != null) params.set("limit", String(opts.limit));
-    const qs = params.toString();
-    const path = `/v2/bridge/pending-deposits${qs ? `?${qs}` : ""}`;
-    const json = await this.apiJson(`${this.readBaseUrl}${path}`);
-    const bytes = fromBase64(requireEncodedData(json, path));
     return pendingDepositsFromWasm(
-      await this.decodeRead("PendingDeposits", bytes),
+      await this.readBridge(
+        "/v2/bridge/pending-deposits",
+        "PendingDeposits",
+        opts,
+      ),
+    );
+  }
+
+  /** One page of the agreed-deposit credit queue, oldest first: deposits
+   *  the operator threshold agreed on whose credit waits for a deposit cap's
+   *  window or an unpause. `cursor` is the previous page's `nextCursor`. */
+  async queryAgreedDeposits(opts?: {
+    cursor?: bigint;
+    limit?: number;
+  }): Promise<QueuedDepositPage> {
+    return agreedDepositsFromWasm(
+      await this.readBridge(
+        "/v2/bridge/agreed-deposits",
+        "AgreedDeposits",
+        opts,
+      ),
+    );
+  }
+
+  /** One page of parked deposits: agreed deposits over the per-deposit
+   *  maximum or the window cap, which no window can admit. `cursor` is the
+   *  previous page's `nextCursor`; pass it back verbatim. */
+  async queryParkedDeposits(opts?: {
+    cursor?: string;
+    limit?: number;
+  }): Promise<ParkedDepositPage> {
+    return parkedDepositsFromWasm(
+      await this.readBridge(
+        "/v2/bridge/parked-deposits",
+        "ParkedDeposits",
+        opts,
+      ),
     );
   }
 

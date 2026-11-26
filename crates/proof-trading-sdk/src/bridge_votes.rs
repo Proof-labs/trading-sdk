@@ -77,12 +77,27 @@ pub struct DepositObservation {
 /// turns into the bytes an operator signs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BridgeMessage {
-    WithdrawalPaid(PayoutIdentity, BridgeBinding),
-    WithdrawalPayoutDead(PayoutIdentity, BridgeBinding),
-    PayoutRecord(PayoutIdentity, BridgeBinding),
-    Deposit(DepositObservation, BridgeBinding),
-    /// The Unix time in milliseconds the operator signs at.
-    PauseBridge(u64, BridgeBinding),
+    WithdrawalPaid {
+        payout: PayoutIdentity,
+        binding: BridgeBinding,
+    },
+    WithdrawalPayoutDead {
+        payout: PayoutIdentity,
+        binding: BridgeBinding,
+    },
+    PayoutRecord {
+        payout: PayoutIdentity,
+        binding: BridgeBinding,
+    },
+    Deposit {
+        deposit: DepositObservation,
+        binding: BridgeBinding,
+    },
+    PauseBridge {
+        /// The Unix time in milliseconds the operator signs at.
+        signed_at_ms: u64,
+        binding: BridgeBinding,
+    },
 }
 
 impl BridgeMessage {
@@ -91,21 +106,22 @@ impl BridgeMessage {
     #[must_use]
     pub fn preimage(&self) -> Vec<u8> {
         match *self {
-            Self::WithdrawalPaid(payout, binding) => {
+            Self::WithdrawalPaid { payout, binding } => {
                 paid_vote(payout, binding, UNSIGNED).vote_message()
             }
-            Self::WithdrawalPayoutDead(payout, binding) => {
+            Self::WithdrawalPayoutDead { payout, binding } => {
                 dead_vote(payout, binding, UNSIGNED).vote_message()
             }
-            Self::PayoutRecord(payout, binding) => {
+            Self::PayoutRecord { payout, binding } => {
                 payout_record(payout, binding, UNSIGNED).record_message()
             }
-            Self::Deposit(deposit, binding) => {
+            Self::Deposit { deposit, binding } => {
                 deposit_vote(deposit, binding, UNSIGNED).vote_message()
             }
-            Self::PauseBridge(signed_at_ms, binding) => {
-                pause_vote(signed_at_ms, binding, UNSIGNED).vote_message()
-            }
+            Self::PauseBridge {
+                signed_at_ms,
+                binding,
+            } => pause_vote(signed_at_ms, binding, UNSIGNED).vote_message(),
         }
     }
 }
@@ -189,6 +205,57 @@ fn pause_vote(
     }
 }
 
+impl DepositObservation {
+    /// The locator an operator may sign: an inner index of `0xFFFF` is the
+    /// wire's absent-index sentinel, so it would sign the same bytes as no
+    /// inner index and is refused.
+    ///
+    /// # Errors
+    ///
+    /// The refusal text when `inner_index` is `0xFFFF`.
+    pub fn checked_locator(
+        top_index: u16,
+        inner_index: Option<u16>,
+    ) -> Result<DepositLocator, &'static str> {
+        if inner_index == Some(u16::MAX) {
+            return Err("inner_index 65535 is the absent-index sentinel; pass no inner index");
+        }
+        Ok(DepositLocator {
+            top_index,
+            inner_index,
+        })
+    }
+}
+
+/// Deserialize a byte string and nothing else: no text, no number list. The
+/// WASM and Python bindings read message fields with it, so a string or an
+/// integer can never become the bytes an operator signs.
+pub mod strict_bytes {
+    use serde::de::{Deserializer, Error, Visitor};
+
+    /// Read one byte string.
+    ///
+    /// # Errors
+    ///
+    /// When the value is not a byte string.
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
+        struct ByteString;
+        impl Visitor<'_> for ByteString {
+            type Value = Vec<u8>;
+            fn expecting(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                f.write_str("a byte string")
+            }
+            fn visit_bytes<E: Error>(self, bytes: &[u8]) -> Result<Vec<u8>, E> {
+                Ok(bytes.to_vec())
+            }
+            fn visit_byte_buf<E: Error>(self, bytes: Vec<u8>) -> Result<Vec<u8>, E> {
+                Ok(bytes)
+            }
+        }
+        deserializer.deserialize_bytes(ByteString)
+    }
+}
+
 /// The placeholder a message carries while its preimage is built. Every
 /// preimage reads only the identity fields, so it never feeds the bytes
 /// signed.
@@ -211,7 +278,7 @@ pub fn sign_vote_withdrawal_paid(
 ) -> Result<VoteWithdrawalPaid, SignerError> {
     let signature = sign(
         signer,
-        &BridgeMessage::WithdrawalPaid(payout, binding).preimage(),
+        &BridgeMessage::WithdrawalPaid { payout, binding }.preimage(),
     )?;
     Ok(paid_vote(payout, binding, signature))
 }
@@ -230,7 +297,7 @@ pub fn sign_record_withdrawal_payout(
 ) -> Result<RecordWithdrawalPayout, SignerError> {
     let signature = sign(
         signer,
-        &BridgeMessage::PayoutRecord(payout, binding).preimage(),
+        &BridgeMessage::PayoutRecord { payout, binding }.preimage(),
     )?;
     Ok(payout_record(payout, binding, signature))
 }
@@ -248,7 +315,7 @@ pub fn sign_vote_withdrawal_payout_dead(
 ) -> Result<VoteWithdrawalPayoutDead, SignerError> {
     let signature = sign(
         signer,
-        &BridgeMessage::WithdrawalPayoutDead(payout, binding).preimage(),
+        &BridgeMessage::WithdrawalPayoutDead { payout, binding }.preimage(),
     )?;
     Ok(dead_vote(payout, binding, signature))
 }
@@ -265,7 +332,10 @@ pub fn sign_vote_deposit(
     deposit: DepositObservation,
     binding: BridgeBinding,
 ) -> Result<VoteDeposit, SignerError> {
-    let signature = sign(signer, &BridgeMessage::Deposit(deposit, binding).preimage())?;
+    let signature = sign(
+        signer,
+        &BridgeMessage::Deposit { deposit, binding }.preimage(),
+    )?;
     Ok(deposit_vote(deposit, binding, signature))
 }
 
@@ -284,7 +354,11 @@ pub fn sign_vote_pause_bridge(
 ) -> Result<VotePauseBridge, SignerError> {
     let signature = sign(
         signer,
-        &BridgeMessage::PauseBridge(signed_at_ms, binding).preimage(),
+        &BridgeMessage::PauseBridge {
+            signed_at_ms,
+            binding,
+        }
+        .preimage(),
     )?;
     Ok(pause_vote(signed_at_ms, binding, signature))
 }

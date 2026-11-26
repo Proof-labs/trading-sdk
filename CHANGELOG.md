@@ -50,20 +50,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     `VoteWithdrawalPayoutDead.sign`, `VoteDeposit.sign`,
     `VotePauseBridge.sign` and `bridge_message_preimage`. A key handle signs
     in Rust with `SigningHandle.sign_bridge_message`; an `ExternalSigner`
-    signs the core-built preimage and must return 64 bytes. A field of the
-    wrong width raises before anything is signed.
+    signs the core-built preimage; its signature must be 64 bytes and verify
+    against its `public_key`. Byte fields must be `bytes`.
+  - Every binding refuses, before signing: a field of the wrong width, a
+    byte field given as text or a number, a field the message does not
+    have, and an inner index of 65535 (the wire's absent-index sentinel).
 - **All SDKs:** the bridge reads `/v2/bridge/status`, `/v2/bridge/payout-config`,
-  `/v2/bridge/registry[/{epoch}]`, `/v2/bridge/pending-withdrawals` and
-  `/v2/bridge/pending-deposits` (TypeScript `queryBridge*` /
-  `queryPending*`, Python `bridge_*` / `pending_*`). A pending-deposits
-  `nextCursor` is already in the route's cursor form; pass it back
-  verbatim. These routes are served by the node; until api-gateway routes
+  `/v2/bridge/registry[/{epoch}]`, `/v2/bridge/pending-withdrawals`,
+  `/v2/bridge/pending-deposits`, `/v2/bridge/agreed-deposits` and
+  `/v2/bridge/parked-deposits` (TypeScript `queryBridge*` / `queryPending*` /
+  `queryAgreedDeposits` / `queryParkedDeposits`, Python `bridge_*` /
+  `pending_*` / `agreed_deposits` / `parked_deposits`). A `nextCursor` is
+  already in the route's cursor form; pass it back verbatim. A status,
+  verdict or park cause this SDK does not name reads as `Unknown` in both
+  languages. These routes are served by the node; until api-gateway routes
   them, read them direct-node (`useGateway: false`).
 - **All SDKs:** the admin quorum's bridge controls `PauseBridge` (inner tag
   0x20), `SetBridgePayoutConfig` (0x21: the Squads vault every payout record
   must name, and its rent wallet) and `SetDepositReceiptLimit` (0x22: the caps
-  on vote-credited deposits). TypeScript refuses a payout config whose rent
-  wallet is the vault, and a proposal of an admin action this SDK does not
+  on vote-credited deposits). TypeScript and Python refuse a payout config
+  with a zero address or whose rent wallet is the vault, as the engine does, and a proposal of an admin action this SDK does not
   know now fails to decode instead of reaching the caller.
 - **Errors:** 143 to 151, 153 and 154 are named (`UserImAboveNotional`,
   `BridgePaused`, `WithdrawalPayoutCleared`, `BridgeVoteInvalid`,

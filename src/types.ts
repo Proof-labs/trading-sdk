@@ -496,9 +496,9 @@ export interface WithdrawalRecord {
   status: WithdrawalStatus;
   /** Block height at which the request was admitted. */
   requestHeight: bigint;
-  /** The bridge-vote upgrade quarantined this pending withdrawal: it held a
-   *  payout record of the retired lease model, so it refuses payout records
-   *  until operators resolve it. Set by the `/v2/bridge/*` reads only. */
+  /** A quarantined withdrawal holds a payout record no operator vote can
+   *  settle, so it refuses payout records until operators resolve it. Set
+   *  by the `/v2/bridge/*` reads only. */
   quarantined?: boolean;
 }
 
@@ -544,7 +544,7 @@ export interface OperatorRegistry {
 }
 
 /** What an operator attests about a withdrawal's recorded payout.
- *  `Unknown` is a verdict a later engine added. */
+ *  `Unknown` is a verdict this SDK does not name. */
 export type PayoutVerdict = "Paid" | "Dead" | "Unknown";
 
 /** One operator's vote on a pending withdrawal's recorded payout, with the
@@ -619,6 +619,57 @@ export interface PendingDeposit {
    *  identity. */
   locator?: DepositLocator | null;
   votes: PendingDepositVote[];
+}
+
+/** A deposit the operator threshold agreed on whose credit is held, because
+ *  it would pass a `SetDepositReceiptLimit` cap (error 151) or the bridge
+ *  is paused. */
+export interface AgreedDeposit {
+  /** The receiving engine account (20 bytes). */
+  owner: Address;
+  amountMicroUsdc: bigint;
+  /** The transfer's Solana signature (64 bytes). */
+  solanaTxSig: Uint8Array;
+  locator?: DepositLocator | null;
+  /** The registry epoch whose roster agreed. */
+  registryEpoch: bigint;
+  agreedHeight: bigint;
+  /** Engine block time of the agreement, in Unix milliseconds. */
+  agreedAtMs: bigint;
+}
+
+/** A queued agreed deposit and its place in the credit queue. */
+export interface QueuedDeposit {
+  sequence: bigint;
+  deposit: AgreedDeposit;
+}
+
+/** One page of the agreed-deposit credit queue
+ *  (`/v2/bridge/agreed-deposits`), oldest first. `nextCursor` is the last
+ *  scanned sequence; `null` once exhausted. */
+export interface QueuedDepositPage {
+  rows: QueuedDeposit[];
+  nextCursor: bigint | null;
+}
+
+/** Why an agreed deposit is parked: its amount is over the per-deposit
+ *  maximum or over the window cap, so no window can admit it. `Unknown` is
+ *  a cause this SDK does not name. */
+export type ParkCause = "OverPerReceiptMax" | "OverWindowCap" | "Unknown";
+
+/** An agreed deposit no receipt window can admit. */
+export interface ParkedDeposit {
+  deposit: AgreedDeposit;
+  cause: ParkCause;
+  parkedHeight: bigint;
+}
+
+/** One page of parked deposits (`/v2/bridge/parked-deposits`).
+ *  `nextCursor` is already in the route's cursor form (lowercase hex);
+ *  `null` once exhausted. Pass it back verbatim. */
+export interface ParkedDepositPage {
+  rows: ParkedDeposit[];
+  nextCursor: string | null;
 }
 
 /** One page of the pending-deposits read. `nextCursor` is the last scanned

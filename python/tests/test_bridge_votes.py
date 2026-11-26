@@ -15,13 +15,10 @@ import os
 from pathlib import Path
 
 import pytest
+
+import _ed25519
+from proof_trading_sdk import _native
 from proof_trading_sdk import (
-    BRIDGE_VOTE_DOMAIN,
-    BRIDGE_VOTE_KIND_DEPOSIT_CREDIT,
-    BRIDGE_VOTE_KIND_PAUSE,
-    BRIDGE_VOTE_KIND_PAYOUT_DEAD,
-    BRIDGE_VOTE_KIND_PAYOUT_RECORD,
-    BRIDGE_VOTE_KIND_WITHDRAWAL_PAID,
     ExternalSigner,
     RecordWithdrawalPayout,
     VoteDeposit,
@@ -39,25 +36,37 @@ from proof_trading_sdk.actions import (
     vote_withdrawal_payout_dead_message,
 )
 
+# The wire's message domain and kind bytes, written out so the test pins them.
+BRIDGE_VOTE_DOMAIN = b"PROOF_BRIDGE_VOTE_V1"
+BRIDGE_VOTE_KIND_WITHDRAWAL_PAID = 1
+BRIDGE_VOTE_KIND_DEPOSIT_CREDIT = 2
+BRIDGE_VOTE_KIND_PAYOUT_DEAD = 4
+BRIDGE_VOTE_KIND_PAYOUT_RECORD = 5
+BRIDGE_VOTE_KIND_PAUSE = 6
+
 DEPLOYMENT = b"\xa1" * 32
 CHAIN = b"\xc7" * 32
 VAULT = b"\xb2" * 32
 
 
 class _Key:
-    """A stand-in external signer that records what it was asked to sign."""
+    """An external signer over a real ed25519 key that records what it was
+    asked to sign. ``length`` truncates or pads the signature it returns;
+    ``wrong_key`` reports another key's public key."""
 
-    def __init__(self, seed: bytes, length: int = 64) -> None:
-        self.seed = seed
+    def __init__(self, seed: bytes, length: int = 64, wrong_key: bool = False) -> None:
+        self.secret = seed[:1] * 32
+        self.public_key = _ed25519.public_key(b"\xee" * 32 if wrong_key else self.secret)
         self.length = length
         self.signed: list[bytes] = []
 
     def signer(self) -> ExternalSigner:
         def sign_raw(message: bytes) -> bytes:
             self.signed.append(message)
-            return bytes([self.seed[0]]) * self.length
+            signature = _ed25519.sign(self.secret, message)
+            return (signature + bytes(64))[: self.length]
 
-        return ExternalSigner(public_key=bytes(32), sign_raw=sign_raw)
+        return ExternalSigner(public_key=self.public_key, sign_raw=sign_raw)
 
 
 def test_withdrawal_vote_preimage_is_the_documented_layout():
@@ -115,7 +124,7 @@ def test_an_absent_locator_signs_the_legacy_suffix():
 def test_sign_fills_the_payload_signature():
     key = _Key(b"\x42")
     vote = VoteWithdrawalPaid.sign(key.signer(), 777, VAULT, 11, DEPLOYMENT, CHAIN, 3)
-    assert vote.signature == b"\x42" * 64
+    assert len(vote.signature) == 64
     # The signature is over exactly the canonical preimage of the same fields.
     assert key.signed == [vote_withdrawal_paid_message(777, VAULT, 11, DEPLOYMENT, CHAIN, 3)]
     assert dataclasses.asdict(vote) == {
@@ -125,7 +134,7 @@ def test_sign_fills_the_payload_signature():
         "deployment_id": DEPLOYMENT,
         "chain_id": CHAIN,
         "registry_epoch": 3,
-        "signature": b"\x42" * 64,
+        "signature": vote.signature,
     }
 
     deposit = VoteDeposit.sign(
@@ -146,7 +155,7 @@ def test_payout_dead_vote_uses_its_distinct_canonical_kind():
         + DEPLOYMENT + CHAIN + (4).to_bytes(8, "big")
     )
     vote = VoteWithdrawalPayoutDead.sign(key.signer(), 8, VAULT, 13, DEPLOYMENT, CHAIN, 4)
-    assert vote.signature == b"\x51" * 64
+    assert _native.verify_raw_signature(key.public_key, vote.signature, msg)
     assert key.signed == [msg]
 
 
@@ -157,7 +166,7 @@ def test_the_record_and_pause_messages_carry_their_kinds():
         8, VAULT, 13, DEPLOYMENT, CHAIN, 4
     )
     assert key.signed[-1][len(BRIDGE_VOTE_DOMAIN)] == BRIDGE_VOTE_KIND_PAYOUT_RECORD
-    assert record.signature == b"\x5d" * 64
+    assert _native.verify_raw_signature(key.public_key, record.signature, key.signed[-1])
 
     pause = VotePauseBridge.sign(key.signer(), 1_700_000_000_123, DEPLOYMENT, CHAIN, 2)
     assert key.signed[-1] == (
@@ -168,7 +177,7 @@ def test_the_record_and_pause_messages_carry_their_kinds():
         + CHAIN
         + (2).to_bytes(8, "big")
     )
-    assert pause.signature == b"\x5d" * 64
+    assert _native.verify_raw_signature(key.public_key, pause.signature, key.signed[-1])
 
 
 def test_a_key_handle_signs_the_message_in_rust():
@@ -285,6 +294,53 @@ def _fields(row: dict) -> dict:
     return fields
 
 
+def test_an_external_signature_from_another_key_is_refused():
+    with pytest.raises(ValueError, match="does not verify"):
+        VotePauseBridge.sign(_Key(b"\x01", wrong_key=True).signer(), 5, DEPLOYMENT, CHAIN, 2)
+
+
+@pytest.mark.parametrize("value", [32, "a" * 32, None])
+def test_a_byte_field_must_be_bytes(value):
+    key = _Key(b"\x01")
+    with pytest.raises(TypeError, match="vault must be bytes"):
+        VoteWithdrawalPaid.sign(key.signer(), 7, value, 3, DEPLOYMENT, CHAIN, 1)
+    with pytest.raises(TypeError, match="vault must be bytes"):
+        vote_withdrawal_paid_message(7, value, 3, DEPLOYMENT, CHAIN, 1)
+    assert key.signed == []
+
+
+def test_the_dict_entry_point_refuses_text_unknown_keys_and_the_sentinel():
+    payout = {
+        "kind": "withdrawal_paid",
+        "withdrawal_id": 7,
+        "vault": VAULT,
+        "squads_transaction_index": 3,
+        "deployment_id": DEPLOYMENT,
+        "chain_id": CHAIN,
+        "registry_epoch": 1,
+    }
+    with pytest.raises(ValueError):
+        bridge_message_preimage(payout | {"vault": "a" * 32})
+    with pytest.raises(ValueError, match="locator"):
+        bridge_message_preimage(payout | {"locator": None})
+    deposit = {
+        "kind": "deposit",
+        "owner": b"\x11" * 20,
+        "amount_micro_usdc": 1,
+        "solana_tx_sig": b"\x22" * 64,
+        "deployment_id": DEPLOYMENT,
+        "chain_id": CHAIN,
+        "registry_epoch": 1,
+    }
+    # A misspelled locator would otherwise sign the legacy identity.
+    with pytest.raises(ValueError, match="locater"):
+        bridge_message_preimage(deposit | {"locater": {"top_index": 2, "inner_index": 5}})
+    with pytest.raises(ValueError, match="inner"):
+        bridge_message_preimage(deposit | {"locator": {"top_index": 2, "inner": 5}})
+    with pytest.raises(ValueError, match="sentinel"):
+        bridge_message_preimage(deposit | {"locator": {"top_index": 0, "inner_index": 65535}})
+
+
 def test_the_retired_receipt_surfaces_are_gone():
     # The receipt and payout-lease actions and their helpers are retired;
     # operators sign votes and payout records instead. A retired name must
@@ -298,3 +354,21 @@ def test_the_retired_receipt_surfaces_are_gone():
         "BridgeWithdrawalReceipt",
     ):
         assert not hasattr(actions, name), name
+
+
+@pytest.mark.parametrize(
+    "config, error",
+    [
+        ({"payout_multisig": bytes(32), "ops_wallet": b"\x01" * 32}, "payout_multisig must not be zero"),
+        ({"payout_multisig": b"\x01" * 32, "ops_wallet": bytes(32)}, "ops_wallet must not be zero"),
+        ({"payout_multisig": b"\x01" * 32, "ops_wallet": b"\x01" * 32}, "must differ"),
+        ({"payout_multisig": b"\x01" * 31, "ops_wallet": b"\x02" * 32}, "32 bytes"),
+    ],
+)
+def test_a_payout_config_proposal_follows_the_wire_rule(config, error):
+    with pytest.raises(ValueError, match=error):
+        actions.ProposeAdminAction(
+            proposer=b"\x01" * 20,
+            registry_version=1,
+            action={"SetBridgePayoutConfig": config},
+        )
