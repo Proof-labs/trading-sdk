@@ -1,139 +1,296 @@
-//! Bridge vote construction and signing for wire 13.
+//! Bridge-operator message construction and signing.
 //!
-//! The operator registry's members settle withdrawals and deposits by
-//! voting: each member signs the vote's canonical bytes with its operator
-//! ed25519 key and submits [`VoteWithdrawalPaid`] (0x30) / [`VoteDeposit`]
-//! (0x32) on its own — the engine aggregates distinct member signatures and
-//! settles at the roster's threshold. A vote carries its own signature and
-//! deliberately does **not** use the envelope signing convention: the
-//! envelope signer is an untrusted courier, and the engine only counts the
-//! votes whose `signature` verifies against the bound epoch's registry.
+//! A bridge operator's only identity is its registry key ([`OperatorKey`]).
+//! It signs five messages, each submitted on its own; the engine counts the
+//! distinct operators whose signature verifies against the named epoch's
+//! roster:
 //!
-//! The canonical preimage lives in the wire contract
-//! ([`VoteWithdrawalPaid::vote_message`] / [`VoteDeposit::vote_message`],
-//! `PROOF_BRIDGE_VOTE_V1 || kind || …`), the same definition the engine
-//! verifies, so the SDK signs exactly the bytes the engine checks. These
-//! helpers build the payload and fill its `signature` through the
-//! custody-neutral [`Signer`] seam; the returned actions then ride the
-//! ordinary encode/submit path (`codec::sign_and_encode_with_chain`,
-//! [`crate::sign_action`]) like any other action.
+//! - [`VoteWithdrawalPaid`] (0x30): settle a withdrawal `Paid` at the
+//!   roster's threshold;
+//! - [`RecordWithdrawalPayout`] (0x31): record the Squads payout the
+//!   operator proposed, which fills the withdrawal's payout slot;
+//! - [`VoteDeposit`] (0x32): credit one observed deposit at the threshold;
+//! - [`VotePauseBridge`] (0x33): pause the bridge at the threshold;
+//! - [`VoteWithdrawalPayoutDead`] (0x34): clear a rejected payout's slot at
+//!   the threshold.
+//!
+//! The signature is the message's authority, not the envelope's: any
+//! envelope signer may submit a signed message, and the engine verifies the
+//! message's own `signature`.
+//!
+//! The canonical preimages live in the wire contract (`vote_message` /
+//! `record_message`, `PROOF_BRIDGE_VOTE_V1 || kind || …`), the same
+//! definitions the engine verifies, so the SDK signs exactly the bytes the
+//! engine checks. These helpers build the payload and fill its `signature`
+//! through the custody-neutral [`Signer`] seam; the returned actions then
+//! ride the ordinary encode and submit path
+//! (`codec::sign_and_encode_with_chain`, [`crate::sign_action`]).
 
+use crate::bridge::{
+    DeploymentId, MicroUsdc, OperatorSignature, ProofOwner, RegistryEpoch, SolanaPubkey,
+    TxSignature, WithdrawalId,
+};
 use crate::signer::{Signer, SignerError};
-use crate::types::{DepositLocator, VoteDeposit, VoteWithdrawalPaid, VoteWithdrawalPayoutDead};
+use crate::types::{
+    DepositLocator, RecordWithdrawalPayout, VoteDeposit, VotePauseBridge, VoteWithdrawalPaid,
+    VoteWithdrawalPayoutDead,
+};
 
-/// Fields bound to a withdrawal payout before a member signature is added.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WithdrawalPaidVoteFields {
-    pub withdrawal_id: u64,
-    pub vault: [u8; 32],
+#[cfg(doc)]
+use crate::bridge::OperatorKey;
+
+/// The binding every bridge-operator message carries: the deployment and
+/// chain it cannot replay across, and the registry epoch whose roster
+/// judges its signature.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BridgeBinding {
+    pub deployment_id: DeploymentId,
+    pub chain_id: [u8; 32],
+    pub registry_epoch: RegistryEpoch,
+}
+
+/// One recorded Squads payout of one withdrawal: what a payout record
+/// records and what the Paid and Dead votes attest.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PayoutIdentity {
+    pub withdrawal_id: WithdrawalId,
+    /// The governed Squads vault the payout pays from.
+    pub vault: SolanaPubkey,
+    /// The Squads vault-transaction index of the payout proposal.
     pub squads_transaction_index: u32,
-    pub deployment_id: [u8; 32],
-    pub chain_id: [u8; 32],
-    pub registry_epoch: u64,
 }
 
-/// Fields bound to a deposit observation before a member signature is added.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DepositVoteFields {
-    pub owner: [u8; 20],
-    pub amount_micro_usdc: u64,
-    pub solana_tx_sig: [u8; 64],
+/// One observed Solana deposit: the credit a deposit vote attests.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DepositObservation {
+    /// The receiving engine account.
+    pub owner: ProofOwner,
+    pub amount: MicroUsdc,
+    pub solana_tx_sig: TxSignature,
+    /// `None` is the LEGACY reading (top-level instruction 0, no inner
+    /// index), the same default the wire applies to an absent
+    /// `ConfirmDeposit.locator`.
     pub locator: Option<DepositLocator>,
-    pub deployment_id: [u8; 32],
-    pub chain_id: [u8; 32],
-    pub registry_epoch: u64,
 }
 
-/// Build and sign one registry member's vote to settle a withdrawal as
-/// `Paid`. The signature is over [`VoteWithdrawalPaid::vote_message`] —
-/// domain, kind, withdrawal id, payout vault and index, deployment, chain,
-/// and epoch — and verifies against the `registry_epoch` roster's member key.
+/// One bridge-operator message's signed fields: what [`BridgeMessage::preimage`]
+/// turns into the bytes an operator signs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BridgeMessage {
+    WithdrawalPaid(PayoutIdentity, BridgeBinding),
+    WithdrawalPayoutDead(PayoutIdentity, BridgeBinding),
+    PayoutRecord(PayoutIdentity, BridgeBinding),
+    Deposit(DepositObservation, BridgeBinding),
+    /// The Unix time in milliseconds the operator signs at.
+    PauseBridge(u64, BridgeBinding),
+}
+
+impl BridgeMessage {
+    /// The canonical bytes the operator signs: the wire contract's
+    /// `vote_message` / `record_message` for this message.
+    #[must_use]
+    pub fn preimage(&self) -> Vec<u8> {
+        match *self {
+            Self::WithdrawalPaid(payout, binding) => {
+                paid_vote(payout, binding, UNSIGNED).vote_message()
+            }
+            Self::WithdrawalPayoutDead(payout, binding) => {
+                dead_vote(payout, binding, UNSIGNED).vote_message()
+            }
+            Self::PayoutRecord(payout, binding) => {
+                payout_record(payout, binding, UNSIGNED).record_message()
+            }
+            Self::Deposit(deposit, binding) => {
+                deposit_vote(deposit, binding, UNSIGNED).vote_message()
+            }
+            Self::PauseBridge(signed_at_ms, binding) => {
+                pause_vote(signed_at_ms, binding, UNSIGNED).vote_message()
+            }
+        }
+    }
+}
+
+fn paid_vote(
+    payout: PayoutIdentity,
+    binding: BridgeBinding,
+    signature: OperatorSignature,
+) -> VoteWithdrawalPaid {
+    VoteWithdrawalPaid {
+        withdrawal_id: payout.withdrawal_id,
+        vault: payout.vault,
+        squads_transaction_index: payout.squads_transaction_index,
+        deployment_id: binding.deployment_id,
+        chain_id: binding.chain_id,
+        registry_epoch: binding.registry_epoch,
+        signature,
+    }
+}
+
+fn dead_vote(
+    payout: PayoutIdentity,
+    binding: BridgeBinding,
+    signature: OperatorSignature,
+) -> VoteWithdrawalPayoutDead {
+    VoteWithdrawalPayoutDead {
+        withdrawal_id: payout.withdrawal_id,
+        vault: payout.vault,
+        squads_transaction_index: payout.squads_transaction_index,
+        deployment_id: binding.deployment_id,
+        chain_id: binding.chain_id,
+        registry_epoch: binding.registry_epoch,
+        signature,
+    }
+}
+
+fn payout_record(
+    payout: PayoutIdentity,
+    binding: BridgeBinding,
+    signature: OperatorSignature,
+) -> RecordWithdrawalPayout {
+    RecordWithdrawalPayout {
+        withdrawal_id: payout.withdrawal_id,
+        vault: payout.vault,
+        squads_transaction_index: payout.squads_transaction_index,
+        deployment_id: binding.deployment_id,
+        chain_id: binding.chain_id,
+        registry_epoch: binding.registry_epoch,
+        signature,
+    }
+}
+
+fn deposit_vote(
+    deposit: DepositObservation,
+    binding: BridgeBinding,
+    signature: OperatorSignature,
+) -> VoteDeposit {
+    VoteDeposit {
+        owner: *deposit.owner.as_bytes(),
+        amount_micro_usdc: deposit.amount,
+        solana_tx_sig: deposit.solana_tx_sig,
+        locator: deposit.locator,
+        deployment_id: binding.deployment_id,
+        chain_id: binding.chain_id,
+        registry_epoch: binding.registry_epoch,
+        signature,
+    }
+}
+
+fn pause_vote(
+    signed_at_ms: u64,
+    binding: BridgeBinding,
+    signature: OperatorSignature,
+) -> VotePauseBridge {
+    VotePauseBridge {
+        signed_at_ms,
+        deployment_id: binding.deployment_id,
+        chain_id: binding.chain_id,
+        registry_epoch: binding.registry_epoch,
+        signature,
+    }
+}
+
+/// The placeholder a message carries while its preimage is built. Every
+/// preimage reads only the identity fields, so it never feeds the bytes
+/// signed.
+const UNSIGNED: OperatorSignature = OperatorSignature::new([0; 64]);
+
+fn sign(signer: &dyn Signer, message: &[u8]) -> Result<OperatorSignature, SignerError> {
+    signer.try_sign(message).map(OperatorSignature::new)
+}
+
+/// Sign one operator's vote to settle a withdrawal `Paid`, over
+/// [`VoteWithdrawalPaid::vote_message`].
 ///
 /// # Errors
 ///
 /// [`SignerError`] if the signing backend fails.
 pub fn sign_vote_withdrawal_paid(
     signer: &dyn Signer,
-    fields: WithdrawalPaidVoteFields,
+    payout: PayoutIdentity,
+    binding: BridgeBinding,
 ) -> Result<VoteWithdrawalPaid, SignerError> {
-    // The message reads only the identity fields, so the placeholder
-    // signature never feeds the preimage.
-    let unsigned = VoteWithdrawalPaid {
-        withdrawal_id: fields.withdrawal_id,
-        vault: fields.vault,
-        squads_transaction_index: fields.squads_transaction_index,
-        deployment_id: fields.deployment_id,
-        chain_id: fields.chain_id,
-        registry_epoch: fields.registry_epoch,
-        signature: Vec::new(),
-    };
-    let signature = signer.try_sign(&unsigned.vote_message())?;
-    Ok(VoteWithdrawalPaid {
-        signature: signature.to_vec(),
-        ..unsigned
-    })
+    let signature = sign(
+        signer,
+        &BridgeMessage::WithdrawalPaid(payout, binding).preimage(),
+    )?;
+    Ok(paid_vote(payout, binding, signature))
 }
 
-/// Build and sign a registry member's vote that a recorded Squads payout was
-/// rejected and its slot can be cleared.
+/// Sign one operator's record of the Squads payout it proposed, over
+/// [`RecordWithdrawalPayout::record_message`]. `binding.registry_epoch` is
+/// the epoch the proposal was made under.
+///
+/// # Errors
+///
+/// [`SignerError`] if the signing backend fails.
+pub fn sign_record_withdrawal_payout(
+    signer: &dyn Signer,
+    payout: PayoutIdentity,
+    binding: BridgeBinding,
+) -> Result<RecordWithdrawalPayout, SignerError> {
+    let signature = sign(
+        signer,
+        &BridgeMessage::PayoutRecord(payout, binding).preimage(),
+    )?;
+    Ok(payout_record(payout, binding, signature))
+}
+
+/// Sign one operator's vote that a recorded payout was rejected, so its
+/// slot can be cleared, over [`VoteWithdrawalPayoutDead::vote_message`].
+///
+/// # Errors
+///
+/// [`SignerError`] if the signing backend fails.
 pub fn sign_vote_withdrawal_payout_dead(
     signer: &dyn Signer,
-    fields: WithdrawalPaidVoteFields,
+    payout: PayoutIdentity,
+    binding: BridgeBinding,
 ) -> Result<VoteWithdrawalPayoutDead, SignerError> {
-    let unsigned = VoteWithdrawalPayoutDead {
-        withdrawal_id: fields.withdrawal_id,
-        vault: fields.vault,
-        squads_transaction_index: fields.squads_transaction_index,
-        deployment_id: fields.deployment_id,
-        chain_id: fields.chain_id,
-        registry_epoch: fields.registry_epoch,
-        signature: Vec::new(),
-    };
-    let signature = signer.try_sign(&unsigned.vote_message())?;
-    Ok(VoteWithdrawalPayoutDead {
-        signature: signature.to_vec(),
-        ..unsigned
-    })
+    let signature = sign(
+        signer,
+        &BridgeMessage::WithdrawalPayoutDead(payout, binding).preimage(),
+    )?;
+    Ok(dead_vote(payout, binding, signature))
 }
 
-/// Build and sign one registry member's vote to credit one observed Solana
-/// deposit. The signature is over [`VoteDeposit::vote_message`] — domain,
-/// kind, and the full credit identity (owner, amount, transaction
-/// signature, locator, deployment, chain, epoch). Two members voting on the
-/// same observation sign identical bytes.
-///
-/// A `locator` of `None` is the LEGACY reading (top-level instruction 0, no
-/// inner index), the same default the wire applies to an absent
-/// `ConfirmDeposit.locator`.
+/// Sign one operator's vote to credit one observed deposit, over
+/// [`VoteDeposit::vote_message`]. Two operators voting on the same
+/// observation sign identical bytes.
 ///
 /// # Errors
 ///
 /// [`SignerError`] if the signing backend fails.
 pub fn sign_vote_deposit(
     signer: &dyn Signer,
-    fields: DepositVoteFields,
+    deposit: DepositObservation,
+    binding: BridgeBinding,
 ) -> Result<VoteDeposit, SignerError> {
-    let unsigned = VoteDeposit {
-        owner: fields.owner,
-        amount_micro_usdc: fields.amount_micro_usdc,
-        solana_tx_sig: fields.solana_tx_sig.to_vec(),
-        locator: fields.locator,
-        deployment_id: fields.deployment_id,
-        chain_id: fields.chain_id,
-        registry_epoch: fields.registry_epoch,
-        signature: Vec::new(),
-    };
-    let signature = signer.try_sign(&unsigned.vote_message())?;
-    Ok(VoteDeposit {
-        signature: signature.to_vec(),
-        ..unsigned
-    })
+    let signature = sign(signer, &BridgeMessage::Deposit(deposit, binding).preimage())?;
+    Ok(deposit_vote(deposit, binding, signature))
+}
+
+/// Sign one operator's vote to pause the bridge, over
+/// [`VotePauseBridge::vote_message`]. `signed_at_ms` is the Unix time in
+/// milliseconds the operator signs at: the engine refuses a vote signed
+/// before the bridge's last unpause or after the executing block.
+///
+/// # Errors
+///
+/// [`SignerError`] if the signing backend fails.
+pub fn sign_vote_pause_bridge(
+    signer: &dyn Signer,
+    signed_at_ms: u64,
+    binding: BridgeBinding,
+) -> Result<VotePauseBridge, SignerError> {
+    let signature = sign(
+        signer,
+        &BridgeMessage::PauseBridge(signed_at_ms, binding).preimage(),
+    )?;
+    Ok(pause_vote(signed_at_ms, binding, signature))
 }
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
-
     use super::*;
     use crate::codec;
     use crate::crypto;
@@ -143,134 +300,115 @@ mod tests {
     const DEPLOYMENT: [u8; 32] = [0xA1; 32];
     const CHAIN: [u8; 32] = [0xC7; 32];
     const VAULT: [u8; 32] = [0xB2; 32];
+    const DOMAIN: &[u8] = b"PROOF_BRIDGE_VOTE_V1";
 
-    fn paid_fields(withdrawal_id: u64) -> WithdrawalPaidVoteFields {
-        WithdrawalPaidVoteFields {
-            withdrawal_id,
-            vault: VAULT,
-            squads_transaction_index: 11,
-            deployment_id: DEPLOYMENT,
+    fn binding(epoch: u64) -> BridgeBinding {
+        BridgeBinding {
+            deployment_id: DeploymentId::new(DEPLOYMENT),
             chain_id: CHAIN,
-            registry_epoch: 3,
+            registry_epoch: RegistryEpoch::new(epoch),
         }
     }
 
-    fn deposit_fields(locator: Option<DepositLocator>) -> DepositVoteFields {
-        DepositVoteFields {
-            owner: [0x11; 20],
-            amount_micro_usdc: 1_000_000,
-            solana_tx_sig: [0x22; 64],
+    fn payout(withdrawal_id: u64, index: u32) -> PayoutIdentity {
+        PayoutIdentity {
+            withdrawal_id: WithdrawalId::new(withdrawal_id),
+            vault: SolanaPubkey::new(VAULT),
+            squads_transaction_index: index,
+        }
+    }
+
+    fn deposit(locator: Option<DepositLocator>) -> DepositObservation {
+        DepositObservation {
+            owner: ProofOwner::new([0x11; 20]),
+            amount: MicroUsdc::new(1_000_000),
+            solana_tx_sig: TxSignature::new([0x22; 64]),
             locator,
-            deployment_id: DEPLOYMENT,
-            chain_id: CHAIN,
-            registry_epoch: 9,
         }
     }
 
-    #[test]
-    fn withdrawal_vote_signature_verifies_over_the_wire_preimage() {
-        let seed = [0x42u8; 32];
-        let key = ed25519_dalek::SigningKey::from_bytes(&seed);
-        let vote = sign_vote_withdrawal_paid(
-            &LocalSigner::from_bytes(&seed),
-            WithdrawalPaidVoteFields {
-                withdrawal_id: 777,
-                ..paid_fields(777)
-            },
-        )
-        .unwrap();
-
-        assert_eq!(vote.signature.len(), 64);
-        // The signature verifies against the signer's key over exactly the
-        // wire's canonical bytes — the bytes the engine re-derives and
-        // checks against the bound roster.
-        let message = VoteWithdrawalPaid {
-            signature: Vec::new(),
-            ..vote.clone()
-        }
-        .vote_message();
-        assert!(key
-            .verifying_key()
-            .verify(
-                &message,
-                &ed25519_dalek::Signature::from_bytes(&vote.signature.try_into().unwrap())
-            )
-            .is_ok());
-
-        // The preimage is the documented layout: domain || kind(0x01) ||
-        // withdrawal_id || vault || transaction index || deployment || chain || epoch.
-        let mut expected = Vec::new();
-        expected.extend_from_slice(b"PROOF_BRIDGE_VOTE_V1");
-        expected.push(1);
-        expected.extend_from_slice(&777u64.to_be_bytes());
+    /// The documented payout layout: domain || kind || withdrawal id ||
+    /// vault || transaction index || deployment || chain || epoch.
+    fn payout_preimage(kind: u8, withdrawal_id: u64, index: u32, epoch: u64) -> Vec<u8> {
+        let mut expected = DOMAIN.to_vec();
+        expected.push(kind);
+        expected.extend_from_slice(&withdrawal_id.to_be_bytes());
         expected.extend_from_slice(&VAULT);
-        expected.extend_from_slice(&11u32.to_be_bytes());
+        expected.extend_from_slice(&index.to_be_bytes());
         expected.extend_from_slice(&DEPLOYMENT);
         expected.extend_from_slice(&CHAIN);
-        expected.extend_from_slice(&3u64.to_be_bytes());
-        assert_eq!(message, expected);
+        expected.extend_from_slice(&epoch.to_be_bytes());
+        expected
+    }
+
+    fn verifies(seed: [u8; 32], message: &[u8], signature: &OperatorSignature) -> bool {
+        ed25519_dalek::SigningKey::from_bytes(&seed)
+            .verifying_key()
+            .verify(
+                message,
+                &ed25519_dalek::Signature::from_bytes(signature.as_bytes()),
+            )
+            .is_ok()
     }
 
     #[test]
-    fn dead_payout_vote_signs_the_exact_recorded_payout_identity() {
+    fn the_payout_messages_sign_their_documented_preimages() {
         let seed = [0x42u8; 32];
         let signer = LocalSigner::from_bytes(&seed);
-        let fields = WithdrawalPaidVoteFields {
-            withdrawal_id: 8,
-            vault: VAULT,
-            squads_transaction_index: 13,
-            deployment_id: DEPLOYMENT,
-            chain_id: CHAIN,
-            registry_epoch: 4,
-        };
-        let vote =
-            sign_vote_withdrawal_payout_dead(&signer, fields).expect("sign payout-dead vote");
-        assert_eq!(vote.signature.len(), 64);
-        assert_eq!(
-            vote.vote_message()[20],
-            4,
-            "kind byte identifies payout-dead votes"
-        );
-        assert!(
-            ed25519_dalek::VerifyingKey::from_bytes(&signer.public_key())
-                .expect("public key is valid")
-                .verify(
-                    &vote.vote_message(),
-                    &ed25519_dalek::Signature::from_bytes(
-                        &vote
-                            .signature
-                            .as_slice()
-                            .try_into()
-                            .expect("signature is 64 bytes"),
-                    ),
-                )
-                .is_ok()
-        );
+
+        let paid = sign_vote_withdrawal_paid(&signer, payout(777, 11), binding(3))
+            .expect("sign the paid vote");
+        assert_eq!(paid.vote_message(), payout_preimage(1, 777, 11, 3));
+        assert!(verifies(seed, &paid.vote_message(), &paid.signature));
+
+        let dead = sign_vote_withdrawal_payout_dead(&signer, payout(8, 13), binding(4))
+            .expect("sign the dead vote");
+        assert_eq!(dead.vote_message(), payout_preimage(4, 8, 13, 4));
+        assert!(verifies(seed, &dead.vote_message(), &dead.signature));
+
+        let record = sign_record_withdrawal_payout(&signer, payout(8, 13), binding(4))
+            .expect("sign the payout record");
+        assert_eq!(record.record_message(), payout_preimage(5, 8, 13, 4));
+        assert!(verifies(seed, &record.record_message(), &record.signature));
+        // The record and the dead vote name the same payout but are different
+        // messages, so neither signature stands in for the other.
+        assert_ne!(record.signature, dead.signature);
+    }
+
+    #[test]
+    fn the_pause_vote_signs_its_signing_time() {
+        let seed = [0x05u8; 32];
+        let vote = sign_vote_pause_bridge(
+            &LocalSigner::from_bytes(&seed),
+            1_700_000_000_123,
+            binding(2),
+        )
+        .expect("sign the pause vote");
+        let mut expected = DOMAIN.to_vec();
+        expected.push(6);
+        expected.extend_from_slice(&1_700_000_000_123u64.to_be_bytes());
+        expected.extend_from_slice(&DEPLOYMENT);
+        expected.extend_from_slice(&CHAIN);
+        expected.extend_from_slice(&2u64.to_be_bytes());
+        assert_eq!(vote.vote_message(), expected);
+        assert!(verifies(seed, &expected, &vote.signature));
     }
 
     #[test]
     fn deposit_vote_signature_verifies_and_the_locator_suffix_is_pinned() {
         let seed = [0x07u8; 32];
-        let key = ed25519_dalek::SigningKey::from_bytes(&seed);
-        let locator = DepositLocator {
-            top_index: 2,
-            inner_index: Some(5),
-        };
         let vote = sign_vote_deposit(
             &LocalSigner::from_bytes(&seed),
-            deposit_fields(Some(locator)),
+            deposit(Some(DepositLocator {
+                top_index: 2,
+                inner_index: Some(5),
+            })),
+            binding(9),
         )
-        .unwrap();
-
-        let unsigned = VoteDeposit {
-            signature: Vec::new(),
-            ..vote.clone()
-        };
+        .expect("sign the deposit vote");
         // domain || kind(0x02) || owner(20) || amount(8 BE) || tx_sig(64) ||
-        // locator(4: top BE, inner BE) || deployment(32) || chain(32) ||
-        // epoch(8 BE).
-        let mut expected = Vec::new();
-        expected.extend_from_slice(b"PROOF_BRIDGE_VOTE_V1");
+        // locator(4: top BE, inner BE) || deployment || chain || epoch.
+        let mut expected = DOMAIN.to_vec();
         expected.push(2);
         expected.extend_from_slice(&[0x11; 20]);
         expected.extend_from_slice(&1_000_000u64.to_be_bytes());
@@ -280,103 +418,80 @@ mod tests {
         expected.extend_from_slice(&DEPLOYMENT);
         expected.extend_from_slice(&CHAIN);
         expected.extend_from_slice(&9u64.to_be_bytes());
-        assert_eq!(unsigned.vote_message(), expected);
-
-        assert!(key
-            .verifying_key()
-            .verify(
-                &expected,
-                &ed25519_dalek::Signature::from_bytes(&vote.signature.try_into().unwrap())
-            )
-            .is_ok());
+        assert_eq!(vote.vote_message(), expected);
+        assert!(verifies(seed, &expected, &vote.signature));
     }
 
     #[test]
     fn an_absent_locator_signs_the_legacy_suffix() {
-        let seed = [0x09u8; 32];
-        let signer = LocalSigner::from_bytes(&seed);
-        let mut fields = deposit_fields(None);
-        fields.amount_micro_usdc = 5;
-        fields.registry_epoch = 1;
-        let absent = sign_vote_deposit(&signer, fields.clone()).unwrap();
-        fields.locator = Some(DepositLocator::LEGACY);
-        let legacy = sign_vote_deposit(&signer, fields).unwrap();
+        let signer = LocalSigner::from_bytes(&[0x09u8; 32]);
+        let absent =
+            sign_vote_deposit(&signer, deposit(None), binding(1)).expect("sign with no locator");
+        let legacy = sign_vote_deposit(&signer, deposit(Some(DepositLocator::LEGACY)), binding(1))
+            .expect("sign with the legacy locator");
         // None and the LEGACY locator are the same reading: identical
         // preimages, identical signatures.
         assert_eq!(absent.vote_message(), legacy.vote_message());
-        let unsigned = VoteDeposit {
-            signature: Vec::new(),
-            ..legacy.clone()
-        };
-        let suffix_at = b"PROOF_BRIDGE_VOTE_V1".len() + 1 + 20 + 8 + 64;
+        assert_eq!(absent.signature, legacy.signature);
+        let suffix_at = DOMAIN.len() + 1 + 20 + 8 + 64;
         assert_eq!(
-            &unsigned.vote_message()[suffix_at..suffix_at + 4],
+            &legacy.vote_message()[suffix_at..suffix_at + 4],
             &[0, 0, 0xFF, 0xFF]
         );
-        assert_eq!(absent.signature, legacy.signature);
     }
 
     #[test]
-    fn votes_round_trip_through_the_signed_envelope_and_differ_per_item() {
+    fn signed_messages_round_trip_through_the_envelope_and_differ_per_item() {
         let seed = [0x33u8; 32];
         let signer = LocalSigner::from_bytes(&seed);
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+        // `Action` carries no `PartialEq`; equal canonical bytes are the same
+        // action field for field.
+        let canonical =
+            |a: &crate::types::Action| rmp_serde::to_vec(a).expect("an action always encodes");
+        let round_trip = |action: crate::types::Action| {
+            let wire = codec::sign_and_encode_with_chain(&CHAIN, &action, 1, &signing_key)
+                .expect("a signed message encodes");
+            let decoded = codec::decode_tx(&wire).expect("a signed message decodes");
+            assert_eq!(canonical(&decoded.action), canonical(&action));
+        };
 
-        let mut fields = paid_fields(u64::MAX);
-        fields.registry_epoch = u64::MAX;
-        let withdrawal = sign_vote_withdrawal_paid(&signer, fields.clone()).unwrap();
-        let wire = codec::sign_and_encode_with_chain(
-            &CHAIN,
-            &crate::types::Action::VoteWithdrawalPaid(withdrawal.clone()),
-            1,
-            &signing_key,
-        )
-        .unwrap();
-        let decoded = codec::decode_tx(&wire).unwrap();
-        // `Action` carries no `PartialEq`; equal canonical bytes are the
-        // same action field for field.
-        let canonical = |a: &crate::types::Action| rmp_serde::to_vec(a).unwrap();
-        assert_eq!(
-            canonical(&decoded.action),
-            canonical(&crate::types::Action::VoteWithdrawalPaid(
-                withdrawal.clone()
-            ))
-        );
-        // Deterministic: the same key and item sign identical bytes.
-        let again = sign_vote_withdrawal_paid(&signer, fields.clone()).unwrap();
-        assert_eq!(again.signature, withdrawal.signature);
-        // …and a different withdrawal id cannot reuse them.
-        fields.withdrawal_id = 1;
-        let other = sign_vote_withdrawal_paid(&signer, fields).unwrap();
-        assert_ne!(other.signature, withdrawal.signature);
+        let paid =
+            sign_vote_withdrawal_paid(&signer, payout(u64::MAX, u32::MAX), binding(u64::MAX))
+                .expect("sign the paid vote");
+        round_trip(crate::types::Action::VoteWithdrawalPaid(paid.clone()));
+        round_trip(crate::types::Action::RecordWithdrawalPayout(
+            sign_record_withdrawal_payout(&signer, payout(1, 2), binding(3))
+                .expect("sign the payout record"),
+        ));
+        round_trip(crate::types::Action::VotePauseBridge(
+            sign_vote_pause_bridge(&signer, u64::MAX, binding(3)).expect("sign the pause vote"),
+        ));
+        round_trip(crate::types::Action::VoteDeposit(
+            sign_vote_deposit(
+                &signer,
+                DepositObservation {
+                    amount: MicroUsdc::new(u64::MAX),
+                    locator: Some(DepositLocator {
+                        top_index: u16::MAX,
+                        inner_index: None,
+                    }),
+                    ..deposit(None)
+                },
+                binding(u64::MAX),
+            )
+            .expect("sign the deposit vote"),
+        ));
 
-        let deposit = sign_vote_deposit(
-            &signer,
-            DepositVoteFields {
-                owner: [0x44; 20],
-                amount_micro_usdc: u64::MAX,
-                solana_tx_sig: [0x55; 64],
-                locator: Some(DepositLocator {
-                    top_index: u16::MAX,
-                    inner_index: None,
-                }),
-                deployment_id: DEPLOYMENT,
-                chain_id: CHAIN,
-                registry_epoch: u64::MAX,
-            },
-        )
-        .unwrap();
-        let wire = codec::sign_and_encode_with_chain(
-            &CHAIN,
-            &crate::types::Action::VoteDeposit(deposit.clone()),
-            2,
-            &signing_key,
-        )
-        .unwrap();
-        assert_eq!(
-            canonical(&codec::decode_tx(&wire).unwrap().action),
-            canonical(&crate::types::Action::VoteDeposit(deposit))
-        );
+        // Deterministic: the same key and item sign identical bytes, and a
+        // different withdrawal id cannot reuse them.
+        let again =
+            sign_vote_withdrawal_paid(&signer, payout(u64::MAX, u32::MAX), binding(u64::MAX))
+                .expect("sign the paid vote again");
+        assert_eq!(again.signature, paid.signature);
+        let other = sign_vote_withdrawal_paid(&signer, payout(1, u32::MAX), binding(u64::MAX))
+            .expect("sign another withdrawal's vote");
+        assert_ne!(other.signature, paid.signature);
     }
 
     /// A vote's own signature never verifies as an envelope signature over
@@ -385,32 +500,30 @@ mod tests {
     #[test]
     fn a_vote_signature_is_not_an_envelope_signature() {
         let seed = [0x42u8; 32];
-        let key = LocalSigner::from_bytes(&seed);
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
-        let mut fields = paid_fields(1);
-        fields.registry_epoch = 1;
-        let vote = sign_vote_withdrawal_paid(&key, fields).unwrap();
+        let vote =
+            sign_vote_withdrawal_paid(&LocalSigner::from_bytes(&seed), payout(1, 11), binding(1))
+                .expect("sign the paid vote");
         let wire = codec::sign_and_encode_with_chain(
             &CHAIN,
             &crate::types::Action::VoteWithdrawalPaid(vote.clone()),
             1,
             &signing_key,
         )
-        .unwrap();
-        let raw = codec::decode_tx_raw(&wire).unwrap();
+        .expect("the vote encodes");
+        let raw = codec::decode_tx_raw(&wire).expect("the envelope decodes");
         // The envelope path signs DOMAIN || chain || type || seq || payload;
-        // the vote signature is over the bare vote preimage, so swapping
-        // the conventions must fail closed.
+        // the vote signature is over the bare vote preimage, so swapping the
+        // conventions must fail closed.
         assert!(crypto::verify_signature(
             &CHAIN,
             &raw.pubkey,
-            &vote.signature.try_into().unwrap(),
+            vote.signature.as_bytes(),
             raw.action_type,
             1,
             &raw.payload,
         )
         .is_err());
-        // The envelope's own signature still verifies.
         assert!(crypto::verify_signature(
             &CHAIN,
             &raw.pubkey,

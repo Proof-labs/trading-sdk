@@ -35,12 +35,14 @@ import {
   decodeAdminAction,
   decodeAdminSignerRegistry,
   decodeAdminSignerRegistryInfo,
+  decodeAuthoritiesSnapshot,
   decodeNodeVersion,
   decodeProposalPage,
   decodeProposalDisplayInfo,
   decodeProposalStatus,
   decodeUpgradesInfo,
 } from "./governance-query.js";
+import { isSubmittableAdminAction } from "./codec.js";
 
 // Matches the client's decoder options: only 64-bit msgpack ints become
 // bigint, so small values arrive as `number` — the case the decoders
@@ -349,6 +351,23 @@ describe("decodeAdminAction", () => {
     expect(() =>
       decodeAdminAction({ UpdateAuthoritySet: ["NotADomain", [], []] }),
     ).toThrow(/unknown variant `NotADomain`/);
+  });
+
+  it("decodes an UpdateAuthoritySet naming a retired list, never submittable", () => {
+    for (const domain of ["CexComposite", "ScheduledOps"]) {
+      const retired = decodeAdminAction({
+        UpdateAuthoritySet: [domain, [new Array(20).fill(0xb2)], []],
+      });
+      expect(retired).toEqual({
+        kind: "UpdateAuthoritySet",
+        value: { domain, add: [addrOf(0xb2)], remove: [] },
+      });
+      expect(isSubmittableAdminAction(retired)).toBe(false);
+    }
+    const live = decodeAdminAction(
+      decodeVector(ACTION_UPDATE_AUTHORITY_SET_ADD),
+    );
+    expect(isSubmittableAdminAction(live)).toBe(true);
   });
 
   it("decodes the engine's frozen attach bytes (admin tag 10)", () => {
@@ -869,5 +888,35 @@ describe("decodeNodeVersion", () => {
       decodeNodeVersion({ ...body, engine_lib_sha256: "x" }),
     ).toThrow();
     expect(() => decodeNodeVersion(null)).toThrow();
+  });
+});
+
+describe("decodeAuthoritiesSnapshot", () => {
+  const addr = (b: number) => new Array(20).fill(b);
+
+  it("checks all six engine slots and drops the two retired lists", () => {
+    // Wire order: relayer, oracle, cex_composite, custody, market_params,
+    // scheduled_ops. The engine keeps the retired slots empty; they are
+    // non-empty here only to prove the slots are dropped.
+    const got = decodeAuthoritiesSnapshot([
+      [addr(0xaa)],
+      [addr(0xbb)],
+      [addr(0xcc)],
+      [addr(0xdd)],
+      [addr(0xee)],
+      [addr(0xff)],
+    ]);
+    expect(got).toEqual({
+      relayer: [addrOf(0xaa)],
+      oracle: [addrOf(0xbb)],
+      custody: [addrOf(0xdd)],
+      marketParams: [addrOf(0xee)],
+    });
+  });
+
+  it("still fails closed on a malformed retired slot", () => {
+    expect(() =>
+      decodeAuthoritiesSnapshot([[], [], [new Array(19).fill(1)], [], [], []]),
+    ).toThrow(/retired\[2\]/);
   });
 });

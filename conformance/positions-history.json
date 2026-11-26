@@ -1,0 +1,55 @@
+{
+  "source": "Synthetic response fixture matching Proof-labs/indexer@f17035341c8e0d47574f5c8c9470b1065aa9f9b5 crates/server/src/positions.rs; cursor is intentionally opaque, not a server-issued token.",
+  "owner": "abababababababababababababababababababab",
+  "from_ms": 1776556800000,
+  "to_ms": 1776564000000,
+  "interval": "1h",
+  "pages": [
+    {
+      "positions": [
+        {
+          "owner": "abababababababababababababababababababab",
+          "market": 2,
+          "block_height": 200,
+          "block_time": "2026-04-19T01:45:00.123456Z",
+          "side": null,
+          "size": "0",
+          "entry_px": null,
+          "balance_usdc": 0,
+          "equity_usdc": 0,
+          "margin_ratio_bps": null
+        },
+        {
+          "owner": "abababababababababababababababababababab",
+          "market": 1,
+          "block_height": 200,
+          "block_time": "2026-04-19T01:45:00.123456Z",
+          "side": "buy",
+          "size": "200",
+          "entry_px": "9007199254740993.000000",
+          "balance_usdc": 0,
+          "equity_usdc": 0,
+          "margin_ratio_bps": null
+        }
+      ],
+      "next_cursor": "opaque+/=frontier"
+    },
+    {
+      "positions": [
+        {
+          "owner": "abababababababababababababababababababab",
+          "market": 1,
+          "block_height": 100,
+          "block_time": "2026-04-19T00:45:00Z",
+          "side": "buy",
+          "size": "100",
+          "entry_px": "9007199254740993.000000",
+          "balance_usdc": 0,
+          "equity_usdc": 0,
+          "margin_ratio_bps": null
+        }
+      ],
+      "next_cursor": ""
+    }
+  ]
+}

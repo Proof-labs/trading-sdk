@@ -1,4 +1,4 @@
-"""The wire-13 `/v2/bridge/*` reads: routing, page decode, cursors, and the
+"""The `/v2/bridge/*` reads: routing, page decode, cursors, and the
 exhausted page. Mirrors the TS `wire-reads.test.ts` bridge sections.
 """
 
@@ -27,10 +27,10 @@ def _view(payload) -> httpx.Response:
 
 
 VOTE_A = {"voter": b"\x11" * 32, "signature": b"\x77" * 64,
-          "registry_epoch": 3, "dead": False, "vault": b"\xa2" * 32,
+          "registry_epoch": 3, "verdict": "paid", "vault": b"\xa2" * 32,
           "squads_transaction_index": 7}
 VOTE_B = {"voter": b"\x22" * 32, "signature": b"\x88" * 64,
-          "registry_epoch": 3, "dead": True, "vault": b"\xa2" * 32,
+          "registry_epoch": 3, "verdict": "dead", "vault": b"\xa2" * 32,
           "squads_transaction_index": 7}
 
 
@@ -43,6 +43,12 @@ class TestBridgeStatus:
         status = _client(handler).bridge_status()
         assert status == "Paused"
 
+    def test_decodes_the_backlog_alert(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return _view("WithdrawalBacklog")
+
+        assert _client(handler).bridge_status() == "WithdrawalBacklog"
+
     def test_rejects_unknown_status_variant(self):
         def handler(request: httpx.Request) -> httpx.Response:
             return _view("UnknownStatus")
@@ -53,8 +59,26 @@ class TestBridgeStatus:
             _client(handler).bridge_status()
 
 
+class TestBridgePayoutConfig:
+    def test_decodes_the_vault_and_rent_wallet(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.path == "/v2/bridge/payout-config"
+            return _view({"payout_multisig": b"\xb2" * 32, "ops_wallet": b"\xb3" * 32})
+
+        assert _client(handler).bridge_payout_config() == {
+            "payout_multisig": b"\xb2" * 32,
+            "ops_wallet": b"\xb3" * 32,
+        }
+
+    def test_reads_none_while_unset(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return _view(None)
+
+        assert _client(handler).bridge_payout_config() is None
+
+
 class TestBridgeRegistry:
-    def test_decodes_the_roster_and_tolerates_a_pre_wire12_member(self):
+    def test_decodes_the_roster_of_operator_keys(self):
         def handler(request: httpx.Request) -> httpx.Response:
             assert request.url.path == "/v2/bridge/registry"
             return _view(
@@ -62,10 +86,7 @@ class TestBridgeRegistry:
                     "deployment_id": b"\xa1" * 32,
                     "epoch": 3,
                     "threshold": 2,
-                    "members": [
-                        {"key": b"\x11" * 32, "owner": b"\x55" * 20},
-                        {"key": b"\x22" * 32, "owner": None},
-                    ],
+                    "members": [{"key": b"\x11" * 32}, {"key": b"\x22" * 32}],
                 }
             )
 
@@ -74,10 +95,7 @@ class TestBridgeRegistry:
             "deployment_id": b"\xa1" * 32,
             "epoch": 3,
             "threshold": 2,
-            "members": [
-                {"key": b"\x11" * 32, "owner": b"\x55" * 20},
-                {"key": b"\x22" * 32, "owner": None},
-            ],
+            "members": [{"key": b"\x11" * 32}, {"key": b"\x22" * 32}],
         }
 
     def test_an_explicit_epoch_rides_the_path(self):
@@ -107,18 +125,15 @@ class TestPendingWithdrawals:
                         "solana_destination": b"\xcd" * 32,
                         "status": "pending",
                         "request_height": 42,
-                    },
-                    "lease": {
-                        "holder": b"\x55" * 20,
-                        "acquired_height": 43,
-                        "expires_at_height": 143,
+                        "quarantined": False,
                     },
                     "payout": {
-                            "holder": b"\x55" * 20,
-                            "vault": b"\xa2" * 32,
-                            "squads_transaction_index": 7,
-                            "registry_epoch": 3,
-                        },
+                        "recorder": b"\x11" * 32,
+                        "vault": b"\xa2" * 32,
+                        "squads_transaction_index": 7,
+                        "registry_epoch": 3,
+                        "recorded_at_ms": 1_700_000_000_000,
+                    },
                     "votes": [VOTE_A, VOTE_B],
                 }
             ],
@@ -140,12 +155,14 @@ class TestPendingWithdrawals:
             "owner": b"\xab" * 20,
             "amount": 5_000_000,
             "solana_destination": b"\xcd" * 32,
-            "status": "pending",
+            "status": "Pending",
             "request_height": 42,
+            "quarantined": False,
         }
-        assert row["lease"]["expires_at_height"] == 143
-        assert row["payout"]["vault"] == b"\xa2" * 32
-        assert row["votes"] == [VOTE_A, VOTE_B]
+        assert row["payout"]["recorder"] == b"\x11" * 32
+        assert row["payout"]["recorded_at_ms"] == 1_700_000_000_000
+        assert [v["verdict"] for v in row["votes"]] == ["Paid", "Dead"]
+        assert row["votes"][1]["signature"] == b"\x88" * 64
         assert page["next_cursor"] == 104
 
     def test_decodes_the_exhausted_page(self):
@@ -169,7 +186,7 @@ class TestPendingWithdrawals:
 
 
 class TestPendingDeposits:
-    def test_decodes_one_page_and_hexes_the_opaque_cursor(self):
+    def test_decodes_one_page_and_returns_the_cursor_in_route_form(self):
         def handler(request: httpx.Request) -> httpx.Response:
             assert request.url.path == "/v2/bridge/pending-deposits"
             return _view(
@@ -185,7 +202,10 @@ class TestPendingDeposits:
                             }],
                         }
                     ],
-                    "next_cursor": b"\xde\xad\xbe\xef",
+                    "next_cursor": {
+                        "solana_tx_sig": b"\x99" * 64,
+                        "locator": {"top_index": 2, "inner_index": None},
+                    },
                 }
             )
 
@@ -194,9 +214,9 @@ class TestPendingDeposits:
         assert row["solana_tx_sig"] == b"\x99" * 64
         assert row["locator"] == {"top_index": 2, "inner_index": 5}
         assert row["votes"][0]["amount_micro_usdc"] == 1_000_000
-        # The raw store-key bytes, hex-encoded exactly as the route serves
-        # them — an opaque token to pass back verbatim.
-        assert page["next_cursor"] == "deadbeef"
+        # The last scanned identity: the transfer signature, then the top
+        # index (0x0002) and an absent inner index (0xFFFF), big-endian.
+        assert page["next_cursor"] == "99" * 64 + "0002ffff"
 
     def test_decodes_the_exhausted_page(self):
         def handler(request: httpx.Request) -> httpx.Response:

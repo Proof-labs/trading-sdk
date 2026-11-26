@@ -1,0 +1,36 @@
+{
+  "description": "GET /v1/deposit-address/{account} answers, byte for byte as Proof-labs/deposit-address-service tests/routes.rs pins them. api-gateway passes them through unchanged. The same file is in api-gateway tests/fixtures/deposit-address.json and trading-sdk conformance/deposit-address.json.",
+  "account": "0xdbb6311de00a522f6569087d6e6b5fd674018d32",
+  "cases": [
+    {
+      "name": "ready",
+      "httpStatus": 200,
+      "headers": {},
+      "body": "{\"status\":\"ready\",\"address\":\"9DEvTpg7J8BsrESCVrpP9FnBEEKXpC8MauxarCApCAyz\",\"tokenAccount\":\"8MJF87ivAaBfc7yHkBztbGWyBgaAYTMFPrUdfcFfPQk6\",\"createdAt\":1763520000}"
+    },
+    {
+      "name": "subAccount",
+      "httpStatus": 403,
+      "headers": {},
+      "body": "{\"status\":\"error\",\"error\":\"deposits go to the main account; this is a sub-account\",\"errorCode\":\"SubAccount\"}"
+    },
+    {
+      "name": "rateLimited",
+      "httpStatus": 429,
+      "headers": { "retry-after": "2" },
+      "body": "{\"status\":\"error\",\"error\":\"rate limited\",\"errorCode\":\"RateLimited\",\"retryAfterMs\":1500}"
+    },
+    {
+      "name": "paused",
+      "httpStatus": 503,
+      "headers": {},
+      "body": "{\"status\":\"error\",\"error\":\"deposits are paused\",\"errorCode\":\"Paused\"}"
+    },
+    {
+      "name": "unavailable",
+      "httpStatus": 503,
+      "headers": {},
+      "body": "{\"status\":\"error\",\"error\":\"deposit addresses are unavailable, try again later\",\"errorCode\":\"Unavailable\"}"
+    }
+  ]
+}

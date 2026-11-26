@@ -96,12 +96,15 @@ pub enum ReadKind {
     BridgeStatus = 8,
     /// The operator registry at one epoch (`/v2/bridge/registry[/{epoch}]`).
     BridgeRegistry = 9,
-    /// One page of pending withdrawals with their leases, payout reports
-    /// and Paid votes (`/v2/bridge/pending-withdrawals`).
+    /// One page of pending withdrawals with their recorded payouts and
+    /// votes (`/v2/bridge/pending-withdrawals`).
     PendingWithdrawals = 10,
     /// One page of pending deposits with their voted readings
     /// (`/v2/bridge/pending-deposits`).
     PendingDeposits = 11,
+    /// The governed payout vault and rent wallet, or nil while unset
+    /// (`/v2/bridge/payout-config`).
+    BridgePayoutConfig = 12,
     /// `query_v2::AuthorizedAgents`, a current bounded map-encoded grant list.
     AuthorizedAgents = 5,
     /// `query_v2::InsuranceFundDirectory` (`GET /v2/insurance-funds?witness=1`).
@@ -165,6 +168,9 @@ pub fn decode_read(kind: ReadKind, bytes: &[u8]) -> Result<JsValue, JsError> {
             decode_as::<core_sdk::query_v2::PendingWithdrawalPage>(bytes)
         }
         ReadKind::PendingDeposits => decode_as::<core_sdk::query_v2::PendingDepositPage>(bytes),
+        ReadKind::BridgePayoutConfig => {
+            decode_as::<Option<core_sdk::query_v2::BridgePayoutConfig>>(bytes)
+        }
         ReadKind::AuthorizedAgents => {
             if !matches!(bytes.first(), Some(0x80..=0x8f | 0xde | 0xdf)) {
                 return Err(JsError::new("authorized agents must be a MessagePack map"));
@@ -294,93 +300,6 @@ pub fn signing_message(
     Ok(crypto::signing_message(&cid, action_type, seq, payload))
 }
 
-/// Canonical registry-member signature preimage for a Paid withdrawal vote.
-#[wasm_bindgen]
-pub fn vote_withdrawal_paid_message(
-    withdrawal_id: u64,
-    vault: &[u8],
-    squads_transaction_index: u32,
-    deployment_id: &[u8],
-    chain_id: &[u8],
-    registry_epoch: u64,
-) -> Result<Vec<u8>, JsError> {
-    let vote = core_sdk::types::VoteWithdrawalPaid {
-        withdrawal_id,
-        vault: arr32(vault, "vault")?,
-        squads_transaction_index,
-        deployment_id: arr32(deployment_id, "deployment_id")?,
-        chain_id: arr32(chain_id, "chain_id")?,
-        registry_epoch,
-        signature: Vec::new(),
-    };
-    Ok(vote.vote_message())
-}
-
-/// Canonical registry-member signature preimage for a dead-payout vote.
-#[wasm_bindgen]
-pub fn vote_withdrawal_payout_dead_message(
-    withdrawal_id: u64,
-    vault: &[u8],
-    squads_transaction_index: u32,
-    deployment_id: &[u8],
-    chain_id: &[u8],
-    registry_epoch: u64,
-) -> Result<Vec<u8>, JsError> {
-    let vote = core_sdk::types::VoteWithdrawalPayoutDead {
-        withdrawal_id,
-        vault: arr32(vault, "vault")?,
-        squads_transaction_index,
-        deployment_id: arr32(deployment_id, "deployment_id")?,
-        chain_id: arr32(chain_id, "chain_id")?,
-        registry_epoch,
-        signature: Vec::new(),
-    };
-    Ok(vote.vote_message())
-}
-
-/// Canonical registry-member signature preimage for an observed deposit vote.
-#[wasm_bindgen]
-pub fn vote_deposit_message(
-    owner: &[u8],
-    amount_micro_usdc: u64,
-    solana_tx_sig: &[u8],
-    top_index: u16,
-    inner_index: i32,
-    deployment_id: &[u8],
-    chain_id: &[u8],
-    registry_epoch: u64,
-) -> Result<Vec<u8>, JsError> {
-    let locator = if inner_index == -1 && top_index == 0 {
-        None
-    } else if inner_index == -1 {
-        Some(core_sdk::types::DepositLocator {
-            top_index,
-            inner_index: None,
-        })
-    } else if (0..=u16::MAX as i32).contains(&inner_index) {
-        Some(core_sdk::types::DepositLocator {
-            top_index,
-            inner_index: Some(inner_index as u16),
-        })
-    } else {
-        return Err(JsError::new("inner_index must be -1 or a u16"));
-    };
-    let signature = arr64(solana_tx_sig, "solana_tx_sig")?;
-    let vote = core_sdk::types::VoteDeposit {
-        owner: owner
-            .try_into()
-            .map_err(|_| JsError::new("owner must be exactly 20 bytes"))?,
-        amount_micro_usdc,
-        solana_tx_sig: signature.to_vec(),
-        locator,
-        deployment_id: arr32(deployment_id, "deployment_id")?,
-        chain_id: arr32(chain_id, "chain_id")?,
-        registry_epoch,
-        signature: Vec::new(),
-    };
-    Ok(vote.vote_message())
-}
-
 /// Assemble a signed wire envelope from a pre-computed pubkey + signature.
 #[wasm_bindgen]
 pub fn encode_signed_tx(
@@ -472,9 +391,8 @@ pub fn chain_id_from_string(chain_id: &str) -> Vec<u8> {
 // `WithdrawalAuthorizationV1` whose SHA-256 the engine binds to the
 // withdrawal. Calling its `encode()` makes the bytes the engine's by
 // construction; `src/bridge.test.ts` pins the marshalling with frozen
-// vectors. (The receipt-era `encode_bridge_receipt` binding retired with
-// wire 13: registry members now sign the canonical vote message from the
-// core's `bridge_votes` helpers, and no action carries receipt bytes.)
+// vectors. Bridge operators sign the messages `bridge_message_preimage`
+// builds; no action carries receipt bytes.
 
 use proof_trading_sdk::bridge::{
     DeploymentId, MicroUsdc, ProofOwner, RegistryEpoch, RustCrypto, Slot, SolanaPubkey,
@@ -558,4 +476,171 @@ pub fn withdrawal_authorization_digest(fields: JsValue) -> Result<Vec<u8>, JsErr
     let input: WithdrawalAuthorizationInput = serde_wasm_bindgen::from_value(fields)?;
     let auth = WithdrawalAuthorizationV1::try_from(input)?;
     Ok(auth.digest::<RustCrypto>().to_vec())
+}
+
+/// The deposit instruction locator as JS writes it.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DepositLocatorInput {
+    top_index: u16,
+    inner_index: Option<u16>,
+}
+
+/// One bridge-operator message, tagged by `kind`, with the camelCase field
+/// names of the TS `BridgeMessageFields` type. Byte fields take a
+/// `Uint8Array`. The binding fields
+/// (`deploymentId`, `chainId`, `registryEpoch`) are on every kind.
+#[derive(Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+enum BridgeMessageInput {
+    WithdrawalPaid {
+        withdrawal_id: u64,
+        #[serde(with = "serde_bytes")]
+        vault: Vec<u8>,
+        squads_transaction_index: u32,
+        #[serde(with = "serde_bytes")]
+        deployment_id: Vec<u8>,
+        #[serde(with = "serde_bytes")]
+        chain_id: Vec<u8>,
+        registry_epoch: u64,
+    },
+    WithdrawalPayoutDead {
+        withdrawal_id: u64,
+        #[serde(with = "serde_bytes")]
+        vault: Vec<u8>,
+        squads_transaction_index: u32,
+        #[serde(with = "serde_bytes")]
+        deployment_id: Vec<u8>,
+        #[serde(with = "serde_bytes")]
+        chain_id: Vec<u8>,
+        registry_epoch: u64,
+    },
+    PayoutRecord {
+        withdrawal_id: u64,
+        #[serde(with = "serde_bytes")]
+        vault: Vec<u8>,
+        squads_transaction_index: u32,
+        #[serde(with = "serde_bytes")]
+        deployment_id: Vec<u8>,
+        #[serde(with = "serde_bytes")]
+        chain_id: Vec<u8>,
+        registry_epoch: u64,
+    },
+    Deposit {
+        #[serde(with = "serde_bytes")]
+        owner: Vec<u8>,
+        amount_micro_usdc: u64,
+        #[serde(with = "serde_bytes")]
+        solana_tx_sig: Vec<u8>,
+        locator: Option<DepositLocatorInput>,
+        #[serde(with = "serde_bytes")]
+        deployment_id: Vec<u8>,
+        #[serde(with = "serde_bytes")]
+        chain_id: Vec<u8>,
+        registry_epoch: u64,
+    },
+    PauseBridge {
+        signed_at_ms: u64,
+        #[serde(with = "serde_bytes")]
+        deployment_id: Vec<u8>,
+        #[serde(with = "serde_bytes")]
+        chain_id: Vec<u8>,
+        registry_epoch: u64,
+    },
+}
+
+/// The canonical bytes a bridge operator signs for one message: the wire
+/// contract's `vote_message` / `record_message`, the bytes the engine
+/// verifies. Every byte field is length-checked before the preimage is built.
+#[wasm_bindgen]
+pub fn bridge_message_preimage(fields: JsValue) -> Result<Vec<u8>, JsError> {
+    use proof_trading_sdk::bridge::TxSignature;
+    use proof_trading_sdk::bridge_votes::{
+        BridgeBinding, BridgeMessage, DepositObservation, PayoutIdentity,
+    };
+    use proof_trading_sdk::types::DepositLocator;
+    let binding = |deployment_id: &[u8], chain_id: &[u8], registry_epoch: u64| {
+        Ok::<_, JsError>(BridgeBinding {
+            deployment_id: DeploymentId::new(arr32(deployment_id, "deploymentId")?),
+            chain_id: arr32(chain_id, "chainId")?,
+            registry_epoch: RegistryEpoch::new(registry_epoch),
+        })
+    };
+    let payout = |withdrawal_id: u64, vault: &[u8], squads_transaction_index: u32| {
+        Ok::<_, JsError>(PayoutIdentity {
+            withdrawal_id: WithdrawalId::new(withdrawal_id),
+            vault: SolanaPubkey::new(arr32(vault, "vault")?),
+            squads_transaction_index,
+        })
+    };
+    let input: BridgeMessageInput = serde_wasm_bindgen::from_value(fields)?;
+    let message = match input {
+        BridgeMessageInput::WithdrawalPaid {
+            withdrawal_id,
+            vault,
+            squads_transaction_index,
+            deployment_id,
+            chain_id,
+            registry_epoch,
+        } => BridgeMessage::WithdrawalPaid(
+            payout(withdrawal_id, &vault, squads_transaction_index)?,
+            binding(&deployment_id, &chain_id, registry_epoch)?,
+        ),
+        BridgeMessageInput::WithdrawalPayoutDead {
+            withdrawal_id,
+            vault,
+            squads_transaction_index,
+            deployment_id,
+            chain_id,
+            registry_epoch,
+        } => BridgeMessage::WithdrawalPayoutDead(
+            payout(withdrawal_id, &vault, squads_transaction_index)?,
+            binding(&deployment_id, &chain_id, registry_epoch)?,
+        ),
+        BridgeMessageInput::PayoutRecord {
+            withdrawal_id,
+            vault,
+            squads_transaction_index,
+            deployment_id,
+            chain_id,
+            registry_epoch,
+        } => BridgeMessage::PayoutRecord(
+            payout(withdrawal_id, &vault, squads_transaction_index)?,
+            binding(&deployment_id, &chain_id, registry_epoch)?,
+        ),
+        BridgeMessageInput::Deposit {
+            owner,
+            amount_micro_usdc,
+            solana_tx_sig,
+            locator,
+            deployment_id,
+            chain_id,
+            registry_epoch,
+        } => BridgeMessage::Deposit(
+            DepositObservation {
+                owner: ProofOwner::new(arr20(&owner, "owner")?),
+                amount: MicroUsdc::new(amount_micro_usdc),
+                solana_tx_sig: TxSignature::new(arr64(&solana_tx_sig, "solanaTxSig")?),
+                locator: locator.map(|l| DepositLocator {
+                    top_index: l.top_index,
+                    inner_index: l.inner_index,
+                }),
+            },
+            binding(&deployment_id, &chain_id, registry_epoch)?,
+        ),
+        BridgeMessageInput::PauseBridge {
+            signed_at_ms,
+            deployment_id,
+            chain_id,
+            registry_epoch,
+        } => BridgeMessage::PauseBridge(
+            signed_at_ms,
+            binding(&deployment_id, &chain_id, registry_epoch)?,
+        ),
+    };
+    Ok(message.preimage())
 }

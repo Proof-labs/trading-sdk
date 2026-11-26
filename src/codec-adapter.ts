@@ -13,6 +13,7 @@
 
 import {
   ActionType,
+  MAX_ORDERS_PER_BATCH,
   Outcome,
   Side,
   TimeInForce,
@@ -21,8 +22,8 @@ import {
   type ActionTypeValue,
   type AdminAction,
   type EmergencyAction,
+  type BridgePayoutConfig,
   type BridgeStatus,
-  type BridgeVote,
   type DepositLocator,
   type EventInfo,
   type EventOracleSource,
@@ -30,27 +31,32 @@ import {
   type MarketConfig,
   type MarketKind,
   type MarketsSnapshot,
-  type OperatorMember,
   type OperatorRegistry,
   type PendingDeposit,
-  type PendingDepositObservation,
   type PendingDepositPage,
   type PendingWithdrawal,
   type PendingWithdrawalPage,
+  type PayoutVerdict,
   type PositionInfo,
   type PriceComparison,
   type RetiredTriggerMarketConfig,
   type DecodedAdminAction,
   type DecodedAction,
+  type LimitOrderEntry,
+  type MarketOrderEntry,
+  type OrderEntry,
   type SetOracleGuards,
   type FundInsuranceFund,
   type WithdrawInsuranceFund,
   type ScheduleUpgrade,
   type SetLiquidationConfig,
   type SetOperatorReceiptRegistry,
+  type SetBridgePayoutConfig,
   type SettleEvent,
+  type AccountFeeOverrideChange,
   type VoidEvent,
   type WithdrawalPayoutReport,
+  type WithdrawalPayoutVote,
   type WithdrawalRecord,
 } from "./types.js";
 import {
@@ -157,7 +163,10 @@ const MARK_SOURCE_MODE_NAMES: Record<number, string> = {
  * explicitly because a fieldless struct variant (`Variant {}`) is NOT one
  * of these — it keeps the map form.
  */
-const GOVERNANCE_UNIT_VARIANTS = new Set<string>(["UnpauseBridge"]);
+const GOVERNANCE_UNIT_VARIANTS = new Set<string>([
+  "UnpauseBridge",
+  "PauseBridge",
+]);
 
 /**
  * Encode a governance `AdminAction` / `EmergencyAction` for
@@ -210,6 +219,9 @@ function validateGovernanceAction(v: { kind: string; value?: unknown }): void {
   if (v.kind === "SetOperatorReceiptRegistry") {
     validateSetOperatorReceiptRegistry(v.value as SetOperatorReceiptRegistry);
   }
+  if (v.kind === "SetBridgePayoutConfig") {
+    validateSetBridgePayoutConfig(v.value as SetBridgePayoutConfig);
+  }
   if (v.kind === "SetMarginOffsetPolicy") {
     validateSetMarginOffsetPolicy(v.value as SetMarginOffsetPolicy);
   }
@@ -218,6 +230,34 @@ function validateGovernanceAction(v: { kind: string; value?: unknown }): void {
   }
   if (v.kind === "SettleEvent") {
     validateSettleEvent(v.value as SettleEvent);
+  }
+  if (v.kind === "SetAccountFeeOverride") {
+    validateAccountFeeOverrideChange(v.value as AccountFeeOverrideChange);
+  }
+}
+
+/** The revert sentinel: the account's fills go back to the market's fee. */
+const FEE_OVERRIDE_REVERT_SENTINEL = 0xffff_ffff;
+
+/** The engine's fee checks (code 42): each fee `0..=10_000` basis points or
+ *  the revert sentinel. The `seq` replay guard needs the stored sequence, so
+ *  only the engine checks it. */
+function validateAccountFeeOverrideChange(
+  change: AccountFeeOverrideChange,
+): void {
+  for (const [name, bps] of [
+    ["takerFeeBps", change.takerFeeBps],
+    ["makerFeeBps", change.makerFeeBps],
+  ] as const) {
+    if (
+      !Number.isInteger(bps) ||
+      bps < 0 ||
+      (bps > 10_000 && bps !== FEE_OVERRIDE_REVERT_SENTINEL)
+    ) {
+      throw new Error(
+        `setAccountFeeOverride ${name} ${bps} is outside 0..=10000 and is not the revert sentinel ${FEE_OVERRIDE_REVERT_SENTINEL}`,
+      );
+    }
   }
 }
 
@@ -237,9 +277,8 @@ function validateVoidEvent(action: VoidEvent): void {
   }
 }
 
-/** The quorum must be reachable and every owner a real address: threshold
- *  in `1..=operatorKeys.length`, `operatorOwners` the same length as
- *  `operatorKeys` (index-for-index) and all non-zero. */
+/** The quorum must be reachable and the roster duplicate-free: threshold in
+ *  `1..=operatorKeys.length`, every key 32 bytes and named once. */
 function validateSetOperatorReceiptRegistry(
   registry: SetOperatorReceiptRegistry,
 ): void {
@@ -249,27 +288,31 @@ function validateSetOperatorReceiptRegistry(
       `setOperatorReceiptRegistry threshold ${registry.threshold} is outside 1..=${n}`,
     );
   }
-  if (registry.operatorOwners.length !== n) {
-    throw new Error(
-      `setOperatorReceiptRegistry operatorOwners length ${registry.operatorOwners.length} must equal operatorKeys length ${n}`,
-    );
-  }
-  const seenOwners = new Set<string>();
-  for (const [index, owner] of registry.operatorOwners.entries()) {
-    const key = Array.from(owner, (byte) => byte.toString(16).padStart(2, "0")).join("");
-    if (seenOwners.has(key)) {
+  const seen = new Set<string>();
+  for (const [index, key] of registry.operatorKeys.entries()) {
+    if (key.length !== 32) {
       throw new Error(
-        `setOperatorReceiptRegistry operatorOwners[${index}] duplicates an earlier owner`,
+        `setOperatorReceiptRegistry operatorKeys[${index}] must be 32 bytes`,
       );
     }
-    seenOwners.add(key);
+    const hex = bytesToHex(key);
+    if (seen.has(hex)) {
+      throw new Error(
+        `setOperatorReceiptRegistry operatorKeys[${index}] duplicates an earlier key`,
+      );
+    }
+    seen.add(hex);
   }
-  const zero = registry.operatorOwners.findIndex(
-    (owner) => !owner.some((byte) => byte !== 0),
-  );
-  if (zero !== -1) {
+}
+
+/** The vault and the rent wallet are 32-byte Solana addresses, and differ. */
+function validateSetBridgePayoutConfig(config: SetBridgePayoutConfig): void {
+  if (config.payoutMultisig.length !== 32 || config.opsWallet.length !== 32) {
+    throw new Error("setBridgePayoutConfig addresses must be 32 bytes");
+  }
+  if (bytesToHex(config.payoutMultisig) === bytesToHex(config.opsWallet)) {
     throw new Error(
-      `setOperatorReceiptRegistry operatorOwners[${zero}] is the zero address`,
+      "setBridgePayoutConfig opsWallet must differ from payoutMultisig",
     );
   }
 }
@@ -370,6 +413,86 @@ function validateCreateMarketTickers(action: DecodedAction): void {
   }
 }
 
+/** The wire refuses a batch with no orders or more than the cap; say so
+ *  here, by count, rather than as an untagged-enum mismatch. */
+function validateListSize(orders: number): void {
+  if (orders < 1 || orders > MAX_ORDERS_PER_BATCH) {
+    throw new Error(
+      `1 to ${MAX_ORDERS_PER_BATCH} orders per call, got ${orders}`,
+    );
+  }
+}
+
+/** One limit or market order as its `PlaceOrders` wire entry. Every
+ *  non-optional field is set: the entry has no serde defaults. */
+function orderEntryToWasm(entry: OrderEntry): Record<string, unknown> {
+  const kind =
+    entry.kind === "market"
+      ? { Market: { worst_price: entry.worstPrice ?? null } }
+      : {
+          Limit: {
+            price: entry.price,
+            time_in_force: convertValue(
+              "timeInForce",
+              entry.timeInForce ?? TimeInForce.Gtc,
+            ),
+            post_only: entry.postOnly ?? false,
+          },
+        };
+  return {
+    ...convertObject({
+      market: entry.market,
+      side: entry.side,
+      quantity: entry.quantity,
+      clientOrderId: entry.clientOrderId,
+      stopLoss: entry.stopLoss,
+      takeProfit: entry.takeProfit,
+    }),
+    kind,
+    reduce_only: entry.reduceOnly ?? false,
+  };
+}
+
+/** The order actions as the list action they encode as: a single order or
+ *  cancel is a list of one. Null for every other action. */
+function listFieldsToWasm(
+  action: DecodedAction,
+): Record<string, unknown> | null {
+  switch (action.type) {
+    case "PlaceOrder":
+    case "MarketOrder":
+    case "PlaceOrders": {
+      const orders: OrderEntry[] =
+        action.type === "PlaceOrders"
+          ? action.data.orders
+          : action.type === "MarketOrder"
+            ? [{ ...action.data, kind: "market" }]
+            : [action.data];
+      validateListSize(orders.length);
+      orders.forEach(validateOrderTriggers);
+      return { owner: action.data.owner, orders: orders.map(orderEntryToWasm) };
+    }
+    case "CancelOrder":
+      return { owner: action.data.owner, order_ids: [action.data.orderId] };
+    case "CancelOrders":
+      validateListSize(action.data.orderIds.length);
+      return { owner: action.data.owner, order_ids: action.data.orderIds };
+    case "CancelClientOrder":
+      return {
+        owner: action.data.owner,
+        client_order_ids: [action.data.clientOrderId],
+      };
+    case "CancelClientOrders":
+      validateListSize(action.data.clientOrderIds.length);
+      return {
+        owner: action.data.owner,
+        client_order_ids: action.data.clientOrderIds,
+      };
+    default:
+      return null;
+  }
+}
+
 /**
  * Translate a current or historical action for canonical wire encoding.
  * This internal adapter does not decide whether an action is submittable.
@@ -382,20 +505,16 @@ export function toWasmFields(action: DecodedAction): {
     validateSetPositionTriggers(action.data);
   } else if (action.type === "CancelPositionTriggers") {
     validateCancelPositionTriggers(action.data);
-  } else if (
-    action.type === "PlaceOrder" ||
-    action.type === "MarketOrder" ||
-    action.type === "CancelReplaceOrder"
-  ) {
+  } else if (action.type === "CancelReplaceOrder") {
     // Pre-fill SL/TP limbs on order actions: same client-side parity as the
     // 0x25/0x26 validators above (absent limbs pass — no bracket requested).
     validateOrderTriggers(action.data);
   }
   validateCreateMarketTickers(action);
   const actionType = ActionType[action.type] as ActionTypeValue;
-  const fields = convertObject(
-    action.data as unknown as Record<string, unknown>,
-  );
+  const fields =
+    listFieldsToWasm(action) ??
+    convertObject(action.data as unknown as Record<string, unknown>);
 
   // `CreateMarket.max_open_interest` is a non-optional u64 in the Rust/WASM
   // core. The public TS input intentionally accepts omission/null as the
@@ -416,9 +535,13 @@ export function toWasmFields(action: DecodedAction): {
 // Decode direction: WASM `decode_payload` output → TS `Action`
 // ---------------------------------------------------------------------------
 
-/** action_type byte → `Action["type"]` name (inverse of `ActionType`). */
+/** action_type byte → `Action["type"]` name (inverse of `ActionType`; the
+ *  list name wins over its single aliases). The list bytes resolve per
+ *  payload in `fromWasmFields`. */
 const ACTION_TYPE_NAMES = Object.fromEntries(
-  Object.entries(ActionType).map(([name, byte]) => [byte, name]),
+  Object.entries(ActionType)
+    .reverse()
+    .map(([name, byte]) => [byte, name]),
 ) as Record<number, DecodedAction["type"]>;
 
 /** snake_case override → camelCase (inverse of `FIELD_OVERRIDES`). */
@@ -462,12 +585,17 @@ const BYTE_FIELDS = new Set([
   "approver",
   "rejecter",
   "contentHash",
-  // Vote-action byte fields (VoteWithdrawalPaid.deploymentId/chainId and
-  // VoteDeposit.deploymentId/chainId ride the same names).
+  // Bridge-operator message byte fields: every vote, payout record and
+  // pause vote binds `deploymentId` and `chainId` and carries its operator's
+  // 64-byte `signature`.
   "deploymentId",
   "chainId",
-  // Vote signatures (raw Vec<u8> on the wire → number[] on decode).
   "signature",
+  // SetBridgePayoutConfig's two 32-byte Solana addresses.
+  "payoutMultisig",
+  "opsWallet",
+  // AccountFeeOverrideChange's 20-byte account.
+  "account",
   "evidenceDigest",
   "bundle",
 ]);
@@ -554,16 +682,15 @@ function fromWasmValue(camelKey: string, value: unknown): unknown {
     return governanceActionFromWasm(value);
   }
   // `newMembers` (UpdateAdminSignerRegistry), `add`/`remove`
-  // (UpdateAuthoritySet), `operatorKeys` and `operatorOwners`
-  // (SetOperatorReceiptRegistry) are each a list of fixed-width byte
+  // (UpdateAuthoritySet) and `operatorKeys` (SetOperatorReceiptRegistry)
+  // are each a list of fixed-width byte
   // strings; convert every element to a Uint8Array, unlike the
   // single-value BYTE_FIELDS above.
   if (
     (camelKey === "newMembers" ||
       camelKey === "add" ||
       camelKey === "remove" ||
-      camelKey === "operatorKeys" ||
-      camelKey === "operatorOwners") &&
+      camelKey === "operatorKeys") &&
     Array.isArray(value)
   ) {
     return value.map((m) =>
@@ -646,10 +773,75 @@ export function fromWasmFields(
 ): DecodedAction {
   const type = ACTION_TYPE_NAMES[actionType];
   if (!type) throw new Error(`unknown action_type: ${actionType}`);
-  return {
+  const data = fromWasmObject(fields as Record<string, unknown>);
+  return (fromListFields(actionType, data) ?? {
     type,
-    data: fromWasmObject(fields as Record<string, unknown>),
-  } as unknown as DecodedAction;
+    data,
+  }) as unknown as DecodedAction;
+}
+
+/** A decoded `PlaceOrders` entry: a limit entry has no `kind`, a market
+ *  entry drops its unset `worstPrice` and `reduceOnly` so a single market
+ *  order reads back as it was written. */
+function orderEntryFromWasm(entry: Record<string, unknown>): OrderEntry {
+  const { kind, ...shared } = entry;
+  const variant = kind as Record<string, Record<string, unknown>>;
+  if (variant.Limit) return { ...shared, ...variant.Limit } as LimitOrderEntry;
+  if (!variant.Market) {
+    throw new Error(
+      `unknown order kind: ${JSON.stringify(Object.keys(variant))}`,
+    );
+  }
+  const market: Record<string, unknown> = { ...shared, kind: "market" };
+  if (market.reduceOnly === false) delete market.reduceOnly;
+  if (variant.Market.worstPrice != null) {
+    market.worstPrice = variant.Market.worstPrice;
+  }
+  return market as unknown as MarketOrderEntry;
+}
+
+/** A list of one reads back as the single action that encodes to the same
+ *  bytes (`PlaceOrder`, `MarketOrder`, `CancelOrder`, `CancelClientOrder`),
+ *  so a single order round-trips unchanged; two or more read as the list
+ *  action. Null for every other byte. */
+function fromListFields(
+  actionType: ActionTypeValue,
+  data: Record<string, unknown>,
+): { type: DecodedAction["type"]; data: unknown } | null {
+  const { owner } = data;
+  switch (actionType) {
+    case ActionType.PlaceOrders: {
+      const orders = (data.orders as Record<string, unknown>[]).map(
+        orderEntryFromWasm,
+      );
+      if (orders.length !== 1) {
+        return { type: "PlaceOrders", data: { owner, orders } };
+      }
+      const [order] = orders;
+      if (order.kind === "market") {
+        const { kind: _market, ...single } = order;
+        return { type: "MarketOrder", data: { ...single, owner } };
+      }
+      return { type: "PlaceOrder", data: { ...order, owner } };
+    }
+    case ActionType.CancelOrders: {
+      const orderIds = data.orderIds as bigint[];
+      return orderIds.length === 1
+        ? { type: "CancelOrder", data: { orderId: orderIds[0], owner } }
+        : { type: "CancelOrders", data };
+    }
+    case ActionType.CancelClientOrders: {
+      const clientOrderIds = data.clientOrderIds as bigint[];
+      return clientOrderIds.length === 1
+        ? {
+            type: "CancelClientOrder",
+            data: { owner, clientOrderId: clientOrderIds[0] },
+          }
+        : { type: "CancelClientOrders", data };
+    }
+    default:
+      return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -837,24 +1029,27 @@ export function marketsSnapshotFromWasm(v: unknown): MarketsSnapshot {
 }
 
 // ---------------------------------------------------------------------------
-// Bridge custody reads (wire 13, `/v2/bridge/*`): the Rust core has decoded
-// the `query_v2` views; these only rename fields and lift `Option`s.
+// Bridge custody reads (`/v2/bridge/*`): the Rust core has decoded the
+// `query_v2` views; these only rename fields and lift `Option`s.
 // ---------------------------------------------------------------------------
 
-const optionalBytes = (v: unknown): Uint8Array | undefined =>
-  v == null ? undefined : bytesOf(v);
-
-/** The `/v2/bridge/status` governance view. */
+/** The `/v2/bridge/status` view. */
 export function bridgeStatusFromWasm(v: unknown): BridgeStatus {
-  if (v === "Active" || v === "Paused" || v === "WithdrawalsFull") return v;
+  if (v === "Active" || v === "Paused" || v === "WithdrawalBacklog") return v;
   throw new Error(`unknown bridge status: ${String(v)}`);
 }
 
-function memberFromWasm(m: WasmRecord): OperatorMember {
-  const member: OperatorMember = { key: bytesOf(m.key) };
-  const owner = optionalBytes(m.owner);
-  if (owner) member.owner = owner;
-  return member;
+/** The `/v2/bridge/payout-config` view; `null` while the quorum has not set
+ *  one. */
+export function bridgePayoutConfigFromWasm(
+  v: unknown,
+): BridgePayoutConfig | null {
+  if (v == null) return null;
+  const c = v as WasmRecord;
+  return {
+    payoutMultisig: bytesOf(c.payout_multisig),
+    opsWallet: bytesOf(c.ops_wallet),
+  };
 }
 
 /** The `/v2/bridge/registry[/{epoch}]` roster. */
@@ -864,18 +1059,33 @@ export function bridgeRegistryFromWasm(v: unknown): OperatorRegistry {
     deploymentId: bytesOf(s.deployment_id),
     epoch: s.epoch as bigint,
     threshold: s.threshold as number,
-    members: (s.members as WasmRecord[]).map(memberFromWasm),
+    members: (s.members as WasmRecord[]).map((m) => ({ key: bytesOf(m.key) })),
   };
 }
 
-function bridgeVoteFromWasm(v: WasmRecord): BridgeVote {
+/** The view spells the verdict in snake_case; map it onto the TS union,
+ *  loudly. */
+function payoutVerdictFromWasm(v: unknown): PayoutVerdict {
+  switch (v) {
+    case "paid":
+      return "Paid";
+    case "dead":
+      return "Dead";
+    case "unknown":
+      return "Unknown";
+    default:
+      throw new Error(`unknown payout verdict: ${JSON.stringify(v)}`);
+  }
+}
+
+function payoutVoteFromWasm(v: WasmRecord): WithdrawalPayoutVote {
   return {
     voter: bytesOf(v.voter),
-    signature: bytesOf(v.signature),
     registryEpoch: v.registry_epoch as bigint,
-    dead: v.dead as boolean,
+    verdict: payoutVerdictFromWasm(v.verdict),
     vault: bytesOf(v.vault),
     squadsTransactionIndex: v.squads_transaction_index as number,
+    signature: bytesOf(v.signature),
   };
 }
 
@@ -905,39 +1115,33 @@ function withdrawalFromWasm(w: WasmRecord): WithdrawalRecord {
     solanaDestination: bytesOf(w.solana_destination),
     status: withdrawalStatusFromWasm(w.status),
     requestHeight: w.request_height as bigint,
+    quarantined: w.quarantined === true,
   };
 }
 
 function payoutReportFromWasm(r: WasmRecord): WithdrawalPayoutReport {
   return {
-    holder: bytesOf(r.holder),
+    recorder: bytesOf(r.recorder),
     vault: bytesOf(r.vault),
     squadsTransactionIndex: r.squads_transaction_index as number,
     registryEpoch: r.registry_epoch as bigint,
+    recordedAtMs: r.recorded_at_ms as bigint,
   };
 }
 
 function pendingWithdrawalFromWasm(w: WasmRecord): PendingWithdrawal {
   const row: PendingWithdrawal = {
     withdrawal: withdrawalFromWasm(w.withdrawal as WasmRecord),
-    votes: (w.votes as WasmRecord[]).map(bridgeVoteFromWasm),
+    votes: (w.votes as WasmRecord[]).map(payoutVoteFromWasm),
   };
-  if (w.lease != null) {
-    const l = w.lease as WasmRecord;
-    row.lease = {
-      holder: bytesOf(l.holder),
-      acquiredHeight: l.acquired_height as bigint,
-      expiresAtHeight: l.expires_at_height as bigint,
-    };
-  }
   if (w.payout != null) {
     row.payout = payoutReportFromWasm(w.payout as WasmRecord);
   }
   return row;
 }
 
-/** One `/v2/bridge/pending-withdrawals` page; `next_cursor` is a u64
- *  (absent once exhausted). */
+/** One `/v2/bridge/pending-withdrawals` page; `next_cursor` is the last
+ *  scanned withdrawal id (absent once exhausted). */
 export function pendingWithdrawalsFromWasm(v: unknown): PendingWithdrawalPage {
   const p = v as WasmRecord;
   return {
@@ -946,13 +1150,35 @@ export function pendingWithdrawalsFromWasm(v: unknown): PendingWithdrawalPage {
   };
 }
 
+function locatorFromWasm(v: unknown): DepositLocator {
+  const l = v as WasmRecord;
+  return {
+    topIndex: l.top_index as number,
+    innerIndex: (l.inner_index as number | undefined) ?? null,
+  };
+}
+
+/** The route's pending-deposits cursor: the hex of the transfer identity,
+ *  `solana_tx_sig(64) || top_index(2 BE) || inner_index(2 BE)`, with
+ *  `0xFFFF` for an absent inner index. */
+export function depositCursorHex(
+  solanaTxSig: Uint8Array,
+  locator: DepositLocator,
+): string {
+  if (solanaTxSig.length !== 64) {
+    throw new Error("deposit cursor: solanaTxSig must be 64 bytes");
+  }
+  const suffix = new Uint8Array(4);
+  const view = new DataView(suffix.buffer);
+  view.setUint16(0, locator.topIndex);
+  view.setUint16(2, locator.innerIndex ?? 0xffff);
+  return bytesToHex(solanaTxSig) + bytesToHex(suffix);
+}
+
 function pendingDepositFromWasm(d: WasmRecord): PendingDeposit {
   return {
     solanaTxSig: bytesOf(d.solana_tx_sig),
-    locator: d.locator == null ? null : {
-      topIndex: (d.locator as WasmRecord).top_index as number,
-      innerIndex: ((d.locator as WasmRecord).inner_index as number | undefined) ?? null,
-    },
+    locator: d.locator == null ? null : locatorFromWasm(d.locator),
     votes: (d.votes as WasmRecord[]).map((raw) => ({
       voter: bytesOf(raw.voter),
       registryEpoch: raw.registry_epoch as bigint,
@@ -963,16 +1189,21 @@ function pendingDepositFromWasm(d: WasmRecord): PendingDeposit {
   };
 }
 
-/** One `/v2/bridge/pending-deposits` page; `next_cursor` is the OPAQUE
- *  resumption token the route hands back (hex-encoded store key) — pass it
- *  back verbatim, never parse it. */
+/** One `/v2/bridge/pending-deposits` page. The view's `next_cursor` is the
+ *  last scanned transfer identity; it is returned in the route's cursor
+ *  form, so a caller passes it back verbatim. */
 export function pendingDepositsFromWasm(v: unknown): PendingDepositPage {
   const p = v as WasmRecord;
+  const next = p.next_cursor as WasmRecord | undefined;
   return {
     rows: (p.rows as WasmRecord[]).map(pendingDepositFromWasm),
-    nextCursor: (p.next_cursor as unknown[] | undefined)
-      ? bytesToHex(bytesOf(p.next_cursor))
-      : null,
+    nextCursor:
+      next == null
+        ? null
+        : depositCursorHex(
+            bytesOf(next.solana_tx_sig),
+            locatorFromWasm(next.locator),
+          ),
   };
 }
 /** The engine's names, keyed by the version 2 view's spelling of them. */
@@ -1073,6 +1304,7 @@ function marketViewFromWasm(v: unknown): MarketView {
     status: viewName(VIEW_MARKET_STATUSES, m.status),
     fundingDeadBandBps: viewOptional(m.funding_dead_band_bps),
     fundingInterestRate: viewOptional(m.funding_interest_rate),
+    settingsSequence: m.settings_sequence as bigint,
   };
 }
 

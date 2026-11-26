@@ -1,4 +1,4 @@
-"""Payout reports preserve the public builder's raw bytes and integer bounds."""
+"""Payout records preserve the public builder's raw bytes and integer bounds."""
 
 import json
 from pathlib import Path
@@ -22,10 +22,12 @@ def _vector(case: str) -> dict:
 def report(**overrides):
     fields = {
         "withdrawal_id": (1 << 64) - 1,
-        "holder": bytes([5]) * 20,
         "vault": bytes(range(32)),
         "squads_transaction_index": (1 << 32) - 1,
+        "deployment_id": bytes(range(1, 33)),
+        "chain_id": bytes(range(2, 34)),
         "registry_epoch": (1 << 64) - 1,
+        "signature": bytes(range(64)),
     }
     return RecordWithdrawalPayout(**(fields | overrides))
 

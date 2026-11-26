@@ -8,9 +8,12 @@ means two SDKs would sign or encode the same logical action differently.
 
 The shared [codec](codec.ndjson), [signing](signing.ndjson), [vote preimage](vote-preimages.ndjson), and
 [nonce](nonce.ndjson) vectors define the cases checked by the Rust, Python,
-and TypeScript runners. Vote preimages are derived from the wire contract's
-`vote_message` methods and pin each member-signature message independently of
-the envelope payload. The TypeScript runner skips the nonce family because
+and TypeScript runners. The bridge-message preimages are derived from the wire
+contract's `vote_message` / `record_message` methods and pin the bytes a bridge
+operator signs, independently of the envelope payload. Each row names its
+message `kind` (`withdrawal_paid`, `withdrawal_payout_dead`, `payout_record`,
+`deposit`, `pause_bridge`); ids, epochs, amounts and times are decimal strings,
+so a runner without 64-bit integers keeps them exact. The TypeScript runner skips the nonce family because
 it exposes no standalone nonce step function. See [Running the runners](#running-the-runners)
 for commands and the [CI workflow](../.github/workflows/ci.yml) for automation.
 
@@ -24,7 +27,7 @@ conformance/
   codec.ndjson      ← action fields → exact MessagePack payload bytes
   signing.ndjson    ← (payload, key) → wire envelope; pubkey → owner address
   nonce.ndjson      ← (last, now_ms…) → allocated nonce sequence
-  vote-preimages.ndjson ← bridge vote identity → exact Ed25519 preimage
+  vote-preimages.ndjson ← bridge-operator message → exact Ed25519 preimage
   events.ndjson     ← engine event → its ABCI type and attributes
   errors.ndjson     ← (code, log) → engine error name
   binary.ndjson     ← Yes/No book orders and reads in No terms
@@ -248,3 +251,19 @@ against production traffic, for free.
 
 `market-stats.json` pins the exact JSON strings and nullable fields consumed by
 both the TypeScript and Python market-statistics decoders.
+
+`deposit-address.json` pins the `GET /v1/deposit-address/{account}` answers
+(ready, sub-account, rate-limited, paused and unavailable; status, headers and
+body, byte for byte) that Proof-labs/deposit-address-service `tests/routes.rs` asserts and
+api-gateway passes through. It is identical to api-gateway's
+`tests/fixtures/deposit-address.json`; the TypeScript runner is
+`src/deposit-address.test.ts`.
+
+`positions-history.json` is a synthetic two-page bucketed answer of
+`GET /v1/history/positions` (`interval=1h`): two markets tied on one block, a
+closed position with null side and entry price, an entry price above 2^53 and
+an opaque cursor. Its rows use the column set and `block_time DESC,
+block_height DESC, market DESC` order of Proof-labs/indexer
+`crates/server/src/positions.rs`. The TypeScript, Rust and Python runners are
+`src/client.history.test.ts`, `crates/proof-sdk-rs/tests/reads.rs` and
+`python/tests/test_history_rows.py`.

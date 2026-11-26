@@ -9,10 +9,12 @@ import {
 
 const report: RecordWithdrawalPayout = {
   withdrawalId: (1n << 64n) - 1n,
-  holder: new Uint8Array(20).fill(5),
   vault: Uint8Array.from({ length: 32 }, (_, i) => i),
   squadsTransactionIndex: 4294967295,
+  deploymentId: Uint8Array.from({ length: 32 }, (_, i) => i + 1),
+  chainId: Uint8Array.from({ length: 32 }, (_, i) => i + 2),
   registryEpoch: (1n << 64n) - 1n,
+  signature: Uint8Array.from({ length: 64 }, (_, i) => i),
 };
 
 // Pinned once in conformance/codec.ndjson, shared with Rust and Python.

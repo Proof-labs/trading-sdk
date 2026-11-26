@@ -18,13 +18,17 @@ pub use proof_wire::margin_offsets::{
     PartialOffsetBps, PerpetualMarket, SetMarginOffsetPolicy, SettlementReferenceMarket,
     MAX_MARGIN_OFFSET_PAIRS,
 };
+pub use proof_wire::market_settings::{
+    MarketSettingsChange, MarketSettingsSequence, QuorumUpdateMarketFees,
+};
 pub use proof_wire::types::{
-    AdminAction, AdminActionType, AdminBatchItem, ApproveAdminAction, CancelUpgrade,
-    ConfigureOraclePolicy, EmergencyAction, EmergencyActionType, EmergencyAdminAction,
-    FundInsuranceFund, InsuranceFundAllocation, InsuranceFundingId, InsurancePoolId,
-    InsuranceWithdrawalId, MarketStatus, ProposalId, ProposeAdminAction, RegistryVersion,
-    RejectAdminAction, ScheduleUpgrade, SetMarketStatus, SetOracleGuards, SettleEvent,
-    SignatureThreshold, SignerAddress, UpdateAdminSignerRegistry, VoidEvent, WithdrawInsuranceFund,
+    AccountFeeOverrideChange, AdminAction, AdminActionType, AdminBatchItem, ApproveAdminAction,
+    CancelUpgrade, ConfigureOraclePolicy, EmergencyAction, EmergencyActionType,
+    EmergencyAdminAction, FundInsuranceFund, InsuranceFundAllocation, InsuranceFundingId,
+    InsurancePoolId, InsuranceWithdrawalId, MarketStatus, ProposalId, ProposeAdminAction,
+    RegistryVersion, RejectAdminAction, ScheduleUpgrade, SetMarketStatus, SetOracleGuards,
+    SettleEvent, SignatureThreshold, SignerAddress, UpdateAdminSignerRegistry, VoidEvent,
+    WithdrawInsuranceFund,
 };
 
 #[cfg(test)]
@@ -124,5 +128,151 @@ mod margin_offset_tag_tests {
             rate: PartialOffsetBps::try_from(5_000_u16).expect("5000 bps is a partial rate"),
             resolution: OffsetResolutionTreatment::RemoveOnResolution,
         }
+    }
+}
+
+#[cfg(test)]
+mod update_market_fees_tests {
+    use super::{
+        AdminAction, AdminActionType, MarketSettingsChange, MarketSettingsSequence,
+        ProposeAdminAction, QuorumUpdateMarketFees, RegistryVersion, SignerAddress,
+    };
+    use crate::signer::{sign_action, LocalSigner};
+    use crate::types::Action;
+    use crate::{codec, crypto};
+
+    /// proof-wire's frozen `vectors/propose_update_market_fees.hex`, copied
+    /// byte for byte: DevNet BTC (market 1) raises its open-interest cap to
+    /// 35,000 at settings sequence 0, every other setting left as it is,
+    /// proposed by `[0xA1; 20]` under registry version 1. Key `[0x42; 32]`
+    /// signs it on the unbound chain at seq 400.
+    const FROZEN: &str = include_str!("../../spec/golden-vectors/propose_update_market_fees.hex");
+
+    fn change() -> MarketSettingsChange {
+        MarketSettingsChange {
+            market: 1,
+            max_open_interest: Some(35_000),
+            ..Default::default()
+        }
+    }
+
+    fn proposal() -> ProposeAdminAction {
+        ProposeAdminAction {
+            proposer: SignerAddress([0xA1; 20]),
+            registry_version: RegistryVersion(1),
+            action: AdminAction::UpdateMarketFees(QuorumUpdateMarketFees {
+                predecessor: MarketSettingsSequence(0),
+                change: change(),
+            }),
+        }
+    }
+
+    #[test]
+    fn update_market_fees_tag_preserves_the_wire_allocation() {
+        assert_eq!(AdminActionType::UpdateMarketFees as u8, 35);
+        assert_eq!(proposal().action.action_tag(), 35);
+    }
+
+    #[test]
+    fn the_sdk_signs_the_frozen_proposal_byte_for_byte() {
+        let wire = sign_action(
+            &LocalSigner::from_bytes(&[0x42; 32]),
+            &crypto::UNBOUND_CHAIN_ID,
+            &Action::ProposeAdminAction(proposal()),
+            400,
+        )
+        .expect("the proposal signs");
+        assert_eq!(hex::encode(wire), FROZEN.trim());
+    }
+
+    #[test]
+    fn the_frozen_proposal_decodes_to_its_inputs() {
+        let bytes = hex::decode(FROZEN.trim()).expect("the vector is hex");
+        assert_eq!(
+            codec::peek_action_type(&bytes),
+            Some(codec::ActionType::ProposeAdminAction as u8)
+        );
+        let decoded = codec::decode_tx(&bytes).expect("the frozen proposal decodes");
+        assert_eq!(decoded.seq, 400);
+        let Action::ProposeAdminAction(propose) = decoded.action else {
+            panic!("expected a ProposeAdminAction, got {:?}", decoded.action);
+        };
+        assert_eq!(propose.proposer, SignerAddress([0xA1; 20]));
+        assert_eq!(propose.registry_version, RegistryVersion(1));
+        let AdminAction::UpdateMarketFees(quorum) = propose.action else {
+            panic!("expected UpdateMarketFees, got {:?}", propose.action);
+        };
+        assert_eq!(quorum.predecessor, MarketSettingsSequence(0));
+        assert_eq!(quorum.change, change());
+    }
+}
+
+#[cfg(test)]
+mod set_account_fee_override_tests {
+    use super::{
+        AccountFeeOverrideChange, AdminAction, AdminActionType, ProposeAdminAction,
+        RegistryVersion, SignerAddress,
+    };
+    use crate::signer::{sign_action, LocalSigner};
+    use crate::types::Action;
+    use crate::{codec, crypto};
+
+    /// proof-wire's frozen `vectors/propose_set_account_fee_override.hex`,
+    /// copied byte for byte: account `[0xDD; 20]` gets a taker fee of 3 and a
+    /// maker fee of 0 basis points, its first override (`seq` 1), proposed by
+    /// `[0xA1; 20]` under registry version 1. Key `[0x42; 32]` signs it on the
+    /// unbound chain at seq 500.
+    const FROZEN: &str =
+        include_str!("../../spec/golden-vectors/propose_set_account_fee_override.hex");
+
+    fn change() -> AccountFeeOverrideChange {
+        AccountFeeOverrideChange {
+            account: [0xDD; 20],
+            taker_fee_bps: 3,
+            maker_fee_bps: 0,
+            seq: 1,
+        }
+    }
+
+    fn proposal() -> ProposeAdminAction {
+        ProposeAdminAction {
+            proposer: SignerAddress([0xA1; 20]),
+            registry_version: RegistryVersion(1),
+            action: AdminAction::SetAccountFeeOverride(change()),
+        }
+    }
+
+    #[test]
+    fn set_account_fee_override_tag_preserves_the_wire_allocation() {
+        assert_eq!(AdminActionType::SetAccountFeeOverride as u8, 36);
+        assert_eq!(proposal().action.action_tag(), 36);
+    }
+
+    #[test]
+    fn the_sdk_signs_the_frozen_proposal_byte_for_byte() {
+        let wire = sign_action(
+            &LocalSigner::from_bytes(&[0x42; 32]),
+            &crypto::UNBOUND_CHAIN_ID,
+            &Action::ProposeAdminAction(proposal()),
+            500,
+        )
+        .expect("the proposal signs");
+        assert_eq!(hex::encode(wire), FROZEN.trim());
+    }
+
+    #[test]
+    fn the_frozen_proposal_decodes_to_its_inputs() {
+        let bytes = hex::decode(FROZEN.trim()).expect("the vector is hex");
+        let decoded = codec::decode_tx(&bytes).expect("the frozen proposal decodes");
+        assert_eq!(decoded.seq, 500);
+        let Action::ProposeAdminAction(propose) = decoded.action else {
+            panic!("expected a ProposeAdminAction, got {:?}", decoded.action);
+        };
+        assert_eq!(propose.proposer, SignerAddress([0xA1; 20]));
+        assert_eq!(propose.registry_version, RegistryVersion(1));
+        let AdminAction::SetAccountFeeOverride(decoded_change) = propose.action else {
+            panic!("expected SetAccountFeeOverride, got {:?}", propose.action);
+        };
+        assert_eq!(decoded_change, change());
     }
 }

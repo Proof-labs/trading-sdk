@@ -209,6 +209,11 @@ class TestErrors:
         assert pts.EngineError(52, "").name == "AdminGovernanceInactive"
         assert pts.EngineError(53, "").name == "NotAdminSigner"
 
+    def test_market_settings_changed_code_155(self):
+        # A quorum UpdateMarketFees whose market's settings sequence moved.
+        assert pts.get_error_name(155) == "MarketSettingsChanged"
+        assert pts.EngineError(155, "").name == "MarketSettingsChanged"
+
     def test_proposal_lifecycle_codes_54_71(self):
         # Endpoints of the mirrored proposal-lifecycle family; the full range is
         # pinned by the errors.ndjson conformance manifest.
@@ -217,14 +222,45 @@ class TestErrors:
         assert pts.EngineError(67, "").name == "EmergencyRateLimited"
 
     def test_off_curve_withdrawal_destination_code_135(self):
-        # proof-wire 13.0.0: a withdrawal to an off-curve Solana destination.
+        # A withdrawal to an off-curve Solana destination.
         assert pts.get_error_name(135) == "OffCurveWithdrawalDestination"
         assert pts.EngineError(135, "").name == "OffCurveWithdrawalDestination"
-        assert pts.get_error_name(136) == "PositionEpochMismatch"
-        assert pts.get_error_name(143) == "UserImAboveNotional"
-        assert pts.get_error_name(144) == "BridgePaused"
-        assert pts.get_error_name(154) == "PayoutRecordedForAnotherWithdrawal"
-        assert pts.get_error_name(155) is None
+
+    def test_reduce_only_refused_and_codes_136_142(self):
+        # proof-wire after 12.1.0: code 35 covers both reduce-only refusals, and
+        # 136-142 name the trigger, position and capacity refusals.
+        assert pts.get_error_name(35) == "ReduceOnlyRefused"
+        for code, name in [
+            (136, "PositionEpochMismatch"),
+            (137, "TriggerBracketNotFound"),
+            (138, "TriggerAlreadyCrossed"),
+            (139, "PositionNotFound"),
+            (140, "AccountPositionCapReached"),
+            (141, "SubAccountCapReached"),
+            (142, "WorkCapReached"),
+        ]:
+            assert pts.get_error_name(code) == name
+            assert pts.EngineError(code, "").name == name
+
+    def test_bridge_vote_codes_143_157(self):
+        # The bridge refusals; 91, 128, 129 and 152 are unassigned.
+        for code, name in [
+            (143, "UserImAboveNotional"),
+            (144, "BridgePaused"),
+            (145, "WithdrawalPayoutCleared"),
+            (146, "BridgeVoteInvalid"),
+            (147, "BridgeUnauthorizedOperator"),
+            (148, "BridgePayoutReportInvalid"),
+            (149, "WithdrawalQuarantined"),
+            (150, "WithdrawalPayoutSlotOccupied"),
+            (151, "DepositReceiptLimitExceeded"),
+            (153, "OwnerPendingWithdrawalsFull"),
+            (154, "PayoutRecordedForAnotherWithdrawal"),
+        ]:
+            assert pts.get_error_name(code) == name
+            assert pts.EngineError(code, "").name == name
+        for code in (91, 128, 129, 152):
+            assert pts.get_error_name(code) is None
 
     def test_transitional_code_50_uses_delivertx_log(self):
         oi = "open interest limit exceeded on market 7: would be 4, cap 3"

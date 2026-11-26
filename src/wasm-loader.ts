@@ -38,6 +38,7 @@ export interface WasmCore {
     readonly BridgeRegistry: number;
     readonly PendingWithdrawals: number;
     readonly PendingDeposits: number;
+    readonly BridgePayoutConfig: number;
     readonly AuthorizedAgents: number;
     readonly InsuranceFundDirectory: number;
     readonly InsuranceFundState: number;
@@ -64,19 +65,9 @@ export interface WasmCore {
     seq: bigint,
     payload: Uint8Array,
   ): Uint8Array;
-  vote_withdrawal_paid_message(
-    withdrawalId: bigint, vault: Uint8Array, squadsTransactionIndex: number,
-    deploymentId: Uint8Array, chainId: Uint8Array, registryEpoch: bigint,
-  ): Uint8Array;
-  vote_withdrawal_payout_dead_message(
-    withdrawalId: bigint, vault: Uint8Array, squadsTransactionIndex: number,
-    deploymentId: Uint8Array, chainId: Uint8Array, registryEpoch: bigint,
-  ): Uint8Array;
-  vote_deposit_message(
-    owner: Uint8Array, amountMicroUsdc: bigint, solanaTxSig: Uint8Array,
-    topIndex: number, innerIndex: number, deploymentId: Uint8Array,
-    chainId: Uint8Array, registryEpoch: bigint,
-  ): Uint8Array;
+  /** The canonical bytes a bridge operator signs for one message,
+   *  `fields` tagged by `kind` (see `BridgeMessageFields`). */
+  bridge_message_preimage(fields: unknown): Uint8Array;
   encode_signed_tx(
     actionType: number,
     payload: Uint8Array,

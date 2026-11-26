@@ -7,6 +7,7 @@ import {
   type DecodedAdminAction,
   type DecodedAction,
   type RetiredAdminAction,
+  type RetiredAuthorityDomain,
 } from "./types.js";
 import { getWasm } from "./wasm-loader.js";
 import {
@@ -93,15 +94,27 @@ const RETIRED_ADMIN_KINDS: Record<RetiredAdminAction["kind"], true> = {
   SetTriggerMarketConfig: true,
 };
 
+const RETIRED_AUTHORITY_DOMAINS: Record<RetiredAuthorityDomain, true> = {
+  CexComposite: true,
+  ScheduledOps: true,
+};
+
 /** Narrow a decoded admin action (for example `AdminProposalContext.action`)
- * to the current submittable `AdminAction`, excluding retired kinds. It does
- * not validate engine admission or the caller's authority. */
+ * to the current submittable `AdminAction`, excluding retired kinds and an
+ * `UpdateAuthoritySet` naming a retired list. It does not validate engine
+ * admission or the caller's authority. */
 export function isSubmittableAdminAction(
   action: DecodedAdminAction,
 ): action is AdminAction {
-  return !Object.prototype.hasOwnProperty.call(
-    RETIRED_ADMIN_KINDS,
-    action.kind,
+  if (Object.prototype.hasOwnProperty.call(RETIRED_ADMIN_KINDS, action.kind)) {
+    return false;
+  }
+  return !(
+    action.kind === "UpdateAuthoritySet" &&
+    Object.prototype.hasOwnProperty.call(
+      RETIRED_AUTHORITY_DOMAINS,
+      action.value.domain,
+    )
   );
 }
 
@@ -342,8 +355,11 @@ export function decodeTx(bytes: Uint8Array): {
 // Signing-preimage decode (signer-side review)
 // ---------------------------------------------------------------------------
 
+// The list name wins over its single aliases on the same byte.
 const ACTION_TYPE_NAMES: ReadonlyMap<number, string> = new Map(
-  Object.entries(ActionType).map(([name, byte]) => [byte, name]),
+  Object.entries(ActionType)
+    .reverse()
+    .map(([name, byte]) => [byte, name]),
 );
 
 /**
@@ -416,7 +432,7 @@ export function decodeSigningMessage(msg: Uint8Array): DecodedSigningMessage {
   offset += 8;
   const payloadBytes = msg.slice(offset);
 
-  const actionName = ACTION_TYPE_NAMES.get(actionType) ?? null;
+  let actionName = ACTION_TYPE_NAMES.get(actionType) ?? null;
   let action: DecodedAction | null = null;
   let decodeError: string | null = null;
   if (actionName === null) {
@@ -444,6 +460,8 @@ export function decodeSigningMessage(msg: Uint8Array): DecodedSigningMessage {
         );
       }
       action = decodedAction;
+      // A list byte names its single or list form by entry count.
+      actionName = decodedAction.type;
     } catch (e) {
       decodeError = e instanceof Error ? e.message : String(e);
     }

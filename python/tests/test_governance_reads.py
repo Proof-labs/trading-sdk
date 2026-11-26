@@ -31,9 +31,16 @@ def test_engine_genesis_vector_matches_typescript_liquidation_reads():
 def test_authority_sets_preserve_addresses_and_order_without_deduplication():
     raw = [[bytes([n]) * 20, [n] * 20] for n in range(6)]
     result = sdk.decode_authorities_snapshot(envelope(raw))
-    assert result == sdk.AuthoritiesSnapshot(*[[bytes([n]) * 20] * 2 for n in range(6)])
+    # Engine slots 2 (composite feeder) and 5 (scheduled operations) are retired and dropped.
+    assert result == sdk.AuthoritiesSnapshot(*[[bytes([n]) * 20] * 2 for n in (0, 1, 3, 4)])
+    assert set(asdict(result)) == {"relayer", "oracle", "custody", "market_params"}
     assert all(isinstance(a, bytes) for values in asdict(result).values() for a in values)
-    assert sdk.decode_authorities_snapshot(envelope([[]] * 6)) == sdk.AuthoritiesSnapshot(*[[]] * 6)
+    assert sdk.decode_authorities_snapshot(envelope([[]] * 6)) == sdk.AuthoritiesSnapshot(*[[]] * 4)
+
+
+def test_retired_authority_slot_is_still_checked():
+    with pytest.raises(sdk.CodecError):
+        sdk.decode_authorities_snapshot(envelope([[], [], [bytes(19)], [], [], []]))
 
 
 @pytest.mark.parametrize("address", [bytes(19), bytes(21), [0]*19, [0]*21,

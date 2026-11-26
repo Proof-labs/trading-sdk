@@ -25,8 +25,15 @@ import {
 import { bytesToHex, pubkeyToOwner, ownerToHex } from "./crypto.js";
 import { ExecErrorCode, execErrorName } from "./errors.js";
 import { BinaryPriceError, binaryPositionView, yesOrder } from "./binary.js";
-import { signVoteDeposit, signVoteWithdrawalPaid, signVoteWithdrawalPayoutDead } from "./bridge.js";
+import {
+  signRecordWithdrawalPayout,
+  signVoteDeposit,
+  signVotePauseBridge,
+  signVoteWithdrawalPaid,
+  signVoteWithdrawalPayoutDead,
+} from "./bridge.js";
 import { decodeLiquidationEvent } from "./liquidation-events.js";
+import { decodeOrdersEvent, type OrdersEvent } from "./order-lists.js";
 import { decodeMarginOffsetEvent } from "./margin-offsets.js";
 import { decodeVoidSettlementEvent } from "./void-events.js";
 import { decodeResolutionBalanceSnapshotEvent } from "./resolution-balance-events.js";
@@ -38,6 +45,8 @@ import {
   TimeInForce,
   type Action,
   type ActionTypeValue,
+  type OrderEntry,
+  type PlaceOrder,
   type TriggerLimb,
 } from "./types.js";
 
@@ -85,7 +94,77 @@ const PRICE_CMP: Record<string, PriceComparison> = {
   LessThanOrEqual: "LessThanOrEqual",
 };
 
-/** Vector limb dict (snake_case) → the SDK's camelCase `TriggerLimb`. */
+/** `UnfilledReason`'s attribute value → its serde variant name. */
+const UNFILLED: Record<string, string> = {
+  reduce_only_cap: "ReduceOnlyCap",
+  self_trade: "SelfTrade",
+  no_liquidity: "NoLiquidity",
+  margin_cap: "MarginCap",
+};
+
+/** A decoded list event in the engine's serde shape, so the events vectors
+ *  compare it field by field. */
+function ordersEventAsEngine(event: OrdersEvent): unknown {
+  if (event.type === "OrdersPlaced") {
+    return {
+      owner: event.owner,
+      orders: event.orders.map((o) => ({
+        market: o.market,
+        client_order_id: o.clientOrderId,
+        outcome:
+          o.outcome === "resting"
+            ? {
+                Resting: {
+                  order_id: o.orderId,
+                  side: Side[o.side],
+                  price: o.price,
+                  quantity: o.quantity,
+                  time_in_force: TimeInForce[o.timeInForce],
+                  post_only: o.postOnly,
+                  reduce_only: o.reduceOnly,
+                },
+              }
+            : o.outcome === "executed"
+              ? {
+                  Executed: {
+                    order_id: o.orderId,
+                    requested_quantity: o.requestedQuantity,
+                    filled_quantity: o.filledQuantity,
+                    unfilled: o.unfilled === null ? null : UNFILLED[o.unfilled],
+                  },
+                }
+              : { Rejected: { code: o.code } },
+      })),
+    };
+  }
+  return {
+    owner: event.owner,
+    reason: event.reason,
+    orders: event.orders.map((o) =>
+      o.outcome === "cancelled"
+        ? {
+            Cancelled: {
+              order_id: o.orderId,
+              market: o.market,
+              client_order_id: o.clientOrderId,
+              original_quantity: o.originalQuantity,
+              remaining_quantity: o.remainingQuantity,
+              filled_quantity: o.filledQuantity,
+            },
+          }
+        : {
+            Refused: {
+              code: o.code,
+              target:
+                "orderId" in o.target
+                  ? { OrderId: o.target.orderId }
+                  : { ClientOrderId: o.target.clientOrderId },
+            },
+          },
+    ),
+  };
+}
+
 function limb(v: unknown): TriggerLimb | null {
   if (v === null || v === undefined) return null;
   const l = v as Record<string, unknown>;
@@ -112,6 +191,50 @@ function bigOrNull(v: unknown): bigint | null {
   return BigInt(v as number | string);
 }
 
+/** A single limit order's snake_case field dict (the binary vectors). */
+function singleOrder(input: Record<string, unknown>): PlaceOrder {
+  return {
+    market: input.market as number,
+    owner: bytes(input.owner),
+    side: SIDE[input.side as string],
+    price: big(input.price),
+    quantity: big(input.quantity),
+    clientOrderId: bigOrNull(input.client_order_id),
+    postOnly: input.post_only as boolean,
+    reduceOnly: input.reduce_only as boolean,
+    timeInForce: TIF[input.time_in_force as string],
+    stopLoss: limb(input.stop_loss),
+    takeProfit: limb(input.take_profit),
+  };
+}
+
+/** A `PlaceOrders` entry in the engine's serde form → an {@link OrderEntry}. */
+function orderEntry(entry: Record<string, unknown>): OrderEntry {
+  const kind = entry.kind as Record<string, Record<string, unknown>>;
+  const shared = {
+    market: entry.market as number,
+    side: SIDE[entry.side as string],
+    quantity: big(entry.quantity),
+    reduceOnly: entry.reduce_only as boolean,
+    clientOrderId: bigOrNull(entry.client_order_id),
+    stopLoss: limb(entry.stop_loss),
+    takeProfit: limb(entry.take_profit),
+  };
+  if (kind.Market) {
+    return {
+      ...shared,
+      kind: "market",
+      worstPrice: bigOrNull(kind.Market.worst_price),
+    };
+  }
+  return {
+    ...shared,
+    price: big(kind.Limit.price),
+    timeInForce: TIF[kind.Limit.time_in_force as string],
+    postOnly: kind.Limit.post_only as boolean,
+  };
+}
+
 /** Adapter: core snake_case `input` dict → this SDK's `Action` union. */
 function toAction(
   actionType: ActionTypeValue,
@@ -132,34 +255,32 @@ function toAction(
           signer: bytes(input.signer),
         },
       };
-    case ActionType.PlaceOrder:
+    case ActionType.PlaceOrders:
+      // A binary vector carries one order's own fields; a codec vector the
+      // list.
+      if (!Array.isArray(input.orders))
+        return { type: "PlaceOrder", data: singleOrder(input) };
       return {
-        type: "PlaceOrder",
+        type: "PlaceOrders",
         data: {
-          market: input.market as number,
           owner: bytes(input.owner),
-          side: SIDE[input.side as string],
-          price: big(input.price),
-          quantity: big(input.quantity),
-          clientOrderId: bigOrNull(input.client_order_id),
-          postOnly: input.post_only as boolean,
-          reduceOnly: input.reduce_only as boolean,
-          timeInForce: TIF[input.time_in_force as string],
-          stopLoss: limb(input.stop_loss),
-          takeProfit: limb(input.take_profit),
+          orders: (input.orders as Record<string, unknown>[]).map(orderEntry),
         },
       };
-    case ActionType.CancelOrder:
+    case ActionType.CancelOrders:
       return {
-        type: "CancelOrder",
-        data: { orderId: big(input.order_id), owner: bytes(input.owner) },
-      };
-    case ActionType.CancelClientOrder:
-      return {
-        type: "CancelClientOrder",
+        type: "CancelOrders",
         data: {
           owner: bytes(input.owner),
-          clientOrderId: big(input.client_order_id),
+          orderIds: (input.order_ids as unknown[]).map(big),
+        },
+      };
+    case ActionType.CancelClientOrders:
+      return {
+        type: "CancelClientOrders",
+        data: {
+          owner: bytes(input.owner),
+          clientOrderIds: (input.client_order_ids as unknown[]).map(big),
         },
       };
     case ActionType.CancelAllOrders:
@@ -197,19 +318,6 @@ function toAction(
           orderId: big(input.order_id),
           newPrice: bigOrNull(input.new_price),
           newQuantity: bigOrNull(input.new_quantity),
-        },
-      };
-    case ActionType.MarketOrder:
-      return {
-        type: "MarketOrder",
-        data: {
-          market: input.market as number,
-          owner: bytes(input.owner),
-          side: SIDE[input.side as string],
-          quantity: big(input.quantity),
-          clientOrderId: bigOrNull(input.client_order_id),
-          stopLoss: limb(input.stop_loss),
-          takeProfit: limb(input.take_profit),
         },
       };
     case ActionType.Deposit:
@@ -335,23 +443,28 @@ function toAction(
           amount: big(input.amount),
         },
       };
-    case ActionType.ClaimWithdrawalPayout:
-      return {
-        type: "ClaimWithdrawalPayout",
-        data: {
-          withdrawalId: big(input.withdrawal_id),
-          holder: bytes(input.holder),
-        },
-      };
     case ActionType.RecordWithdrawalPayout:
       return {
         type: "RecordWithdrawalPayout",
         data: {
           withdrawalId: big(input.withdrawal_id),
-          holder: bytes(input.holder),
           vault: bytes(input.vault),
           squadsTransactionIndex: input.squads_transaction_index as number,
+          deploymentId: bytes(input.deployment_id),
+          chainId: bytes(input.chain_id),
           registryEpoch: big(input.registry_epoch),
+          signature: bytes(input.signature),
+        },
+      };
+    case ActionType.VotePauseBridge:
+      return {
+        type: "VotePauseBridge",
+        data: {
+          signedAtMs: big(input.signed_at_ms),
+          deploymentId: bytes(input.deployment_id),
+          chainId: bytes(input.chain_id),
+          registryEpoch: big(input.registry_epoch),
+          signature: bytes(input.signature),
         },
       };
     case ActionType.ResolveEvent:
@@ -363,45 +476,11 @@ function toAction(
           signer: bytes(input.signer),
         },
       };
-    case ActionType.UpdateMarketFees: {
-      const optNum = (v: unknown): number | null =>
-        v === null || v === undefined ? null : Number(big(v));
-      const optBig = (v: unknown): bigint | null =>
-        v === null || v === undefined ? null : big(v);
-      const optBool = (v: unknown): boolean | null =>
-        v === null || v === undefined ? null : Boolean(v);
-      const optBytes = (v: unknown): Uint8Array | null =>
-        v === null || v === undefined ? null : bytes(v);
-      const msMode = optNum(input.mark_source_mode);
+    case ActionType.UpdateMarketFees:
       return {
         type: "UpdateMarketFees",
-        data: {
-          market: input.market as number,
-          signer: bytes(input.signer),
-          takerFeeBps: optNum(input.taker_fee_bps),
-          makerFeeBps: optNum(input.maker_fee_bps),
-          maxFundingRateBps: optNum(input.max_funding_rate_bps),
-          fundingIntervalMs: optBig(input.funding_interval_ms),
-          maxPositionSize: optBig(input.max_position_size),
-          defaultTtlMs: optBig(input.default_ttl_ms),
-          netDeltaMargin: optBool(input.net_delta_margin),
-          tickSize: optBig(input.tick_size),
-          lotSize: optBig(input.lot_size),
-          primaryOracleSigner: optBytes(input.primary_oracle_signer),
-          oracleStalenessMs: optBig(input.oracle_staleness_ms),
-          markSourceMode: msMode === 0 || msMode === 1 ? msMode : null,
-          maxMarkSpreadBps: optNum(input.max_mark_spread_bps),
-          cexCompositeStalenessMs: optBig(input.cex_composite_staleness_ms),
-          feeTiers: input.fee_tiers == null ? null : (input.fee_tiers as any),
-          imBps: optNum(input.im_bps),
-          mmBps: optNum(input.mm_bps),
-          maxOpenInterest: optBig(input.max_open_interest),
-          impactNotional: optBig(input.impact_notional),
-          fundingDeadBandBps: optNum(input.funding_dead_band_bps),
-          fundingInterestRate: optNum(input.funding_interest_rate),
-        },
+        data: { ...toMarketSettingsChange(input), signer: bytes(input.signer) },
       };
-    }
     case ActionType.SetUserMarketLeverage:
       return {
         type: "SetUserMarketLeverage",
@@ -410,11 +489,6 @@ function toAction(
           market: input.market as number,
           userImBps: input.user_im_bps as number,
         },
-      };
-    case ActionType.ClosePosition:
-      return {
-        type: "ClosePosition",
-        data: { market: input.market as number, owner: bytes(input.owner) },
       };
     case ActionType.AtomicBasketOrder:
       return {
@@ -670,6 +744,53 @@ function toInsuranceAllocations(
   }));
 }
 
+const MARK_SOURCE_MODES: Record<string, 0 | 1> = { OracleOnly: 0, Median: 1 };
+
+/** A quorum `UpdateMarketFees` change from the vector's serde map form. */
+function toMarketSettingsChange(
+  raw: unknown,
+): import("./types.js").MarketSettingsChange {
+  const c = raw as Record<string, unknown>;
+  const num = (v: unknown): number | null => (v == null ? null : (v as number));
+  const mode = c.mark_source_mode;
+  if (mode != null && MARK_SOURCE_MODES[mode as string] === undefined) {
+    throw new Error(`toMarketSettingsChange: unknown mark source ${mode}`);
+  }
+  return {
+    market: c.market as number,
+    takerFeeBps: num(c.taker_fee_bps),
+    makerFeeBps: num(c.maker_fee_bps),
+    maxFundingRateBps: num(c.max_funding_rate_bps),
+    fundingIntervalMs: bigOrNull(c.funding_interval_ms),
+    maxPositionSize: bigOrNull(c.max_position_size),
+    defaultTtlMs: bigOrNull(c.default_ttl_ms),
+    netDeltaMargin:
+      c.net_delta_margin == null ? null : (c.net_delta_margin as boolean),
+    tickSize: bigOrNull(c.tick_size),
+    lotSize: bigOrNull(c.lot_size),
+    primaryOracleSigner:
+      c.primary_oracle_signer == null ? null : bytes(c.primary_oracle_signer),
+    oracleStalenessMs: bigOrNull(c.oracle_staleness_ms),
+    markSourceMode: mode == null ? null : MARK_SOURCE_MODES[mode as string],
+    maxMarkSpreadBps: num(c.max_mark_spread_bps),
+    cexCompositeStalenessMs: bigOrNull(c.cex_composite_staleness_ms),
+    feeTiers:
+      c.fee_tiers == null
+        ? null
+        : (c.fee_tiers as Record<string, unknown>[]).map((t) => ({
+            min30dVolumeMicroUsdc: big(t.min_30d_volume_micro_usdc),
+            makerFeeTenthBps: t.maker_fee_tenth_bps as number,
+            takerFeeTenthBps: t.taker_fee_tenth_bps as number,
+          })),
+    imBps: num(c.im_bps),
+    mmBps: num(c.mm_bps),
+    maxOpenInterest: bigOrNull(c.max_open_interest),
+    impactNotional: bigOrNull(c.impact_notional),
+    fundingDeadBandBps: num(c.funding_dead_band_bps),
+    fundingInterestRate: num(c.funding_interest_rate),
+  };
+}
+
 /** Reconstruct a TS `AdminAction` from the vector's serde map form. Throws
  *  on an unknown variant rather than falling through — a vector this suite
  *  cannot name must fail the run, not mis-parse as a registry update. */
@@ -677,6 +798,7 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
   // A unit variant (no fields) is serde's bare variant-name string, not a map.
   if (typeof input === "string") {
     if (input === "UnpauseBridge") return { kind: "UnpauseBridge" };
+    if (input === "PauseBridge") return { kind: "PauseBridge" };
     throw new Error(`toAdminAction: unknown unit variant ${input}`);
   }
   const v = input as Record<string, unknown>;
@@ -856,6 +978,27 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
       },
     };
   }
+  if (v.SetBridgePayoutConfig) {
+    const c = v.SetBridgePayoutConfig as Record<string, unknown>;
+    return {
+      kind: "SetBridgePayoutConfig",
+      value: {
+        payoutMultisig: bytes(c.payout_multisig),
+        opsWallet: bytes(c.ops_wallet),
+      },
+    };
+  }
+  if (v.SetDepositReceiptLimit) {
+    const d = v.SetDepositReceiptLimit as Record<string, unknown>;
+    return {
+      kind: "SetDepositReceiptLimit",
+      value: {
+        perReceiptMaxMicroUsdc: big(d.per_receipt_max_micro_usdc),
+        windowCapMicroUsdc: big(d.window_cap_micro_usdc),
+        windowSecs: d.window_secs as number,
+      },
+    };
+  }
   if (v.SetDepositLimit) {
     const d = v.SetDepositLimit as Record<string, unknown>;
     return {
@@ -874,6 +1017,28 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
       value: {
         market: s.market as number,
         status: s.status as import("./types.js").MarketStatus,
+      },
+    };
+  }
+  if (v.UpdateMarketFees) {
+    const q = v.UpdateMarketFees as Record<string, unknown>;
+    return {
+      kind: "UpdateMarketFees",
+      value: {
+        predecessor: big(q.predecessor),
+        change: toMarketSettingsChange(q.change),
+      },
+    };
+  }
+  if (v.SetAccountFeeOverride) {
+    const f = v.SetAccountFeeOverride as Record<string, unknown>;
+    return {
+      kind: "SetAccountFeeOverride",
+      value: {
+        account: bytes(f.account),
+        takerFeeBps: f.taker_fee_bps as number,
+        makerFeeBps: f.maker_fee_bps as number,
+        seq: big(f.seq),
       },
     };
   }
@@ -1049,23 +1214,26 @@ describe("conformance vectors (TypeScript)", () => {
         decodeLiquidationEvent(input) ??
         decodeVoidSettlementEvent(input) ??
         decodeResolutionBalanceSnapshotEvent(input) ??
-        decodeMarginOffsetEvent(input);
+        decodeMarginOffsetEvent(input) ??
+        decodeOrdersEvent(input);
       const [[variant, fields]] = Object.entries(
         c.event as Record<string, unknown>,
       );
       expect(decoded?.type, c.case).toBe(variant);
       const flat =
-        decoded?.type === "MarginOffsetPairConfigured"
-          ? {
-              sequence: decoded.sequence,
-              index: decoded.index,
-              conditional_market: decoded.pair.conditional,
-              perpetual_market: decoded.pair.perpetual,
-              settlement_reference_market: decoded.pair.settlementReference,
-              rate_bps: decoded.pair.rate,
-              resolution: decoded.pair.resolution,
-            }
-          : decoded;
+        decoded?.type === "OrdersPlaced" || decoded?.type === "OrdersCancelled"
+          ? ordersEventAsEngine(decoded)
+          : decoded?.type === "MarginOffsetPairConfigured"
+            ? {
+                sequence: decoded.sequence,
+                index: decoded.index,
+                conditional_market: decoded.pair.conditional,
+                perpetual_market: decoded.pair.perpetual,
+                settlement_reference_market: decoded.pair.settlementReference,
+                rate_bps: decoded.pair.rate,
+                resolution: decoded.pair.resolution,
+              }
+            : decoded;
       expect(normalise(flat), c.case).toEqual(normalise(fields));
     }
   });
@@ -1117,6 +1285,68 @@ describe("conformance vectors (TypeScript)", () => {
       expect(action.type, `vector ${c.case as string}`).toBe(
         caseNameActionOverrides[c.case as string] ??
           pascal((c.case as string).split("/")[0]),
+      );
+    }
+  });
+
+  it("codec: single-order actions encode as the list-of-one vectors", () => {
+    const hexOf = (name: string) =>
+      (
+        cases("codec.ndjson").find((c) => c.case === name)!.expect as {
+          payload_hex: string;
+        }
+      ).payload_hex;
+    const owner = new Uint8Array(20).fill(1);
+    const singles: [string, Action][] = [
+      [
+        "place_orders/limit_min",
+        {
+          type: "PlaceOrder",
+          data: {
+            market: 1,
+            owner,
+            side: Side.Buy,
+            price: 100n,
+            quantity: 10n,
+          },
+        },
+      ],
+      [
+        "place_orders/market_basic",
+        {
+          type: "MarketOrder",
+          data: { market: 3, owner, side: Side.Buy, quantity: 250n },
+        },
+      ],
+      [
+        "place_orders/close",
+        {
+          type: "MarketOrder",
+          data: {
+            market: 2,
+            owner,
+            side: Side.Sell,
+            quantity: 5n,
+            reduceOnly: true,
+          },
+        },
+      ],
+      [
+        "cancel_orders/one",
+        {
+          type: "CancelOrder",
+          data: { orderId: 42n, owner: new Uint8Array(20).fill(2) },
+        },
+      ],
+      [
+        "cancel_client_orders/one",
+        { type: "CancelClientOrder", data: { owner, clientOrderId: 99n } },
+      ],
+    ];
+    for (const [name, action] of singles) {
+      expect(bytesToHex(encodePayloadBytes(action)), name).toBe(hexOf(name));
+      expect(ActionType[action.type], name).toBe(
+        cases("codec.ndjson").find((c) => c.case === name)!.action_type,
       );
     }
   });
@@ -1193,8 +1423,10 @@ describe("conformance vectors (TypeScript)", () => {
     // -account scoped and unscoped, four set-oracle-guards shapes, and
     // oracle policy, two schedule-upgrade shapes, cancel-upgrade, and
     // insurance fund and withdraw, void-event, settle-event,
-    // set-deposit-limit, set-market-status), approve, reject, and the PauseMarket emergency arm.
-    expect(govCases.length).toBe(34);
+    // set-deposit-limit, set-market-status, update-market-fees,
+    // set-account-fee-override), approve, reject, and the PauseMarket
+    // emergency arm.
+    expect(govCases.length).toBe(39);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(
@@ -1250,37 +1482,110 @@ describe("conformance vectors (TypeScript)", () => {
     }
   });
 
-  it("operator vote preimages match the engine-generated shared vectors", () => {
+  it("bridge message preimages match the engine-generated shared vectors", async () => {
     const rows = readFileSync(join(VECTORS, "vote-preimages.ndjson"), "utf8")
-      .trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
-    const actual: Uint8Array[] = [];
-    const signer = (message: Uint8Array) => { actual.push(message); return new Uint8Array(64); };
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(rows.length).toBeGreaterThan(0);
+    const hex = (field: unknown) =>
+      new Uint8Array(Buffer.from(field as string, "hex"));
+    // Ids, epochs and amounts are decimal strings, so u64::MAX survives.
+    const decimal = (field: unknown) => BigInt(field as string);
     for (const row of rows) {
-      if (row.case === "withdrawal_paid") {
-        signVoteWithdrawalPaid(signer, {
-          withdrawalId: BigInt(row.withdrawal_id as number), vault: new Uint8Array(Buffer.from(row.vault as string, "hex")),
-          squadsTransactionIndex: row.squads_transaction_index as number,
-          deploymentId: new Uint8Array(Buffer.from(row.deployment_id as string, "hex")), chainId: new Uint8Array(Buffer.from(row.chain_id as string, "hex")),
-          registryEpoch: BigInt(row.registry_epoch as number),
-        });
-      } else if (row.case === "withdrawal_payout_dead") {
-        signVoteWithdrawalPayoutDead(signer, {
-          withdrawalId: BigInt(row.withdrawal_id as number), vault: new Uint8Array(Buffer.from(row.vault as string, "hex")),
-          squadsTransactionIndex: row.squads_transaction_index as number,
-          deploymentId: new Uint8Array(Buffer.from(row.deployment_id as string, "hex")), chainId: new Uint8Array(Buffer.from(row.chain_id as string, "hex")),
-          registryEpoch: BigInt(row.registry_epoch as number),
-        });
-      } else if (row.case === "deposit") {
-        signVoteDeposit(signer, {
-          owner: new Uint8Array(Buffer.from(row.owner as string, "hex")), amountMicroUsdc: BigInt(row.amount_micro_usdc as number),
-          solanaTxSig: new Uint8Array(Buffer.from(row.solana_tx_sig as string, "hex")),
-          locator: { topIndex: row.top_index as number, innerIndex: row.inner_index as number },
-          deploymentId: new Uint8Array(Buffer.from(row.deployment_id as string, "hex")), chainId: new Uint8Array(Buffer.from(row.chain_id as string, "hex")),
-          registryEpoch: BigInt(row.registry_epoch as number),
-        });
-      } else throw new Error(`unknown vote vector ${String(row.case)}`);
+      const binding = {
+        deploymentId: hex(row.deployment_id),
+        chainId: hex(row.chain_id),
+        registryEpoch: decimal(row.registry_epoch),
+      };
+      const payout = () => ({
+        withdrawalId: decimal(row.withdrawal_id),
+        vault: hex(row.vault),
+        squadsTransactionIndex: row.squads_transaction_index as number,
+      });
+      const signed: Uint8Array[] = [];
+      // The public helpers sign exactly the preimage the vector pins, and an
+      // asynchronous signer (an ExternalSigner's signRaw) works unchanged.
+      const signer = async (message: Uint8Array) => {
+        signed.push(message);
+        return new Uint8Array(64);
+      };
+      switch (row.kind) {
+        case "withdrawal_paid":
+          await signVoteWithdrawalPaid(signer, payout(), binding);
+          break;
+        case "withdrawal_payout_dead":
+          await signVoteWithdrawalPayoutDead(signer, payout(), binding);
+          break;
+        case "payout_record":
+          await signRecordWithdrawalPayout(signer, payout(), binding);
+          break;
+        case "deposit": {
+          const locator = row.locator as {
+            top_index: number;
+            inner_index: number | null;
+          } | null;
+          await signVoteDeposit(
+            signer,
+            {
+              owner: hex(row.owner),
+              amountMicroUsdc: decimal(row.amount_micro_usdc),
+              solanaTxSig: hex(row.solana_tx_sig),
+              locator:
+                locator == null
+                  ? null
+                  : {
+                      topIndex: locator.top_index,
+                      innerIndex: locator.inner_index,
+                    },
+            },
+            binding,
+          );
+          break;
+        }
+        case "pause_bridge":
+          await signVotePauseBridge(signer, decimal(row.signed_at_ms), binding);
+          break;
+        default:
+          throw new Error(`unknown bridge message kind ${String(row.kind)}`);
+      }
+      expect(bytesToHex(signed[0]), String(row.case)).toBe(row.preimage_hex);
     }
-    expect(actual.map(bytesToHex)).toEqual(rows.map((row) => row.preimage_hex as string));
+  });
+
+  it("a bridge message signer must return 64 bytes", async () => {
+    const binding = {
+      deploymentId: new Uint8Array(32),
+      chainId: new Uint8Array(32),
+      registryEpoch: 1n,
+    };
+    await expect(
+      signVotePauseBridge(async () => new Uint8Array(63), 1n, binding),
+    ).rejects.toThrow("64 signature bytes");
+  });
+
+  it("a bridge message refuses a wrong-width field before signing", async () => {
+    let called = false;
+    const signer = (message: Uint8Array) => {
+      called = true;
+      return message;
+    };
+    await expect(
+      signVoteWithdrawalPaid(
+        signer,
+        {
+          withdrawalId: 1n,
+          vault: new Uint8Array(33),
+          squadsTransactionIndex: 0,
+        },
+        {
+          deploymentId: new Uint8Array(32),
+          chainId: new Uint8Array(32),
+          registryEpoch: 1n,
+        },
+      ),
+    ).rejects.toThrow("vault");
+    expect(called).toBe(false);
   });
 });
 

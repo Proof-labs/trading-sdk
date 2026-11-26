@@ -17,7 +17,3 @@ class ExternalSigner:
 
     public_key: bytes
     sign_raw: Callable[[bytes], bytes] = field(repr=False)
-
-    def sign(self, message: bytes) -> bytes:
-        """Sign an exact preimage, including an operator bridge vote."""
-        return self.sign_raw(message)

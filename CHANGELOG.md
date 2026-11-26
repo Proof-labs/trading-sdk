@@ -7,38 +7,341 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking, all SDKs (needs proof-wire 14):** `RecordWithdrawalPayout` is
+  signed by the recording operator's registry key instead of an envelope
+  signer named as the lease holder: `holder` is gone, and the record carries
+  `deploymentId`, `chainId` and `signature`. Build it with
+  `signRecordWithdrawalPayout` / `RecordWithdrawalPayout.sign`.
+- **Breaking, all SDKs:** `SetOperatorReceiptRegistry` carries only
+  `operatorKeys`, one per operator; TypeScript refuses a key named twice.
+- **Rust and the conformance runners:** proof-wire is pinned to the wire 14
+  pre-merge mirror of exchange #1450 by full commit hash.
+
+- **Breaking, TypeScript and Python:** the authorities read no longer exposes the retired
+  composite-feeder and scheduled-operations lists. `AuthoritiesSnapshot` carries
+  `relayer`, `oracle`, `custody` and `marketParams` (`market_params` in Python);
+  the engine's six-slot response is still checked in full and the two retired
+  slots are dropped. `AuthorityDomain` no longer offers `CexComposite` or
+  `ScheduledOps`; an `UpdateAuthoritySet` naming either decodes as
+  `RetiredAuthoritySetUpdate` and `isSubmittableAdminAction` rejects it; Python's
+  `is_submittable_admin_action` and the proposal builders refuse it too. The
+  wire format is unchanged, and the Rust crates keep proof-wire's six-field
+  `AuthoritiesSnapshot` until proof-wire changes.
+
 ### Added
 
-- **Bridge vote SDK (wire 13):** paid-withdrawal votes now bind the recorded
-  Squads vault and transaction index; `VoteWithdrawalPayoutDead` is supported
-  alongside deposit votes. Rust, TypeScript/WASM and Python expose canonical
-  preimage signing, with shared engine-generated vectors.
-- **Bridge reads (wire 13):** status decoding is the strict
-  `Active | Paused | WithdrawalsFull` enum, and paginated withdrawal/deposit
-  rows match the current exchange query types rather than the earlier grouped
-  payout/observation shape.
-- **Error mappings:** preserve `OffCurveWithdrawalDestination` at 135, retain
-  current `dev` assignments 136–143, and place bridge/withdrawal errors at
-  144–154 to match exchange and wire.
+- **All SDKs, bridge operators (needs proof-wire 14):** sign the five
+  bridge-operator messages with the operator's registry key. The core builds
+  every preimage from the wire contract, so Rust, TypeScript and Python sign
+  the engine's bytes; the shared `conformance/vote-preimages.ndjson` pins them,
+  including an absent locator, a top-level-only locator and the largest ids.
+  - `VoteWithdrawalPaid` (0x30), `RecordWithdrawalPayout` (0x31),
+    `VoteDeposit` (0x32), `VotePauseBridge` (0x33) and
+    `VoteWithdrawalPayoutDead` (0x34).
+  - TypeScript: `signVoteWithdrawalPaid`, `signRecordWithdrawalPayout`,
+    `signVoteWithdrawalPayoutDead`, `signVoteDeposit`, `signVotePauseBridge`
+    and `bridgeMessagePreimage`. The signer may be asynchronous, so an
+    `ExternalSigner.signRaw` works unchanged, and must return 64 bytes.
+  - Rust: `bridge_votes::sign_*` and `BridgeMessage::preimage`, typed with
+    proof-wire's bridge newtypes.
+  - Python: `VoteWithdrawalPaid.sign`, `RecordWithdrawalPayout.sign`,
+    `VoteWithdrawalPayoutDead.sign`, `VoteDeposit.sign`,
+    `VotePauseBridge.sign` and `bridge_message_preimage`. A key handle signs
+    in Rust with `SigningHandle.sign_bridge_message`; an `ExternalSigner`
+    signs the core-built preimage and must return 64 bytes. A field of the
+    wrong width raises before anything is signed.
+- **All SDKs:** the bridge reads `/v2/bridge/status`, `/v2/bridge/payout-config`,
+  `/v2/bridge/registry[/{epoch}]`, `/v2/bridge/pending-withdrawals` and
+  `/v2/bridge/pending-deposits` (TypeScript `queryBridge*` /
+  `queryPending*`, Python `bridge_*` / `pending_*`). A pending-deposits
+  `nextCursor` is already in the route's cursor form; pass it back
+  verbatim. These routes are served by the node; until api-gateway routes
+  them, read them direct-node (`useGateway: false`).
+- **All SDKs:** the admin quorum's bridge controls `PauseBridge` (inner tag
+  0x20), `SetBridgePayoutConfig` (0x21: the Squads vault every payout record
+  must name, and its rent wallet) and `SetDepositReceiptLimit` (0x22: the caps
+  on vote-credited deposits). TypeScript refuses a payout config whose rent
+  wallet is the vault, and a proposal of an admin action this SDK does not
+  know now fails to decode instead of reaching the caller.
+- **Errors:** 143 to 151, 153 and 154 are named (`UserImAboveNotional`,
+  `BridgePaused`, `WithdrawalPayoutCleared`, `BridgeVoteInvalid`,
+  `BridgeUnauthorizedOperator`, `BridgePayoutReportInvalid`,
+  `WithdrawalQuarantined`, `WithdrawalPayoutSlotOccupied`,
+  `DepositReceiptLimitExceeded`, `OwnerPendingWithdrawalsFull`,
+  `PayoutRecordedForAnotherWithdrawal`).
+- **All SDKs:** the admin quorum's `SetAccountFeeOverride` (inner tag 36),
+  which sets one account's taker and maker fee, the fee tier a market maker
+  trades at. A `ProposeAdminAction` carries `AccountFeeOverrideChange`
+  (`account`, `takerFeeBps`, `makerFeeBps`, `seq`): the engine's outer
+  `SetAccountFeeOverride` without its `signer`, because the quorum is the
+  authorization. The engine refuses a fee above 10,000 basis points that is
+  not the revert sentinel `0xFFFF_FFFF` (code 42), and a `seq` at or below
+  the account's stored one (code 43), at proposal and again at execution.
+  Needs the proof-wire release that carries tag 36.
+  - TypeScript (MINOR): `AdminAction` gains the `SetAccountFeeOverride`
+    variant, with the `AccountFeeOverrideChange` type, and a tag-36 proposal
+    reads back under that kind in `decodeAdminAction`,
+    `decodeProposalDisplayInfo` and `decodeProposalPage`. The fee-range check
+    (code 42) runs before encoding and again when a stored action is decoded;
+    only the engine checks `seq`, which needs the stored sequence. An
+    exhaustive `switch` on `action.kind` (one that assigns the remainder to
+    `never`) or a `Record<AdminAction["kind"], …>` table needs a new entry.
+  - Rust: `governance` re-exports `AccountFeeOverrideChange`. proof-wire's
+    `AdminAction` is not `#[non_exhaustive]`, so an exhaustive `match` on it
+    needs a new arm.
+  - Python: `ProposeAdminAction(action={"SetAccountFeeOverride": {...}})`.
+  - Tested against the engine's frozen `propose_set_account_fee_override.hex`
+    in all three languages.
+- **Per-proposal thresholds:** from the engine release that carries
+  exchange #1593, each proposal takes its threshold from its action's
+  severity when it is made (stop 1, low impact 2, high impact 3, with low
+  and high never below the registry's count, and never more than the
+  registry has members), so proposals in one registry
+  can need different counts. Use `ProposalDisplayInfo.threshold`, the
+  proposal's own count. The counts are engine constants: there is no
+  action or read for a table. Error 157 (`AuthorityDomainRetired`) is named
+  too, and Rust now names 156 (`PostOnlyNotResting`), which TypeScript
+  already did.
+- **`SettleEvent` docs:** from the engine release that carries exchange
+  #1573, the quorum also settles an event without an oracle rule
+  (`RelayerAttested`, or no source) from its settlement time; a price event
+  still waits for its resolution window to close. No code change: the SDK
+  never restricted `SettleEvent` to price events.
 - **Rust core:** `market_snapshot::decode_snapshot_view` decodes a complete
   `GET /v2/markets-snapshot` body, bound to a chain, into proof-wire's
   `query_v2` view (`market_snapshot::MarketsSnapshotView`). A record that is
   not a map keyed by field name, or a name that is not a string (a status
   sent as the integer 0, for example), refuses the whole read.
-- **TypeScript:** `queryEventVoided(gatewayUrl, eventId, { signal?, fetch?, maxPages? })`
-  reads the indexed `event_voided` record (the Yes price a Void settled at)
-  from `GET /v1/history/admin-events`, following `next_cursor`; `null` when the
-  event is not voided or not yet indexed. A malformed page, a repeated cursor
-  or more than `maxPages` pages (default 100) fails with `GatewayReadError`.
 
-## [13.1.0] — 2026-11-19
+### Changed
 
-npm only: a MINOR with two TypeScript additions on the same wire as 13.0.0
+- **Breaking (Python):** a transaction the engine refused is returned with its
+  non-zero `code` instead of raising `EngineError`, as in TypeScript and Rust.
+- **Breaking (Rust):** `UnfilledReason` is the SDK's own open enum,
+  `Known(<wire reason>)` or `Other(String)`, so a reason newer than the SDK
+  still reads. `PlacementOutcome` and `OrderPlacement` are no longer `Copy`.
+- **Breaking (Rust):** `Error::OrderResultUnreadable` carries only the
+  receipt; the event that did not parse is in `receipt.events`.
+
+### Fixed
+
+- Python order results reject malformed or out-of-range integer attributes,
+  a non-string `unfilled` reason and non-string order lists as
+  `OrderResultUnreadable`, preserving the executed transaction's hash for
+  reconciliation.
+
+### Removed
+
+- **Breaking, all SDKs:** the receipt and payout-lease surfaces, retired by the
+  vote model. Operators sign votes and payout records instead (see Added).
+  - Actions: `AuthorizeWithdrawal` (0x24), `ConfirmWithdrawalReceipt` (0x22),
+    `FailWithdrawalReceipt` (0x23) and `ClaimWithdrawalPayout` (0x2E), with
+    `OperatorReceiptProof` and `BridgeWithdrawalReceipt`.
+  - TypeScript: `authorizeWithdrawal`, `confirmWithdrawalReceipt`,
+    `failWithdrawalReceipt`, `encodeBridgeReceipt`, `signOperatorReceipt`,
+    `BRIDGE_RECEIPT_LEN`, `TERMINAL_PAID`, `TERMINAL_CANCELLED` and
+    `QUORUM_OPERATOR_M_OF_N`. Python: the same actions and their builders.
+  - Errors 91 (`WithdrawalPayoutLeaseActive`), 128
+    (`WithdrawalPayoutLeaseNotHeld`) and 129
+    (`WithdrawalPayoutRecordLimitReached`): the wire no longer assigns them.
+    73 and 74 stay named while the wire maps them.
+
+## [15.0.0] — 2026-11-24
+
+npm only: a MAJOR on proof-wire 13.0.0 (exchange 2.28.0). Every order and
+cancel is a batch of 1 to 100, and a refused order is its outcome rather than
+a failed transaction. The Rust and Python entries above stay under
+[Unreleased].
+
+### Added
+
+- Orders and cancels in batches (exchange#1513, #1514): place or cancel 1 to
+  100 orders for one account under one signature (`placeOrders` /
+  `cancelOrders` / `cancelClientOrders`, Python and Rust `place_orders` /
+  `cancel_orders` / `cancel_client_orders`). An order is a limit or a market
+  order; a market order takes an optional worst price.
+- Every order call returns each order's outcome in the order sent: resting,
+  executed (with requested and filled quantity and why the rest did not
+  fill) or rejected with its error code; a cancel is cancelled or refused.
+  Without an executed verdict (pending, or refused as a whole) the outcomes
+  are `null` (TypeScript) or `None` (Python, Rust).
+- An executed transaction whose order event does not decode is reported as
+  executed and unreadable (TypeScript `outcome: "unreadable"`, Python and
+  Rust `OrderResultUnreadable`): reconcile by hash, never resubmit.
+- **TypeScript:** `ExchangeClient.queryOrderSummaries(address?, filters)` reads
+  `GET /v1/history/order-summaries/{owner}`: the owner's fills grouped into one
+  row per order (`OrderSummary`: order id, market, side, filled quantity,
+  average price, notional, fees, first/last fill time, fill count), filtered by
+  a market list (`markets`, at most 200), `fromMs`/`toMs` and an opaque cursor.
+  `orderSummarySearchParams` and `decodeOrderSummaryPage` are exported.
+- Error code 156 `PostOnlyNotResting`: a post-only order that would not rest.
+
+### Changed
+
+- **Breaking:** every order call is a batch; a single order is a batch of
+  one. A rejected order or refused cancel no longer fails the transaction: it
+  is its outcome. Single-order calls return the batch result (`{ tx, orders }`
+  / `PlaceOrdersResult`; Rust `Submitted::placements`): read `orders[0]`.
+  Code that detects a refused order with `tx.code !== 0` / `code != 0` now
+  misses it: check each order's outcome. A non-zero transaction code remains
+  for a batch refused as a whole (for example an agent without authority for
+  the owner), which applies nothing.
+- **Breaking:** close position reads the position and sends a reduce-only
+  market order against it, returning the close's outcome (code 12 when
+  unaffordable, 35 when the position went flat first) or nothing-to-close on
+  a flat account. The raw `ClosePosition` action is gone.
+- Basket legs and account-stream order updates read from `orders_placed` /
+  `orders_cancelled`; the retired single-order events still decode from
+  history. Needs the wire of exchange#1514.
+- **Breaking (TypeScript):** `orderPlacements`, `orderCancellations`,
+  `placementsOf` and `cancellationsOf` take only the transaction. They read a
+  transaction you submitted; for another, match the event's `owner`.
+- Pins proof-wire 13.0.0 (exchange 2.28.0).
+
+## [14.1.0] — 2026-11-20
+
+npm only: a MINOR on proof-wire 12.2.0, as 14.0.0: the admin quorum's
+`UpdateMarketFees`, `MarketView.settingsSequence`, code 155 and the positions
+history `interval`. `MarketView` gains the required `settingsSequence`, which
+breaks code that builds a `MarketView` by hand; it ships in 14.1.0 by decision
+rather than in a MAJOR. The Rust core entry above stays under [Unreleased].
+
+### Added
+
+- **Positions history `interval`, all three SDKs:** a bucket width for
+  `GET /v1/history/positions` (indexer `/v1/positions?interval=`, the values
+  `/v1/portfolio` takes: a positive count and `s`, `m`, `h` or `d`, up to
+  365 days, e.g. `15m`). With it the indexer serves, per market, the last snapshot in each
+  epoch-aligned bucket of `[from, to)`; row shape and ordering are unchanged.
+  The interval read defaults to the last 24 hours and permits at most
+  5,000 whole bucket widths. Keep the interval and filters with each cursor;
+  use explicit bounds for a stable window across pages.
+  Omitted, the query string is unchanged. Needs an indexer with
+  Proof-labs/indexer#449; an older one refuses the parameter.
+  - **TypeScript:** `interval?: string` on `queryHistoryPositionsPage` and
+    `queryHistoryPositions`; a malformed value throws before fetching.
+  - **Rust (`proof-sdk-rs`):** `InfoClient::position_history_by_interval` with
+    `HistoryInterval` (`count` of `IntervalUnit`; `FIFTEEN_MINUTES`,
+    `ONE_HOUR`, `ONE_DAY`). Zero or widths above 365 days are
+    `Error::InvalidInput`.
+  - **Python:** keywords `interval`, `from_ms`, `to_ms` and `market` on
+    `ExchangeClient.history_positions`; invalid inputs raise `ValueError`
+    before fetching.
+- **All SDKs:** the admin quorum's `UpdateMarketFees` (inner tag 35), which
+  changes a live market's settings. A `ProposeAdminAction` carries
+  `QuorumUpdateMarketFees`: `predecessor`, the market's settings sequence
+  (`MarketSettingsSequence`) when proposed, and `change`, a
+  `MarketSettingsChange` (the `UpdateMarketFees` fields without `signer`).
+  The engine refuses the proposal with code 155 unless `predecessor` is the
+  market's current sequence, and fails it with 155 at execution if another
+  settings change landed in between.
+  - TypeScript (MINOR): `AdminAction` gains the `UpdateMarketFees` variant,
+    with the `QuorumUpdateMarketFees` and `MarketSettingsChange` types, and a
+    tag-35 proposal reads back under that kind in `decodeAdminAction`,
+    `decodeProposalDisplayInfo` and `decodeProposalPage`. An exhaustive
+    `switch` on `action.kind` (one that assigns the remainder to `never`) or
+    a `Record<AdminAction["kind"], …>` table needs a new entry.
+  - Rust: the crate re-exports proof-wire's `market_settings`, and
+    `governance` re-exports `QuorumUpdateMarketFees`, `MarketSettingsChange`
+    and `MarketSettingsSequence`.
+  - Python: `ProposeAdminAction` takes it in the wire form,
+    `{"UpdateMarketFees": {"predecessor": 0, "change": {"market": 1, …}}}`.
+  - Every SDK builds the engine's frozen proposal
+    (`crates/spec/golden-vectors/propose_update_market_fees.hex`, DevNet BTC's
+    open-interest cap to 35,000 at sequence 0) byte for byte and decodes it
+    back.
+- **TypeScript:** `MarketView.settingsSequence`, the version 2 `Market`
+  view's `settings_sequence`: the settings changes recorded for the market,
+  and the `predecessor` a quorum `UpdateMarketFees` names. It reads 0 for a
+  market with none, and from a node that does not serve the field. In Rust it
+  is `settings_sequence` on proof-wire's `query_v2::Market`. `MarketView`
+  gains it as a required field, which breaks code that builds a `MarketView`
+  by hand (a mock or fixture): it must add the field.
+- Error code 155 `MarketSettingsChanged` (proof-wire 12.2.0): a quorum
+  `UpdateMarketFees` names a settings sequence its market is not at. Named in
+  Rust, TypeScript and Python.
+
+## [14.0.0] — 2026-11-20
+
+npm only: a MAJOR for exchange 2.27.0 (proof-wire 12.2.0). Code 35 is renamed
+`ReduceOnlyRefused` and codes 136-142 are named. The Rust core entry above
+stays under [Unreleased].
+
+### Added
+
+- Error codes 136-142 (proof-wire 12.2.0), named in
+  Rust, TypeScript and Python: 136 `PositionEpochMismatch`, 137 `TriggerBracketNotFound`, 138
+  `TriggerAlreadyCrossed`, 139 `PositionNotFound`, 140
+  `AccountPositionCapReached`, 141 `SubAccountCapReached` and 142
+  `WorkCapReached`, each with the engine's meaning text.
+
+### Changed
+
+- **Breaking (TypeScript npm MAJOR, Python MAJOR, Rust core MAJOR,
+  `proof-sdk-rs` MAJOR):** error code 35 is renamed from
+  `ReduceOnlyWouldIncrease` to `ReduceOnlyRefused` (`ErrorKind::ReduceOnlyRefused`,
+  also re-exported by `proof-sdk-rs`, `ExecErrorCode.ReduceOnlyRefused`, and
+  the name `get_error_name(35)` returns).
+  The engine now refuses a reduce-only order with code 35 both when it would
+  increase exposure (`ExecError::ReduceOnlyWouldIncrease`) and when the account
+  holds no position on the market (`ExecError::ReduceOnlyNoPosition`); the log
+  names which. The trigger outcome reason `ReduceOnlyWouldIncrease` keeps its
+  name.
+- The Rust core pins proof-wire 12.2.0 (tag `v12.2.0`), the wire of exchange
+  2.27.0, which adds codes 136-142 and `ReduceOnlyNoPosition`. No bytes
+  change.
+  `PositionUpdated.realizedPnl` now also carries the gross PnL of a partial
+  close and of an insurance-fund takeover netting; its closed funding debt
+  stays in `FundingSettled`. Do not add it to PnL derived from
+  `TradeExecuted`.
+
+## [13.2.0] — 2026-11-20
+
+npm only: a MINOR with one TypeScript addition on the same wire as 13.1.0
 (proof-wire 12.0.0) and no change to existing behaviour. The Rust core entry
 above stays under [Unreleased].
 
 ### Added
 
+- **TypeScript:** `client.queryDepositAddress(account, opts?)` reads an
+  account's USDC deposit address on Solana
+  (`GET /v1/deposit-address/{account}`, served by the gateway from the deposit
+  address service), always from the gateway. `account` is 40 hex digits, with
+  or without `0x`, in either case; anything else throws `GatewayReadError`
+  (kind `"configuration"`) before any request. The read takes
+  `{ signal, timeoutMs }` and a 1 MiB body cap. The gateway answers once the
+  address exists, creating it first when needed; the default deadline is
+  `DEPOSIT_ADDRESS_TIMEOUT_MS` rather than the usual 5 seconds. It resolves a
+  `DepositAddressReady` (`status: "ready"`) with `address`, `tokenAccount`
+  and `createdAt` (Unix seconds or `null`). `address` is the deposit
+  authority, the address a wallet sends USDC to, not the token account. The
+  gateway passes the service's status and body through without checking
+  them, so the SDK decides success itself: only an HTTP 200 with
+  `status: "ready"` and both addresses present resolves; any other 2xx throws
+  `GatewayReadError` (kind `"malformed"`) naming the field. A refusal throws
+  `GatewayHttpError` with an unread copy of the response, and `errorCode`
+  when the body's code is a `DepositAddressErrorCode` (`InvalidAccount`,
+  `SubAccount`, `RateLimited`, `Paused` while deposits are paused,
+  `Unavailable`; `isDepositAddressErrorCode`). As on the submission path, the
+  retry time is the body's own `retryAfterMs`; the SDK does not read the
+  `Retry-After` header. `conformance/deposit-address.json` pins the
+  service's ready, sub-account, rate-limited, paused and unavailable answers.
+
+## [13.1.0] — 2026-11-19
+
+npm only: a MINOR with three TypeScript additions on the same wire as 13.0.0
+(proof-wire 12.0.0) and no change to existing behaviour. The Rust core entry
+above stays under [Unreleased].
+
+### Added
+
+- **TypeScript:** `queryEventVoided(gatewayUrl, eventId, { signal?, fetch?, maxPages? })`
+  reads the indexed `event_voided` record (the Yes price a Void settled at)
+  from `GET /v1/history/admin-events`, following `next_cursor`; `null` when the
+  event is not voided or not yet indexed. A malformed page, a repeated cursor
+  or more than `maxPages` pages (default 100) fails with `GatewayReadError`.
 - **TypeScript:** `decodeFinalizedReadWitness` is exported from the package
   root, so a caller can decode the `witness` object of a raw gateway answer
   (for example, in its own `ExchangeHttpTransport`) with the SDK's decoder
@@ -2547,7 +2850,8 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v13.1.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v13.2.0...HEAD
+[13.2.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v13.1.0...npm-v13.2.0
 [13.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v13.0.0...npm-v13.1.0
 [13.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v12.1.0...npm-v13.0.0
 [12.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v12.0.0...npm-v12.1.0

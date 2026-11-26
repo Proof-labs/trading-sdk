@@ -231,6 +231,13 @@ class ExchangeClient {
   queryPositionTriggerHistory(addressHex?: string, filters?: PositionTriggerHistoryFilters): Promise<PositionTriggerHistoryPage>;
   queryTriggerMarketHistory(market: number, filters?: TriggerMarketHistoryFilters): Promise<TriggerMarketHistoryPage>;
   queryLiquidationConfig(): Promise<LiquidationConfigInfo>;
+  // USDC deposit address on Solana (address = deposit authority). The gateway
+  // answers once the address exists; default deadline
+  // DEPOSIT_ADDRESS_TIMEOUT_MS. Success is HTTP 200 with status "ready".
+  // Refusals throw GatewayHttpError with errorCode when it is a
+  // DepositAddressErrorCode (Paused while deposits are paused); the body's
+  // retryAfterMs stays in error.response.
+  queryDepositAddress(account: string, opts?: { signal?: AbortSignal; timeoutMs?: number }): Promise<DepositAddressReady>;
 
   // Owner defaults to signer; version-active agents pass delegated owner.
   setPositionTriggers(params: Omit<SetPositionTriggers, "owner"> & { owner?: Uint8Array }): Promise<TxResult>;
@@ -243,6 +250,7 @@ class ExchangeClient {
   queryHistoryPositions(...): Promise<HistoryPositionSnapshot[]>;
   queryHistoryPositionsPage(...): Promise<HistoryPositionsPage>;
   queryLiquidationHistory(addressHex?: string, filters?: LiquidationHistoryFilters): Promise<LiquidationHistoryPage>;
+  queryOrderSummaries(addressHex?: string, filters?: OrderSummaryFilters): Promise<OrderSummaryPage>;
 
   // Blocks
   getBlock(height?: number): Promise<Record<string, unknown>>;
@@ -646,17 +654,61 @@ type Action = TraderAction | OperatorAction | GovernanceAction;
 
 type TraderAction =
   | { type: "PlaceOrder"; data: PlaceOrder }
+  | { type: "PlaceOrders"; data: PlaceOrders }
   | { type: "CancelOrder"; data: CancelOrder }
+  | { type: "CancelOrders"; data: CancelOrders }
   | { type: "CancelAllOrders"; data: CancelAllOrders }
   | { type: "CancelReplaceOrder"; data: CancelReplaceOrder }
-  | { type: "MarketOrder"; data: MarketOrder }
-  | { type: "ClosePosition"; data: ClosePosition };
+  | { type: "MarketOrder"; data: MarketOrder };
 // … more trader actions — see src/types.ts
 ```
 
 Trading integrations use `TraderAction` and can type their calls against it to
 keep operator actions out of autocomplete. `submitTx` still accepts the full
 `Action` union.
+
+#### Placing and cancelling orders
+
+Orders and cancels go in batches of 1 to `MAX_ORDERS_PER_BATCH` (100) under
+one signature; `placeOrder`, `marketOrder`, `cancelOrder` and the other
+single-order calls send a batch of one and return the same `{ tx, orders }`.
+A rejected order does not fail the batch: each order's outcome is `resting`,
+`executed` (with `requestedQuantity`, `filledQuantity` and the `unfilled`
+reason) or `rejected` with its code; a cancel is `cancelled` or `refused`.
+A non-zero `tx.code` means the batch was refused as a whole before any order
+ran (for example an agent without authority for the owner): nothing applied
+and `orders` is `null`. A batch of 0 or more than 100 orders is refused by the
+SDK before signing. A trading rule (tick, lot, margin,
+reduce-only, market status, unknown order) rejects only its order, in a
+transaction with code 0, so check each outcome, not `tx.code`. An
+`atomicBasketOrder` is all or nothing: a failed leg fails the transaction and
+every leg is reported `rejected` with that code.
+
+```typescript
+const { tx, orders } = await client.placeOrders([
+  { market: 1, side: Side.Buy, price: 66_740_000_000n, quantity: 50n },
+  {
+    kind: "market",
+    market: 1,
+    side: Side.Sell,
+    quantity: 50n,
+    worstPrice: 66_500_000_000n,
+  },
+]);
+for (const o of orders ?? []) {
+  if (o.outcome === "rejected") console.log(o.code, o.error?.name);
+}
+```
+
+`orders` is `null` when `tx` has no executed verdict: refused as a whole
+(`tx.error`), pending (reconcile with `waitForDelivery(tx)`, then
+`placementsOf`), or `outcome: "unreadable"`: it executed but its order event
+did not decode, so reconcile by hash and never resubmit.
+
+`closePosition(market)` sends a reduce-only market order against the position
+it reads and returns `{ kind: "sent", tx, order }` (the close can be
+`rejected`: 12 unaffordable, 35 already flat), or `{ kind: "nothingToClose" }`
+on a flat account.
 
 #### SetUserMarketLeverage availability
 
@@ -776,9 +828,9 @@ code should read the structured `code` field: it is authoritative and needs no p
 
 ### Order of actions within a block
 
-Every cancel (`CancelOrder`, `CancelClientOrder`, `CancelAllOrders`) in a
-block runs before every order-placing action (`PlaceOrder`, `MarketOrder`,
-`AmendOrder`, `CancelReplaceOrder`, `AtomicBasketOrder`, `ClosePosition`),
+Every cancel (`CancelOrders`, `CancelClientOrders`, `CancelAllOrders`) in a
+block runs before every order-placing action (`PlaceOrders`, `AmendOrder`,
+`CancelReplaceOrder`, `AtomicBasketOrder`),
 whatever their `seq`. A cancel sent in the same block as the order it targets
 finds nothing to cancel; send it after the order lands.
 

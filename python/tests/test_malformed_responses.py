@@ -3,7 +3,7 @@ import hashlib
 import httpx
 import pytest
 
-from proof_trading_sdk import EngineError, ExchangeClient, SdkConfig, SubmissionPending, TransportError
+from proof_trading_sdk import ExchangeClient, SdkConfig, SubmissionPending, TransportError
 
 
 def client_for(body):
@@ -31,9 +31,7 @@ def test_malformed_submit_is_ambiguous_not_an_invented_engine_verdict(body):
 def test_recognized_legacy_engine_verdict_stays_terminal(body):
     client = client_for(body)
     try:
-        with pytest.raises(EngineError) as caught:
-            client.submit_action(b"mock-envelope")
-        assert caught.value.code == 12
+        assert client.submit_action(b"mock-envelope")["code"] == 12
     finally:
         client.close()
 

@@ -1,70 +1,169 @@
 /**
- * Bridge custody: the canonical payload bytes the engine's withdrawal
- * authorization binds, exposed through the WASM core.
+ * Bridge custody: the messages bridge operators sign, and the canonical
+ * payload bytes the engine's withdrawal authorization binds, through the
+ * WASM core.
  *
- * The byte layout is owned by the wire contract's `bridge` module
- * (`proof_wire::bridge`), the same definition the engine and the bridge program
- * compile, so the SDK hashes exactly the bytes the engine binds. The frozen
- * vectors in `bridge.test.ts` pin the marshalling.
+ * Byte layouts are owned by the wire contract (`proof_wire`), the same
+ * definitions the engine compiles, so the SDK signs and hashes exactly the
+ * bytes the engine checks. The shared vectors in `conformance/` pin them
+ * across Rust, TypeScript and Python.
  *
- * The wire-13 vote model retired the receipt-era surfaces this module used to
- * carry (`encodeBridgeReceipt`, `signOperatorReceipt`, the terminal/quorum
- * wire-byte constants): registry members now vote
- * `VoteWithdrawalPaid` / `VoteDeposit` and sign the canonical vote message
- * from the core's `bridge_votes` helpers — see `voteWithdrawalPaidMessage` /
- * `voteDepositMessage` in the Python SDK and the `Vote*` action types.
+ * A bridge operator's only identity is its registry key. It signs five
+ * messages, each submitted on its own; the engine counts the distinct
+ * operators whose signature verifies against the named epoch's roster. The
+ * signature is the message's authority, not the envelope's, so any envelope
+ * signer may submit a signed message.
  */
 
 import { getWasm } from "./wasm-loader.js";
-import type { DepositLocator, VoteDeposit, VoteWithdrawalPaid, VoteWithdrawalPayoutDead } from "./types.js";
+import type {
+  DepositLocator,
+  RecordWithdrawalPayout,
+  VoteDeposit,
+  VotePauseBridge,
+  VoteWithdrawalPaid,
+  VoteWithdrawalPayoutDead,
+} from "./types.js";
 
-/** Signer callback for an operator vote. It signs the exact core-produced preimage. */
-export type BridgeVoteSigner = (message: Uint8Array) => Uint8Array;
+/** Signs the exact preimage the core produced with the operator's registry
+ *  key. May be asynchronous, so a key behind an HSM, KMS or remote signer
+ *  (an `ExternalSigner.signRaw`) works unchanged. */
+export type BridgeMessageSigner = (
+  message: Uint8Array,
+) => Uint8Array | Promise<Uint8Array>;
 
-function checkedSignature(signer: BridgeVoteSigner, message: Uint8Array): Uint8Array {
-  const signature = signer(message);
+/** What every bridge-operator message binds: the deployment and chain it
+ *  cannot replay across, and the registry epoch whose roster judges it. */
+export interface BridgeBinding {
+  /** The bridge deployment, as the registry names it (32 bytes). */
+  deploymentId: Uint8Array;
+  /** The chain id the envelope is signed for (32 bytes). */
+  chainId: Uint8Array;
+  registryEpoch: bigint;
+}
+
+/** One recorded Squads payout of one withdrawal. */
+export interface PayoutIdentity {
+  withdrawalId: bigint;
+  /** The governed Squads vault the payout pays from (32 bytes). */
+  vault: Uint8Array;
+  /** The Squads vault-transaction index of the payout proposal. */
+  squadsTransactionIndex: number;
+}
+
+/** One bridge-operator message's signed fields, tagged by `kind`. */
+export type BridgeMessageFields =
+  | ({ kind: "withdrawalPaid" } & PayoutIdentity & BridgeBinding)
+  | ({ kind: "withdrawalPayoutDead" } & PayoutIdentity & BridgeBinding)
+  | ({ kind: "payoutRecord" } & PayoutIdentity & BridgeBinding)
+  | ({
+      kind: "deposit";
+      /** The receiving engine account (20 bytes). */
+      owner: Uint8Array;
+      amountMicroUsdc: bigint;
+      /** The observed Solana transfer signature (64 bytes). */
+      solanaTxSig: Uint8Array;
+      /** Absent is the legacy reading (top-level instruction 0). */
+      locator?: DepositLocator | null;
+    } & BridgeBinding)
+  | ({ kind: "pauseBridge"; signedAtMs: bigint } & BridgeBinding);
+
+/** The canonical bytes an operator signs for one message: the wire
+ *  contract's `vote_message` / `record_message`. Throws naming the field on
+ *  a wrong-width input. */
+export function bridgeMessagePreimage(fields: BridgeMessageFields): Uint8Array {
+  const { locator, ...rest } = fields as BridgeMessageFields & {
+    locator?: DepositLocator | null;
+  };
+  return getWasm().bridge_message_preimage(
+    fields.kind === "deposit" && locator != null ? { ...rest, locator } : rest,
+  );
+}
+
+async function sign(
+  signer: BridgeMessageSigner,
+  fields: BridgeMessageFields,
+): Promise<Uint8Array> {
+  const signature = await signer(bridgeMessagePreimage(fields));
   if (!(signature instanceof Uint8Array) || signature.length !== 64) {
-    throw new Error("bridge vote signer must return exactly 64 signature bytes");
+    throw new Error(
+      "bridge message signer must return exactly 64 signature bytes",
+    );
   }
   return signature;
 }
 
-/** Build and sign a Paid withdrawal vote against the current payout identity. */
-export function signVoteWithdrawalPaid(
-  signer: BridgeVoteSigner,
-  fields: Omit<VoteWithdrawalPaid, "signature">,
-): VoteWithdrawalPaid {
-  const signature = checkedSignature(signer, getWasm().vote_withdrawal_paid_message(
-    fields.withdrawalId, fields.vault, fields.squadsTransactionIndex,
-    fields.deploymentId, fields.chainId, fields.registryEpoch,
-  ));
-  return { ...fields, signature };
+/** Sign one operator's vote to settle a withdrawal `Paid`. */
+export async function signVoteWithdrawalPaid(
+  signer: BridgeMessageSigner,
+  payout: PayoutIdentity,
+  binding: BridgeBinding,
+): Promise<VoteWithdrawalPaid> {
+  const fields = { ...payout, ...binding };
+  return {
+    ...fields,
+    signature: await sign(signer, { kind: "withdrawalPaid", ...fields }),
+  };
 }
 
-/** Build and sign a vote clearing the currently recorded dead payout. */
-export function signVoteWithdrawalPayoutDead(
-  signer: BridgeVoteSigner,
-  fields: Omit<VoteWithdrawalPayoutDead, "signature">,
-): VoteWithdrawalPayoutDead {
-  const signature = checkedSignature(signer, getWasm().vote_withdrawal_payout_dead_message(
-    fields.withdrawalId, fields.vault, fields.squadsTransactionIndex,
-    fields.deploymentId, fields.chainId, fields.registryEpoch,
-  ));
-  return { ...fields, signature };
+/** Sign one operator's record of the Squads payout it proposed.
+ *  `binding.registryEpoch` is the epoch the proposal was made under. */
+export async function signRecordWithdrawalPayout(
+  signer: BridgeMessageSigner,
+  payout: PayoutIdentity,
+  binding: BridgeBinding,
+): Promise<RecordWithdrawalPayout> {
+  const fields = { ...payout, ...binding };
+  return {
+    ...fields,
+    signature: await sign(signer, { kind: "payoutRecord", ...fields }),
+  };
 }
 
-/** Build and sign one registry vote for an observed Solana deposit. */
-export function signVoteDeposit(
-  signer: BridgeVoteSigner,
-  fields: Omit<VoteDeposit, "signature">,
-): VoteDeposit {
-  const locator: DepositLocator | null = fields.locator ?? null;
-  const signature = checkedSignature(signer, getWasm().vote_deposit_message(
-    fields.owner, fields.amountMicroUsdc, fields.solanaTxSig,
-    locator?.topIndex ?? 0, locator?.innerIndex ?? -1,
-    fields.deploymentId, fields.chainId, fields.registryEpoch,
-  ));
-  return { ...fields, signature };
+/** Sign one operator's vote that a recorded payout was rejected, so its
+ *  slot can be cleared. */
+export async function signVoteWithdrawalPayoutDead(
+  signer: BridgeMessageSigner,
+  payout: PayoutIdentity,
+  binding: BridgeBinding,
+): Promise<VoteWithdrawalPayoutDead> {
+  const fields = { ...payout, ...binding };
+  return {
+    ...fields,
+    signature: await sign(signer, { kind: "withdrawalPayoutDead", ...fields }),
+  };
+}
+
+/** Sign one operator's vote to credit one observed deposit. Two operators
+ *  voting on the same observation sign identical bytes. */
+export async function signVoteDeposit(
+  signer: BridgeMessageSigner,
+  deposit: Omit<
+    VoteDeposit,
+    "deploymentId" | "chainId" | "registryEpoch" | "signature"
+  >,
+  binding: BridgeBinding,
+): Promise<VoteDeposit> {
+  const fields = { ...deposit, ...binding };
+  return {
+    ...fields,
+    signature: await sign(signer, { kind: "deposit", ...fields }),
+  };
+}
+
+/** Sign one operator's vote to pause the bridge. `signedAtMs` is the Unix
+ *  time in milliseconds the operator signs at: the engine refuses a vote
+ *  signed before the bridge's last unpause or after the executing block. */
+export async function signVotePauseBridge(
+  signer: BridgeMessageSigner,
+  signedAtMs: bigint,
+  binding: BridgeBinding,
+): Promise<VotePauseBridge> {
+  const fields = { signedAtMs, ...binding };
+  return {
+    ...fields,
+    signature: await sign(signer, { kind: "pauseBridge", ...fields }),
+  };
 }
 
 /** Total length of a canonical `WithdrawalAuthorizationV1`. Fixed by construction. */

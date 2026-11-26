@@ -43,12 +43,23 @@ class TimeInForce(StrEnum):
 # ── Action-type byte map (generated from the Rust core) ──────────────────────
 
 
+_SINGLE_ACTION_NAMES = {
+    "PlaceOrder": "PlaceOrders",
+    "MarketOrder": "PlaceOrders",
+    "CancelOrder": "CancelOrders",
+    "CancelClientOrder": "CancelClientOrders",
+}
+
+
 class _ActionTypeMap:
     """``ActionType.PlaceOrder`` → the wire byte, generated from the core."""
 
     def __init__(self) -> None:
         for entry in _native.get_action_types():
             setattr(self, entry["name"], entry["code"])
+        # The single-order names keep working: a single order is a batch of one.
+        for single, listed in _SINGLE_ACTION_NAMES.items():
+            setattr(self, single, getattr(self, listed))
 
     def __getitem__(self, name: str) -> int:
         return getattr(self, name)
@@ -122,20 +133,24 @@ class PlaceOrder(Action):
             self.stop_loss, self.take_profit, reduce_only=self.reduce_only
         )
 
+    def entry(self) -> "OrderEntry":
+        """This order as one :class:`PlaceOrders` entry."""
+        return OrderEntry(
+            market=self.market,
+            side=self.side,
+            price=self.price,
+            quantity=self.quantity,
+            client_order_id=self.client_order_id,
+            post_only=self.post_only,
+            reduce_only=self.reduce_only,
+            time_in_force=self.time_in_force,
+            stop_loss=self.stop_loss,
+            take_profit=self.take_profit,
+        )
+
     def fields(self) -> dict[str, Any]:
-        return {
-            "market": self.market,
-            "owner": self.owner,
-            "side": self.side,
-            "price": self.price,
-            "quantity": self.quantity,
-            "client_order_id": self.client_order_id,
-            "post_only": self.post_only,
-            "reduce_only": self.reduce_only,
-            "time_in_force": self.time_in_force,
-            "stop_loss": _limb_wire(self.stop_loss),
-            "take_profit": _limb_wire(self.take_profit),
-        }
+        # A single order is a PlaceOrders batch of one.
+        return {"owner": self.owner, "orders": [self.entry().as_wire()]}
 
 
 @dataclass
@@ -155,22 +170,31 @@ class MarketOrder(Action):
     client_order_id: Optional[int] = None
     stop_loss: Optional[TriggerLimb] = None
     take_profit: Optional[TriggerLimb] = None
+    # Stops the walk at this price; bounds fills, not admission.
+    worst_price: Optional[int] = None
+    reduce_only: bool = False
 
     def __post_init__(self) -> None:
         _validate_order_triggers(
-            self.stop_loss, self.take_profit, reduce_only=False
+            self.stop_loss, self.take_profit, reduce_only=self.reduce_only
+        )
+
+    def entry(self) -> "OrderEntry":
+        """This order as one :class:`PlaceOrders` market entry."""
+        return OrderEntry.market_order(
+            self.market,
+            self.side,
+            self.quantity,
+            worst_price=self.worst_price,
+            reduce_only=self.reduce_only,
+            client_order_id=self.client_order_id,
+            stop_loss=self.stop_loss,
+            take_profit=self.take_profit,
         )
 
     def fields(self) -> dict[str, Any]:
-        return {
-            "market": self.market,
-            "owner": self.owner,
-            "side": self.side,
-            "quantity": self.quantity,
-            "client_order_id": self.client_order_id,
-            "stop_loss": _limb_wire(self.stop_loss),
-            "take_profit": _limb_wire(self.take_profit),
-        }
+        # A market order is a PlaceOrders batch of one market order.
+        return {"owner": self.owner, "orders": [self.entry().as_wire()]}
 
 
 @dataclass
@@ -180,7 +204,8 @@ class CancelOrder(Action):
     owner: bytes
 
     def fields(self) -> dict[str, Any]:
-        return {"order_id": self.order_id, "owner": self.owner}
+        # A single cancel is a CancelOrders batch of one.
+        return {"owner": self.owner, "order_ids": [self.order_id]}
 
 
 @dataclass
@@ -190,7 +215,8 @@ class CancelClientOrder(Action):
     client_order_id: int
 
     def fields(self) -> dict[str, Any]:
-        return {"owner": self.owner, "client_order_id": self.client_order_id}
+        # A single cancel is a CancelClientOrders batch of one.
+        return {"owner": self.owner, "client_order_ids": [self.client_order_id]}
 
 
 @dataclass
@@ -267,16 +293,6 @@ class AmendOrder(Action):
         }
 
 
-@dataclass
-class ClosePosition(Action):
-    ACTION_NAME = "ClosePosition"
-    market: int
-    owner: bytes
-
-    def fields(self) -> dict[str, Any]:
-        return {"market": self.market, "owner": self.owner}
-
-
 _U64_MAX = (1 << 64) - 1
 _U32_MAX = (1 << 32) - 1
 _U16_MAX = (1 << 16) - 1
@@ -321,7 +337,7 @@ def _validate_order_triggers(
     *,
     reduce_only: bool,
 ) -> None:
-    """Shared placement-time SL/TP parity for the order actions (0x01/0x04/0x1A).
+    """Shared placement-time SL/TP parity for the order actions (0x35/0x1A).
 
     Per-limb bounds are enforced by :class:`TriggerLimb.__post_init__`; this
     adds the order-level rules: a reduce-only order cannot carry limbs
@@ -473,58 +489,68 @@ class SubAccountTransfer(Action):
         }
 
 
-@dataclass
-class ClaimWithdrawalPayout(Action):
-    """**Operator-only.** Acquire the single-holder Solana payout lease on a
-    pending withdrawal (0x2e); ``holder`` is the claiming watcher's own
-    address."""
-
-    ACTION_NAME = "ClaimWithdrawalPayout"
-    withdrawal_id: int
-    holder: bytes
-
-    def fields(self) -> dict[str, Any]:
-        return {"withdrawal_id": self.withdrawal_id, "holder": self.holder}
-
-
-@dataclass
-class RecordWithdrawalPayout(Action):
-    """**Operator-only.** Record the Squads vault payout proposal the
-    payout-lease holder created for a pending withdrawal (0x31), while its
-    lease is live. Under the vote model withdrawals pay from a Squads v4
-    vault the operator registry members jointly control: the lease holder
-    proposes the vault transaction, peer members verify it against the
-    engine's withdrawal record, approve and execute. Every distinct
-    (vault, index) report is retained until settlement."""
-
-    ACTION_NAME = "RecordWithdrawalPayout"
-    withdrawal_id: int
-    holder: bytes
-    vault: bytes
-    squads_transaction_index: int
-    registry_epoch: int
-
-    def fields(self) -> dict[str, Any]:
-        return {
-            "withdrawal_id": self.withdrawal_id,
-            "holder": self.holder,
-            "vault": self.vault,
-            "squads_transaction_index": self.squads_transaction_index,
-            "registry_epoch": self.registry_epoch,
-        }
-
-
 BRIDGE_VOTE_DOMAIN = b"PROOF_BRIDGE_VOTE_V1"
-"""Domain separator absorbed into every bridge vote message (wire 13)."""
+"""Domain separator at the front of every bridge-operator message."""
 
 BRIDGE_VOTE_KIND_WITHDRAWAL_PAID = 1
-"""Vote-message kind byte: settle one withdrawal as ``Paid``."""
+"""Message kind byte: settle one withdrawal as ``Paid``."""
 
 BRIDGE_VOTE_KIND_DEPOSIT_CREDIT = 2
-"""Vote-message kind byte: credit one observed deposit."""
+"""Message kind byte: credit one observed deposit."""
 
 BRIDGE_VOTE_KIND_PAYOUT_DEAD = 4
-"""Vote-message kind byte: clear a recorded payout after it is rejected."""
+"""Message kind byte: a recorded payout is dead."""
+
+BRIDGE_VOTE_KIND_PAYOUT_RECORD = 5
+"""Message kind byte: one operator records the payout it proposed."""
+
+BRIDGE_VOTE_KIND_PAUSE = 6
+"""Message kind byte: one operator votes to pause the bridge."""
+
+
+def bridge_message_preimage(fields: dict[str, Any]) -> bytes:
+    """The canonical bytes a bridge operator signs for one message: the wire
+    contract's ``vote_message`` / ``record_message``, built in the Rust core.
+    ``fields`` is tagged by ``kind`` (``withdrawal_paid``,
+    ``withdrawal_payout_dead``, ``payout_record``, ``deposit``,
+    ``pause_bridge``). Raises ``ValueError`` naming a field of the wrong
+    width."""
+    from proof_trading_sdk import _native
+
+    return bytes(_native.bridge_message_preimage(fields))
+
+
+def _sign_bridge_message(signer: Any, fields: dict[str, Any]) -> bytes:
+    """Sign one bridge-operator message. A key handle signs it in Rust; any
+    other signer (an :class:`ExternalSigner`) signs the core-built preimage
+    through its ``sign_raw`` callback, and must return 64 bytes."""
+    if hasattr(signer, "sign_bridge_message"):
+        signature = signer.sign_bridge_message(fields)
+    else:
+        signature = signer.sign_raw(bridge_message_preimage(fields))
+    if not isinstance(signature, (bytes, bytearray)) or len(signature) != 64:
+        raise ValueError("bridge message signer must return exactly 64 signature bytes")
+    return bytes(signature)
+
+
+def _payout_fields(
+    kind: str,
+    withdrawal_id: int,
+    vault: bytes,
+    squads_transaction_index: int,
+    deployment_id: bytes,
+    chain_id: bytes,
+    registry_epoch: int,
+) -> dict[str, Any]:
+    return {
+        "kind": kind,
+        "withdrawal_id": withdrawal_id,
+        "vault": bytes(vault),
+        "squads_transaction_index": squads_transaction_index,
+        "deployment_id": bytes(deployment_id),
+        "chain_id": bytes(chain_id),
+        "registry_epoch": registry_epoch,
+    }
 
 
 def vote_withdrawal_paid_message(
@@ -535,23 +561,18 @@ def vote_withdrawal_paid_message(
     chain_id: bytes,
     registry_epoch: int,
 ) -> bytes:
-    """The canonical bytes every registry member signs for one
-    :class:`VoteWithdrawalPaid` — domain, kind 0x01, withdrawal id (8 BE),
-    payout vault (32), Squads transaction index (4 BE), deployment id (32),
-    chain id (32), registry epoch (8 BE). Byte-identical
-    to the wire contract's ``VoteWithdrawalPaid::vote_message``, which the
-    engine re-derives before verifying each member's signature. Sign these
-    raw bytes with the operator ed25519 key — a vote carries its own
-    signature and never uses the envelope signing convention."""
-    return (
-        BRIDGE_VOTE_DOMAIN
-        + bytes([BRIDGE_VOTE_KIND_WITHDRAWAL_PAID])
-        + int(withdrawal_id).to_bytes(8, "big")
-        + vault
-        + int(squads_transaction_index).to_bytes(4, "big")
-        + deployment_id
-        + chain_id
-        + int(registry_epoch).to_bytes(8, "big")
+    """The bytes an operator signs for a :class:`VoteWithdrawalPaid`: the
+    wire contract's ``VoteWithdrawalPaid::vote_message``."""
+    return bridge_message_preimage(
+        _payout_fields(
+            "withdrawal_paid",
+            withdrawal_id,
+            vault,
+            squads_transaction_index,
+            deployment_id,
+            chain_id,
+            registry_epoch,
+        )
     )
 
 
@@ -563,17 +584,61 @@ def vote_withdrawal_payout_dead_message(
     chain_id: bytes,
     registry_epoch: int,
 ) -> bytes:
-    """Canonical kind-4 preimage for a member's vote to clear a dead payout."""
-    return (
-        BRIDGE_VOTE_DOMAIN
-        + bytes([BRIDGE_VOTE_KIND_PAYOUT_DEAD])
-        + int(withdrawal_id).to_bytes(8, "big")
-        + vault
-        + int(squads_transaction_index).to_bytes(4, "big")
-        + deployment_id
-        + chain_id
-        + int(registry_epoch).to_bytes(8, "big")
+    """The bytes an operator signs for a :class:`VoteWithdrawalPayoutDead`."""
+    return bridge_message_preimage(
+        _payout_fields(
+            "withdrawal_payout_dead",
+            withdrawal_id,
+            vault,
+            squads_transaction_index,
+            deployment_id,
+            chain_id,
+            registry_epoch,
+        )
     )
+
+
+def record_withdrawal_payout_message(
+    withdrawal_id: int,
+    vault: bytes,
+    squads_transaction_index: int,
+    deployment_id: bytes,
+    chain_id: bytes,
+    registry_epoch: int,
+) -> bytes:
+    """The bytes an operator signs for a :class:`RecordWithdrawalPayout`."""
+    return bridge_message_preimage(
+        _payout_fields(
+            "payout_record",
+            withdrawal_id,
+            vault,
+            squads_transaction_index,
+            deployment_id,
+            chain_id,
+            registry_epoch,
+        )
+    )
+
+
+def _deposit_fields(
+    owner: bytes,
+    amount_micro_usdc: int,
+    solana_tx_sig: bytes,
+    locator: "DepositLocator | None",
+    deployment_id: bytes,
+    chain_id: bytes,
+    registry_epoch: int,
+) -> dict[str, Any]:
+    return {
+        "kind": "deposit",
+        "owner": bytes(owner),
+        "amount_micro_usdc": amount_micro_usdc,
+        "solana_tx_sig": bytes(solana_tx_sig),
+        "locator": None if locator is None else locator.as_wire(),
+        "deployment_id": bytes(deployment_id),
+        "chain_id": bytes(chain_id),
+        "registry_epoch": registry_epoch,
+    }
 
 
 def vote_deposit_message(
@@ -585,44 +650,42 @@ def vote_deposit_message(
     chain_id: bytes,
     registry_epoch: int,
 ) -> bytes:
-    """The canonical bytes every registry member signs for one
-    :class:`VoteDeposit` — domain, kind 0x02, and the full credit identity:
-    owner (20), amount (8 BE), Solana transaction signature (64), locator
-    suffix (4: top index BE, inner index BE or 0xFFFF when absent),
-    deployment id (32), chain id (32), epoch (8 BE). Two members voting on
-    the same observation sign identical bytes."""
-    if locator is None:
-        suffix = b"\x00\x00\xff\xff"
-    else:
-        suffix = int(locator.top_index).to_bytes(2, "big") + (
-            b"\xff\xff"
-            if locator.inner_index is None
-            else int(locator.inner_index).to_bytes(2, "big")
+    """The bytes an operator signs for a :class:`VoteDeposit`. A ``locator``
+    of ``None`` is the legacy reading (top-level instruction 0)."""
+    return bridge_message_preimage(
+        _deposit_fields(
+            owner, amount_micro_usdc, solana_tx_sig, locator, deployment_id, chain_id, registry_epoch
         )
-    return (
-        BRIDGE_VOTE_DOMAIN
-        + bytes([BRIDGE_VOTE_KIND_DEPOSIT_CREDIT])
-        + owner
-        + int(amount_micro_usdc).to_bytes(8, "big")
-        + solana_tx_sig
-        + suffix
-        + deployment_id
-        + chain_id
-        + int(registry_epoch).to_bytes(8, "big")
+    )
+
+
+def _pause_fields(
+    signed_at_ms: int, deployment_id: bytes, chain_id: bytes, registry_epoch: int
+) -> dict[str, Any]:
+    return {
+        "kind": "pause_bridge",
+        "signed_at_ms": signed_at_ms,
+        "deployment_id": bytes(deployment_id),
+        "chain_id": bytes(chain_id),
+        "registry_epoch": registry_epoch,
+    }
+
+
+def vote_pause_bridge_message(
+    signed_at_ms: int, deployment_id: bytes, chain_id: bytes, registry_epoch: int
+) -> bytes:
+    """The bytes an operator signs for a :class:`VotePauseBridge`."""
+    return bridge_message_preimage(
+        _pause_fields(signed_at_ms, deployment_id, chain_id, registry_epoch)
     )
 
 
 @dataclass
-class VoteWithdrawalPaid(Action):
-    """**Operator-registry member only.** One member's vote to settle one
-    withdrawal as ``Paid`` (0x30). Each member signs
-    :func:`vote_withdrawal_paid_message` with its operator ed25519 key and
-    submits its own vote — no combined proof; the engine aggregates distinct
-    member signatures and settles at the roster's threshold. Build with
-    :meth:`sign` (or an external signer over the message) so ``signature``
-    verifies against the ``registry_epoch`` roster."""
+class _PayoutMessage(Action):
+    """The fields every payout message carries: the withdrawal, the payout's
+    Squads vault and transaction index, the binding, and the operator's
+    signature over the message."""
 
-    ACTION_NAME = "VoteWithdrawalPaid"
     withdrawal_id: int
     vault: bytes
     squads_transaction_index: int
@@ -630,6 +693,8 @@ class VoteWithdrawalPaid(Action):
     chain_id: bytes
     registry_epoch: int
     signature: bytes
+
+    MESSAGE_KIND = ""
 
     def fields(self) -> dict[str, Any]:
         return {
@@ -652,70 +717,65 @@ class VoteWithdrawalPaid(Action):
         deployment_id: bytes,
         chain_id: bytes,
         registry_epoch: int,
-    ) -> "VoteWithdrawalPaid":
-        """Build and sign one withdrawal vote. ``signer`` is any object with
-        a ``sign(message) -> bytes`` method (the SDK key handle qualifies);
-        the signature is over :func:`vote_withdrawal_paid_message` of the
-        same fields."""
-        message = vote_withdrawal_paid_message(
-            withdrawal_id, vault, squads_transaction_index, deployment_id, chain_id, registry_epoch
+    ) -> Any:
+        """Build and sign this message. ``signer`` is a key handle (it signs
+        in Rust) or an :class:`ExternalSigner` (its ``sign_raw`` gets the
+        core-built preimage)."""
+        fields = _payout_fields(
+            cls.MESSAGE_KIND,
+            withdrawal_id,
+            vault,
+            squads_transaction_index,
+            deployment_id,
+            chain_id,
+            registry_epoch,
         )
         return cls(
             withdrawal_id=withdrawal_id,
-            vault=vault,
+            vault=bytes(vault),
             squads_transaction_index=squads_transaction_index,
-            deployment_id=deployment_id,
-            chain_id=chain_id,
+            deployment_id=bytes(deployment_id),
+            chain_id=bytes(chain_id),
             registry_epoch=registry_epoch,
-            signature=signer.sign(message),
+            signature=_sign_bridge_message(signer, fields),
         )
 
 
 @dataclass
-class VoteWithdrawalPayoutDead(Action):
-    """Registry vote that clears the currently recorded, rejected Squads payout."""
+class VoteWithdrawalPaid(_PayoutMessage):
+    """**Bridge operator only.** One operator's vote to settle one
+    withdrawal ``Paid`` (0x30). Each operator submits its own vote; the
+    engine settles at the roster's threshold."""
+
+    ACTION_NAME = "VoteWithdrawalPaid"
+    MESSAGE_KIND = "withdrawal_paid"
+
+
+@dataclass
+class RecordWithdrawalPayout(_PayoutMessage):
+    """**Bridge operator only.** One operator's signed record of the Squads
+    vault payout it proposed for a pending withdrawal (0x31). The first
+    record fills the withdrawal's payout slot; ``registry_epoch`` is the
+    epoch the proposal was made under. Any envelope signer may submit it."""
+
+    ACTION_NAME = "RecordWithdrawalPayout"
+    MESSAGE_KIND = "payout_record"
+
+
+@dataclass
+class VoteWithdrawalPayoutDead(_PayoutMessage):
+    """**Bridge operator only.** One operator's vote that a recorded payout
+    was rejected on Squads (0x34); the roster threshold clears the slot."""
 
     ACTION_NAME = "VoteWithdrawalPayoutDead"
-    withdrawal_id: int
-    vault: bytes
-    squads_transaction_index: int
-    deployment_id: bytes
-    chain_id: bytes
-    registry_epoch: int
-    signature: bytes
-
-    def fields(self) -> dict[str, Any]:
-        return {
-            "withdrawal_id": self.withdrawal_id,
-            "vault": self.vault,
-            "squads_transaction_index": self.squads_transaction_index,
-            "deployment_id": self.deployment_id,
-            "chain_id": self.chain_id,
-            "registry_epoch": self.registry_epoch,
-            "signature": self.signature,
-        }
-
-    @classmethod
-    def sign(
-        cls, signer: Any, withdrawal_id: int, vault: bytes, squads_transaction_index: int,
-        deployment_id: bytes, chain_id: bytes, registry_epoch: int,
-    ) -> "VoteWithdrawalPayoutDead":
-        message = vote_withdrawal_payout_dead_message(
-            withdrawal_id, vault, squads_transaction_index, deployment_id, chain_id, registry_epoch
-        )
-        return cls(
-            withdrawal_id, vault, squads_transaction_index, deployment_id, chain_id,
-            registry_epoch, signer.sign(message),
-        )
+    MESSAGE_KIND = "withdrawal_payout_dead"
 
 
 @dataclass
 class VoteDeposit(Action):
-    """**Operator-registry member only.** One member's vote to credit one
-    observed Solana deposit (0x32), the vote-model replacement for the bare
-    relayer :class:`ConfirmDeposit` assertion. Aggregated and settled exactly
-    like :class:`VoteWithdrawalPaid`. A ``locator`` of ``None`` is the
-    LEGACY reading (top-level instruction 0, no inner index)."""
+    """**Bridge operator only.** One operator's vote to credit one observed
+    Solana deposit (0x32), settled at the roster's threshold. A ``locator``
+    of ``None`` is the legacy reading (top-level instruction 0)."""
 
     ACTION_NAME = "VoteDeposit"
     owner: bytes
@@ -751,26 +811,62 @@ class VoteDeposit(Action):
         chain_id: bytes,
         registry_epoch: int,
     ) -> "VoteDeposit":
-        """Build and sign one deposit vote over
-        :func:`vote_deposit_message` of the same fields."""
-        message = vote_deposit_message(
-            owner,
-            amount_micro_usdc,
-            solana_tx_sig,
-            locator,
-            deployment_id,
-            chain_id,
-            registry_epoch,
+        """Build and sign one deposit vote."""
+        fields = _deposit_fields(
+            owner, amount_micro_usdc, solana_tx_sig, locator, deployment_id, chain_id, registry_epoch
         )
         return cls(
-            owner=owner,
+            owner=bytes(owner),
             amount_micro_usdc=amount_micro_usdc,
-            solana_tx_sig=solana_tx_sig,
+            solana_tx_sig=bytes(solana_tx_sig),
             locator=locator,
-            deployment_id=deployment_id,
-            chain_id=chain_id,
+            deployment_id=bytes(deployment_id),
+            chain_id=bytes(chain_id),
             registry_epoch=registry_epoch,
-            signature=signer.sign(message),
+            signature=_sign_bridge_message(signer, fields),
+        )
+
+
+@dataclass
+class VotePauseBridge(Action):
+    """**Bridge operator only.** One operator's vote to pause the bridge
+    (0x33). The roster threshold pauses it; only the admin quorum's
+    ``UnpauseBridge`` lifts it. ``signed_at_ms`` is when the operator
+    signed: the engine refuses a vote signed before the last unpause."""
+
+    ACTION_NAME = "VotePauseBridge"
+    signed_at_ms: int
+    deployment_id: bytes
+    chain_id: bytes
+    registry_epoch: int
+    signature: bytes
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "signed_at_ms": self.signed_at_ms,
+            "deployment_id": self.deployment_id,
+            "chain_id": self.chain_id,
+            "registry_epoch": self.registry_epoch,
+            "signature": self.signature,
+        }
+
+    @classmethod
+    def sign(
+        cls,
+        signer: Any,
+        signed_at_ms: int,
+        deployment_id: bytes,
+        chain_id: bytes,
+        registry_epoch: int,
+    ) -> "VotePauseBridge":
+        """Build and sign one pause vote."""
+        fields = _pause_fields(signed_at_ms, deployment_id, chain_id, registry_epoch)
+        return cls(
+            signed_at_ms=signed_at_ms,
+            deployment_id=bytes(deployment_id),
+            chain_id=bytes(chain_id),
+            registry_epoch=registry_epoch,
+            signature=_sign_bridge_message(signer, fields),
         )
 
 
@@ -829,6 +925,155 @@ class AtomicBasketOrder(Action):
             "legs": [leg.as_wire() for leg in self.legs],
             "max_slippage_bps": self.max_slippage_bps,
         }
+
+
+MAX_ORDERS_PER_BATCH = 100
+"""Most orders one batch (:class:`PlaceOrders`, :class:`CancelOrders` or
+:class:`CancelClientOrders`) carries; the wire refuses more."""
+
+
+def _check_list_size(orders: list[Any]) -> None:
+    if not 1 <= len(orders) <= MAX_ORDERS_PER_BATCH:
+        raise ValueError(f"1 to {MAX_ORDERS_PER_BATCH} orders per call, got {len(orders)}")
+
+
+ORDER_KIND_LIMIT = "limit"
+ORDER_KIND_MARKET = "market"
+
+
+@dataclass
+class OrderEntry:
+    """One order of a :class:`PlaceOrders`. Not an action on its own.
+
+    A limit order (the default ``kind``) has the fields of a
+    :class:`PlaceOrder` without its owner. A market order
+    (:meth:`market_order`) has no ``price``, ``post_only`` or
+    ``time_in_force``; ``worst_price``, when set, stops its walk at that
+    price.
+    """
+
+    market: int
+    side: str
+    price: Optional[int]
+    quantity: int
+    client_order_id: Optional[int] = None
+    post_only: bool = False
+    reduce_only: bool = False
+    time_in_force: str = TimeInForce.Gtc
+    stop_loss: Optional[TriggerLimb] = None
+    take_profit: Optional[TriggerLimb] = None
+    kind: str = ORDER_KIND_LIMIT
+    worst_price: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        if self.kind == ORDER_KIND_LIMIT:
+            if self.price is None:
+                raise ValueError("a limit order needs a price")
+            if self.worst_price is not None:
+                raise ValueError("worst_price is for market orders; a limit order has price")
+        elif self.kind == ORDER_KIND_MARKET:
+            if self.price is not None:
+                raise ValueError("a market order has no price; bound it with worst_price")
+        else:
+            raise ValueError(f"unknown order kind {self.kind!r}")
+        _validate_order_triggers(
+            self.stop_loss, self.take_profit, reduce_only=self.reduce_only
+        )
+
+    @classmethod
+    def market_order(
+        cls,
+        market: int,
+        side: str,
+        quantity: int,
+        *,
+        worst_price: Optional[int] = None,
+        reduce_only: bool = False,
+        client_order_id: Optional[int] = None,
+        stop_loss: Optional[TriggerLimb] = None,
+        take_profit: Optional[TriggerLimb] = None,
+    ) -> "OrderEntry":
+        """A market order: immediate-or-cancel at the best prices."""
+        return cls(
+            market=market,
+            side=side,
+            price=None,
+            quantity=quantity,
+            client_order_id=client_order_id,
+            reduce_only=reduce_only,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            kind=ORDER_KIND_MARKET,
+            worst_price=worst_price,
+        )
+
+    def as_wire(self) -> dict[str, Any]:
+        if self.kind == ORDER_KIND_MARKET:
+            kind: dict[str, Any] = {"Market": {"worst_price": self.worst_price}}
+        else:
+            kind = {
+                "Limit": {
+                    "price": self.price,
+                    "time_in_force": self.time_in_force,
+                    "post_only": self.post_only,
+                }
+            }
+        return {
+            "market": self.market,
+            "side": self.side,
+            "quantity": self.quantity,
+            "kind": kind,
+            "reduce_only": self.reduce_only,
+            "client_order_id": self.client_order_id,
+            "stop_loss": _limb_wire(self.stop_loss),
+            "take_profit": _limb_wire(self.take_profit),
+        }
+
+
+@dataclass
+class PlaceOrders(Action):
+    """1 to 100 limit or market orders for one account under one signature.
+    Each order runs in turn and stands or is refused on its own; the
+    transaction succeeds and ``orders_placed`` reports every order."""
+
+    ACTION_NAME = "PlaceOrders"
+    owner: bytes
+    orders: list[OrderEntry]
+
+    def fields(self) -> dict[str, Any]:
+        _check_list_size(self.orders)
+        return {
+            "owner": self.owner,
+            "orders": [order.as_wire() for order in self.orders],
+        }
+
+
+@dataclass
+class CancelOrders(Action):
+    """Cancel 1 to 100 resting orders by order id, each on its own;
+    ``orders_cancelled`` reports every entry."""
+
+    ACTION_NAME = "CancelOrders"
+    owner: bytes
+    order_ids: list[int]
+
+    def fields(self) -> dict[str, Any]:
+        _check_list_size(self.order_ids)
+        return {"owner": self.owner, "order_ids": list(self.order_ids)}
+
+
+@dataclass
+class CancelClientOrders(Action):
+    """Cancel 1 to 100 resting orders by client order id, each on its own;
+    ``orders_cancelled`` reports every entry."""
+
+    ACTION_NAME = "CancelClientOrders"
+    owner: bytes
+    client_order_ids: list[int]
+
+    def fields(self) -> dict[str, Any]:
+        _check_list_size(self.client_order_ids)
+        return {"owner": self.owner, "client_order_ids": list(self.client_order_ids)}
 
 
 @dataclass
@@ -1143,12 +1388,18 @@ class ConfigureOraclePolicy:
 #
 # ``action`` is the inner admin action in its externally tagged wire form:
 # ``{"SetMarketStatus": {"market": 7, "status": "ReduceOnly"}}``, ``{"PauseMarket":
-# {"market_id": 7}}``, or the bare string ``"UnpauseBridge"`` for the one
-# fieldless arm. The core validates it against the wire enum on encode.
+# {"market_id": 7}}``, or the bare string ``"PauseBridge"`` / ``"UnpauseBridge"``
+# for a fieldless arm. The bridge payout vault is ``{"SetBridgePayoutConfig":
+# {"payout_multisig": <32 bytes>, "ops_wallet": <32 bytes>}}``. The core
+# validates it against the wire enum on encode.
 
 AdminActionWire = dict[str, Any] | str
 
 RETIRED_ADMIN_KINDS = frozenset({"SetTriggerMarketConfig"})
+
+# Authority lists the engine refuses in an ``UpdateAuthoritySet``. They still
+# decode, so a historical proposal naming one can be read and rejected.
+RETIRED_AUTHORITY_DOMAINS = frozenset({"CexComposite", "ScheduledOps"})
 
 
 def _admin_action_kind(action: AdminActionWire) -> str | None:
@@ -1161,14 +1412,27 @@ def _admin_action_kind(action: AdminActionWire) -> str | None:
     return kind if isinstance(kind, str) and kind else None
 
 
-def is_submittable_admin_action(action: AdminActionWire) -> bool:
-    """Exclude retired kinds from typed proposals and approvals.
+def _names_retired_authority_list(action: AdminActionWire) -> bool:
+    if not isinstance(action, dict):
+        return False
+    payload = action.get("UpdateAuthoritySet")
+    return isinstance(payload, dict) and payload.get("domain") in RETIRED_AUTHORITY_DOMAINS
 
-    This checks the enum tag only, not payload validity or engine admission.
-    Historical decoding and low-level encoding/signing remain available.
+
+def is_submittable_admin_action(action: AdminActionWire) -> bool:
+    """Exclude retired kinds, and an ``UpdateAuthoritySet`` naming a retired
+    authority list, from typed proposals and approvals.
+
+    This checks the enum tag and that one domain only, not payload validity or
+    engine admission. Historical decoding and low-level encoding/signing
+    remain available.
     """
     kind = _admin_action_kind(action)
-    return kind is not None and kind not in RETIRED_ADMIN_KINDS
+    return (
+        kind is not None
+        and kind not in RETIRED_ADMIN_KINDS
+        and not _names_retired_authority_list(action)
+    )
 
 
 def _require_submittable_admin_action(action: AdminActionWire) -> None:
@@ -1177,6 +1441,8 @@ def _require_submittable_admin_action(action: AdminActionWire) -> None:
         raise ValueError("admin action must be a non-empty kind string or a single-key dict")
     if kind in RETIRED_ADMIN_KINDS:
         raise ValueError("retired admin actions cannot be proposed or approved")
+    if _names_retired_authority_list(action):
+        raise ValueError("an UpdateAuthoritySet naming a retired authority list cannot be proposed or approved")
 
 
 @dataclass
@@ -1297,10 +1563,16 @@ __all__ = [
     "MarketOrder",
     "CancelOrder",
     "CancelClientOrder",
+    "MAX_ORDERS_PER_BATCH",
+    "ORDER_KIND_LIMIT",
+    "ORDER_KIND_MARKET",
+    "OrderEntry",
+    "PlaceOrders",
+    "CancelOrders",
+    "CancelClientOrders",
     "CancelAllOrders",
     "CancelReplaceOrder",
     "AmendOrder",
-    "ClosePosition",
     "TriggerLimb",
     "SetPositionTriggers",
     "CancelPositionTriggers",
@@ -1316,18 +1588,23 @@ __all__ = [
     "VoteWithdrawalPaid",
     "VoteWithdrawalPayoutDead",
     "VoteDeposit",
+    "VotePauseBridge",
     "BRIDGE_VOTE_DOMAIN",
     "BRIDGE_VOTE_KIND_WITHDRAWAL_PAID",
     "BRIDGE_VOTE_KIND_DEPOSIT_CREDIT",
     "BRIDGE_VOTE_KIND_PAYOUT_DEAD",
+    "BRIDGE_VOTE_KIND_PAYOUT_RECORD",
+    "BRIDGE_VOTE_KIND_PAUSE",
+    "bridge_message_preimage",
     "vote_withdrawal_paid_message",
     "vote_withdrawal_payout_dead_message",
+    "record_withdrawal_payout_message",
     "vote_deposit_message",
+    "vote_pause_bridge_message",
     "CreateMarket",
     "SetUserMarketLeverage",
     "CreateSubAccount",
     "SubAccountTransfer",
-    "ClaimWithdrawalPayout",
     "RecordWithdrawalPayout",
     "UpdateMarketFees",
     "SubmitOracleObservation",

@@ -11,6 +11,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
 
 mod account_auth;
+mod bridge_message;
 mod callback_signer;
 #[cfg(feature = "pkcs11")]
 mod pkcs11;
@@ -41,6 +42,21 @@ fn map_pythonize_err(e: pythonize::PythonizeError) -> PyErr {
 /// key material into the message.
 fn map_signer_err(e: core_sdk::SignerError) -> PyErr {
     PyValueError::new_err(e.to_string())
+}
+
+/// The canonical bytes a bridge operator signs for one message, from a dict
+/// tagged by `kind` (`withdrawal_paid`, `withdrawal_payout_dead`,
+/// `payout_record`, `deposit`, `pause_bridge`). Raises naming the field on a
+/// wrong-width input.
+#[pyfunction]
+fn bridge_message_preimage<'py>(
+    py: Python<'py>,
+    fields: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyBytes>> {
+    Ok(PyBytes::new(
+        py,
+        &bridge_message::from_py(fields)?.preimage(),
+    ))
 }
 
 /// Opaque signing handle returned to Python. Exposes the public key, derived
@@ -108,15 +124,21 @@ impl SigningHandle {
         Ok(PyBytes::new(py, &encoded))
     }
 
-    /// Sign an operator bridge-vote preimage without exposing the secret key.
-    fn sign_raw<'py>(&self, py: Python<'py>, message: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
-        let signature = self.signer.try_sign(message).map_err(map_signer_err)?;
+    /// Sign one bridge-operator message (a vote, payout record or pause
+    /// vote) without exposing the key. `fields` is a dict tagged by `kind`;
+    /// the preimage is built and length-checked in Rust, so the handle signs
+    /// only a well-formed bridge message, never arbitrary bytes.
+    fn sign_bridge_message<'py>(
+        &self,
+        py: Python<'py>,
+        fields: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let message = bridge_message::from_py(fields)?;
+        let signature = self
+            .signer
+            .try_sign(&message.preimage())
+            .map_err(map_signer_err)?;
         Ok(PyBytes::new(py, &signature))
-    }
-
-    /// Alias used by typed Python action builders.
-    fn sign<'py>(&self, py: Python<'py>, message: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
-        self.sign_raw(py, message)
     }
 
     /// Redacted repr — never leak key material via `str()`/logging.
@@ -685,6 +707,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     #[cfg(feature = "pkcs11")]
     m.add_function(wrap_pyfunction!(load_key_from_pkcs11, m)?)?;
     m.add_function(wrap_pyfunction!(admin_proposal_content_hash, m)?)?;
+    m.add_function(wrap_pyfunction!(bridge_message_preimage, m)?)?;
     m.add_function(wrap_pyfunction!(get_action_types, m)?)?;
     m.add_function(wrap_pyfunction!(get_error_code_table, m)?)?;
     m.add_function(wrap_pyfunction!(classify_error_name, m)?)?;

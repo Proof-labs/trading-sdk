@@ -94,12 +94,18 @@ export {
   type PlaceOrder,
   type CancelOrder,
   type CancelClientOrder,
+  type PlaceOrders,
+  type CancelOrders,
+  type CancelClientOrders,
+  type OrderEntry,
+  type LimitOrderEntry,
+  type MarketOrderEntry,
+  MAX_ORDERS_PER_BATCH,
   type CancelAllOrders,
   type CancelReplaceOrder,
   type AmendOrder,
   type AtomicBasketLeg,
   type AtomicBasketOrder,
-  type ClosePosition,
   type MarketOrder,
   type MarketsSnapshot,
   type MarketOpenInterest,
@@ -122,6 +128,8 @@ export {
   type RetiredTriggerMarketConfig,
   type DecodedAdminAction,
   type RetiredAdminAction,
+  type RetiredAuthorityDomain,
+  type RetiredAuthoritySetUpdate,
   type DecodedAction,
   type SetOracleGuards,
   type FundInsuranceFund,
@@ -131,6 +139,9 @@ export {
   type SettleEvent,
   type SetMarketStatus,
   type SetDepositLimit,
+  type QuorumUpdateMarketFees,
+  type AccountFeeOverrideChange,
+  type MarketSettingsChange,
   type MarketStatus,
   type LiquidationConfig,
   type LiquidationConfigInfo,
@@ -151,18 +162,20 @@ export {
   type EventStatus,
   type CreateSubAccount,
   type SubAccountTransfer,
-  type ClaimWithdrawalPayout,
   type RecordWithdrawalPayout,
+  type VotePauseBridge,
+  type SetBridgePayoutConfig,
+  type SetDepositReceiptLimit,
+  type BridgePayoutConfig,
   type BridgeStatus,
   type OperatorMember,
   type OperatorRegistry,
-  type BridgeVote,
-  type WithdrawalVotes,
+  type PayoutVerdict,
+  type WithdrawalPayoutVote,
   type WithdrawalPayoutReport,
-  type WithdrawalPayoutLease,
   type PendingWithdrawal,
   type PendingWithdrawalPage,
-  type PendingDepositObservation,
+  type PendingDepositVote,
   type PendingDeposit,
   type PendingDepositPage,
   type UpdateMarketFees,
@@ -190,6 +203,7 @@ export {
   Branch,
   Outcome,
   type TxResult,
+  type CloseOutcome,
   type TxOutcome,
   type GatewayRefusalCode,
   type TxEvent,
@@ -339,6 +353,22 @@ export {
 } from "./liquidation-events.js";
 export type { AbciEventInput } from "./abci-event.js";
 export {
+  cancellationsOf,
+  decodeOrdersEvent,
+  orderCancellations,
+  orderPlacements,
+  placementsOf,
+  type CancelOrdersResult,
+  type CancelTarget,
+  type OrderCancellation,
+  type OrdersEvent,
+  type OrderPlacement,
+  type OrdersCancelledEvent,
+  type OrdersPlacedEvent,
+  type PlaceOrdersResult,
+  type UnfilledReason,
+} from "./order-lists.js";
+export {
   decodeVoidSettlementEvent,
   type ConditionalVoidSettledEvent,
   type EventVoidedEvent,
@@ -357,6 +387,14 @@ export {
   type LiquidationHistoryPage,
   type LiquidationHistoryRow,
 } from "./liquidation-history.js";
+export {
+  ORDER_SUMMARY_MAX_MARKETS,
+  decodeOrderSummaryPage,
+  orderSummarySearchParams,
+  type OrderSummary,
+  type OrderSummaryFilters,
+  type OrderSummaryPage,
+} from "./order-summaries.js";
 
 export {
   BINARY_PRICE_MAX,
@@ -415,11 +453,8 @@ export {
 } from "./governance-query.js";
 export { fetchChainId } from "./client.js";
 
-// Bridge custody: canonical bridge-core v1 payload encoders — the bytes the
-// engine's withdrawal authorization binds. (The receipt-era surfaces
-// `encodeBridgeReceipt` / `signOperatorReceipt` and the terminal/quorum wire
-// bytes retired with wire 13; registry members now sign the canonical vote
-// message — see the `bridge_votes` helpers in the Rust core.)
+// Bridge custody: the messages bridge operators sign, and the canonical
+// bridge-core v1 payload the engine's withdrawal authorization binds.
 export {
   VAULT_TIER_COLD,
   VAULT_TIER_HOT,
@@ -427,10 +462,16 @@ export {
   WITHDRAWAL_AUTHORIZATION_LEN,
   encodeWithdrawalAuthorization,
   withdrawalAuthorizationDigest,
+  bridgeMessagePreimage,
   signVoteWithdrawalPaid,
+  signRecordWithdrawalPayout,
   signVoteWithdrawalPayoutDead,
   signVoteDeposit,
-  type BridgeVoteSigner,
+  signVotePauseBridge,
+  type BridgeBinding,
+  type BridgeMessageFields,
+  type BridgeMessageSigner,
+  type PayoutIdentity,
   type WithdrawalAuthorizationV1,
 } from "./bridge.js";
 
@@ -548,6 +589,13 @@ export type {
   PortfolioHistoryOptions,
   PortfolioHistoryPage,
 } from "./portfolio-history.js";
+export {
+  DEPOSIT_ADDRESS_ERROR_CODES,
+  DEPOSIT_ADDRESS_TIMEOUT_MS,
+  isDepositAddressErrorCode,
+  type DepositAddressErrorCode,
+  type DepositAddressReady,
+} from "./deposit-address.js";
 export {
   queryOraclePriceHistoryPage,
   type OraclePriceHistoryPoint,

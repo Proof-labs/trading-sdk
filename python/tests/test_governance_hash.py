@@ -45,6 +45,12 @@ GOLDEN_UPDATE_AUTHORITY_SET_ADD = (
 GOLDEN_UPDATE_AUTHORITY_SET_REMOVE = (
     "a4f4828d828c4e3e5f50ea883568e63b21d49c620f4848542dec498a292b847d"
 )
+GOLDEN_RETIRED_COMPOSITE = (
+    "c1a08060eea60d4f64a05d0660593871de7860757b87290fcbf47ff4029b6ce5"
+)
+GOLDEN_RETIRED_SCHEDULED = (
+    "edcf4d95670bed907cc111554e2914798d98c60a7d9e65d4421826f23bd3e1f1"
+)
 # SetLiquidationConfig (inner tag 0x11): a struct variant whose newtypes are
 # bare integers and whose full-close threshold is a nested struct, carrying
 # the configuration exchange-wire freezes in its own vector. Same authority
@@ -187,6 +193,22 @@ class TestAdminProposalContentHash:
         }
         h = pts.admin_proposal_content_hash(**kwargs)
         assert h.hex() == GOLDEN_UPDATE_AUTHORITY_SET_ADD
+
+    @pytest.mark.parametrize(
+        "domain,add,remove,golden",
+        [
+            ("CexComposite", [bytes([0xB2] * 20)], [], GOLDEN_RETIRED_COMPOSITE),
+            ("ScheduledOps", [], [bytes([0xC3] * 20)], GOLDEN_RETIRED_SCHEDULED),
+        ],
+    )
+    def test_retired_authority_list_still_hashes(self, domain, add, remove, golden):
+        # A pending proposal naming a retired list must still hash, so an
+        # admin can verify and reject it. TypeScript pins the same values.
+        kwargs = golden_kwargs()
+        kwargs["action"] = {
+            "UpdateAuthoritySet": {"domain": domain, "add": add, "remove": remove}
+        }
+        assert pts.admin_proposal_content_hash(**kwargs).hex() == golden
 
     def test_update_authority_set_remove_hash(self):
         kwargs = golden_kwargs()

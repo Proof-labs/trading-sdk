@@ -20,12 +20,15 @@ import {
   type DecodedAction,
   type DecodedAdminAction,
   type RetiredAdminAction,
+  type RetiredAuthoritySetUpdate,
   type CreateMarket,
   type SubmitOracleObservation,
   type ConfigureOraclePolicy,
   type GovernanceAction,
   type AdminAction,
   type SetDepositLimit,
+  type QuorumUpdateMarketFees,
+  type MarketSettingsChange,
   type EmergencyAction,
   type UpdateAdminSignerRegistry,
   type ProposeAdminAction,
@@ -60,8 +63,24 @@ import {
   type MarketView,
   type EventView,
   type MarketsSnapshotView,
+  DEPOSIT_ADDRESS_TIMEOUT_MS,
+  type DepositAddressErrorCode,
+  type DepositAddressReady,
 } from "./index.js";
 import type { OpenLabel } from "./types.js";
+
+it("exports the deposit address types", () => {
+  const ready: DepositAddressReady = {
+    status: "ready",
+    address: "9DEvTpg7J8BsrESCVrpP9FnBEEKXpC8MauxarCApCAyz",
+    tokenAccount: "8MJF87ivAaBfc7yHkBztbGWyBgaAYTMFPrUdfcFfPQk6",
+    createdAt: null,
+  };
+  const code: DepositAddressErrorCode = "Paused";
+  expect(ready.status).toBe("ready");
+  expect(code).toBe("Paused");
+  expect(DEPOSIT_ADDRESS_TIMEOUT_MS).toBe(20_000);
+});
 
 it("exports the version 2 markets snapshot types", () => {
   const listed: Pick<MarketView, "market" | "status"> = {
@@ -225,6 +244,22 @@ describe("public barrel: governance surface", () => {
       value: depositLimit,
     };
     expect(depositAction.value).toBe(depositLimit);
+    const change: MarketSettingsChange = {
+      market: 1,
+      maxOpenInterest: 35_000n,
+    };
+    const listed: Pick<MarketView, "settingsSequence"> = {
+      settingsSequence: 0n,
+    };
+    const quorum: QuorumUpdateMarketFees = {
+      predecessor: listed.settingsSequence,
+      change,
+    };
+    const settingsAction: AdminAction = {
+      kind: "UpdateMarketFees",
+      value: quorum,
+    };
+    expect(settingsAction.value).toBe(quorum);
     const registry: UpdateAdminSignerRegistry = {
       newThreshold: 2,
       newMembers: [new Uint8Array(20)],
@@ -494,7 +529,7 @@ function decodedAdminActionsNarrowWithoutCasts(
     const current: AdminAction = decoded;
     void current;
   } else {
-    const retired: RetiredAdminAction = decoded;
+    const retired: RetiredAdminAction | RetiredAuthoritySetUpdate = decoded;
     // @ts-expect-error the rejected branch is a retired action
     const submit: AdminAction = decoded;
     void retired;
@@ -502,3 +537,20 @@ function decodedAdminActionsNarrowWithoutCasts(
   }
 }
 void decodedAdminActionsNarrowWithoutCasts;
+
+describe("public barrel: deposit address errors", () => {
+  it("keeps GatewayHttpError as on dev, with no subclass or retry option", () => {
+    const e = new barrel.GatewayHttpError(
+      429,
+      new Response(null, { status: 429 }),
+      "RateLimited",
+    );
+    expect(e.errorCode).toBe("RateLimited");
+    expect("retryAfterMs" in e).toBe(false);
+    expect("MAX_RETRY_AFTER_MS" in barrel).toBe(false);
+    expect("DepositAddressError" in barrel).toBe(false);
+    expect(barrel.DEPOSIT_ADDRESS_ERROR_CODES).toHaveLength(5);
+    expect(barrel.isDepositAddressErrorCode("Unavailable")).toBe(true);
+    expect(barrel.isDepositAddressErrorCode("Paused")).toBe(true);
+  });
+});

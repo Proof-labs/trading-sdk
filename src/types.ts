@@ -1,4 +1,9 @@
 import type { ExecErrorInfo } from "./errors.js";
+import type {
+  OrderPlacement,
+  OrdersCancelledEvent,
+  OrdersPlacedEvent,
+} from "./order-lists.js";
 
 /** 20-byte account address (derived from Ed25519 public key). */
 export type Address = Uint8Array;
@@ -32,21 +37,32 @@ export enum TimeInForce {
 
 /**
  * Wire-format action type identifiers. Each value is a single byte.
- * Retired, never reassigned: 0x03 `OracleUpdate`, 0x12 `RunFundingTick`,
- * 0x14 `OracleUpdateComposite`, and 0x22 `ConfirmWithdrawalReceipt` /
- * 0x23 `FailWithdrawalReceipt` / 0x24 `AuthorizeWithdrawal` — the
- * receipt-era bridge actions that wire 13 replaced with the operator
- * votes (`VoteWithdrawalPaid` / `VoteDeposit`).
+ * Retired, never reassigned: 0x01 `PlaceOrder`, 0x02 `CancelOrder`, 0x03
+ * `OracleUpdate`, 0x04 `MarketOrder`, 0x12 `RunFundingTick`, 0x14
+ * `OracleUpdateComposite`, 0x17 `ClosePosition`, 0x18 `CancelClientOrder`,
+ * 0x22 `ConfirmWithdrawalReceipt`, 0x23 `FailWithdrawalReceipt`, 0x24
+ * `AuthorizeWithdrawal` and 0x2E `ClaimWithdrawalPayout`. Order batches are
+ * on 0x35-0x37; the single-order names stay as aliases of the batch byte
+ * they encode on. Bridge operators vote instead of submitting receipts.
  */
 export const ActionType = {
-  /** Place a limit order on the order book. */
-  PlaceOrder: 0x01,
-  /** Cancel an existing resting order. */
-  CancelOrder: 0x02,
+  /** Place 1 to {@link MAX_ORDERS_PER_BATCH} limit or market orders for one
+   *  account. */
+  PlaceOrders: 0x35,
+  /** One limit order: a `PlaceOrders` of one. */
+  PlaceOrder: 0x35,
+  /** One market order: a `PlaceOrders` of one market entry. */
+  MarketOrder: 0x35,
+  /** Cancel 1 to {@link MAX_ORDERS_PER_BATCH} resting orders by order ID. */
+  CancelOrders: 0x36,
+  /** One cancel by order ID: a `CancelOrders` of one. */
+  CancelOrder: 0x36,
+  /** Cancel 1 to {@link MAX_ORDERS_PER_BATCH} resting orders by client order ID. */
+  CancelClientOrders: 0x37,
+  /** One cancel by client order ID: a `CancelClientOrders` of one. */
+  CancelClientOrder: 0x37,
   /** Oracle-policy source observation relayed by the feeder. */
   SubmitOracleObservation: 0x2d,
-  /** Place a market order that crosses immediately. */
-  MarketOrder: 0x04,
   /** Credit USDC to an account (legacy, prefer ConfirmDeposit). */
   Deposit: 0x05,
   /** Debit USDC from an account (direct withdraw, checks margin). */
@@ -75,21 +91,22 @@ export const ActionType = {
   CreateSubAccount: 0x28,
   /** Move balance between a master and one of its sub-accounts (0x29). */
   SubAccountTransfer: 0x29,
-  /** Acquire the single-holder Solana payout lease on a pending withdrawal
-   *  (0x2e). Custody-authorized watchers only. */
-  ClaimWithdrawalPayout: 0x2e,
   /** One operator-registry member's vote to settle a pending withdrawal as
    *  `Paid` (0x30). Each member submits its own vote; the engine aggregates
    *  distinct signatures and settles at the roster's threshold. */
   VoteWithdrawalPaid: 0x30,
-  /** Record the Squads vault payout proposal a payout-lease holder created
-   *  for a pending withdrawal (0x31), while its lease is live.
-   *  Custody-authorized watchers only. */
+  /** One bridge operator's signed record of the Squads vault payout it
+   *  proposed for a pending withdrawal (0x31); the first record fills the
+   *  withdrawal's payout slot. */
   RecordWithdrawalPayout: 0x31,
   /** One operator-registry member's vote to credit one observed Solana
    *  deposit (0x32). Aggregated and settled like `VoteWithdrawalPaid`. */
   VoteDeposit: 0x32,
-  /** Clear a recorded payout after the registry quorum votes it dead (0x34). */
+  /** One operator's vote to pause the bridge (0x33); the roster threshold
+   *  pauses it, and only the admin quorum unpauses. */
+  VotePauseBridge: 0x33,
+  /** One operator's vote that a recorded payout is dead (0x34); the roster
+   *  threshold clears the withdrawal's payout slot. */
   VoteWithdrawalPayoutDead: 0x34,
   /** Update a subset of `MarketConfig` tunables on a live market (admin).
    *  Fee tiering, funding-rate cap tightening, position-limit updates
@@ -101,11 +118,6 @@ export const ActionType = {
    *  Engine takes max(market.im_bps, user_im_bps) on every IM check.
    *  BE-16. */
   SetUserMarketLeverage: 0x16,
-  /** Close an entire position by placing an opposite-side IOC order at
-   *  oracle±spread. Idempotent on already-closed positions. User-signed. */
-  ClosePosition: 0x17,
-  /** Cancel a resting order by owner-scoped client order id. */
-  CancelClientOrder: 0x18,
   /** Cancel all resting orders for an owner, optionally market-scoped. */
   CancelAllOrders: 0x19,
   /** Atomically cancel one resting order and place its replacement. */
@@ -150,7 +162,8 @@ export interface PlaceOrder {
    *  maker-side fills. Defaults to false. */
   postOnly?: boolean;
   /** When true, the order may only reduce an existing position. Same-side
-   *  orders are rejected (ReduceOnlyWouldIncrease, code 35); over-closing
+   *  orders, and orders with no position to reduce, are rejected
+   *  (ReduceOnlyRefused, code 35); over-closing
    *  is clamped to the position size. Defaults to false. */
   reduceOnly?: boolean;
   /**
@@ -186,6 +199,50 @@ export interface CancelClientOrder {
   owner: Address;
   /** Client-assigned order ID to cancel. */
   clientOrderId: bigint;
+}
+
+/** Most orders one batch (`PlaceOrders`, `CancelOrders`,
+ *  `CancelClientOrders`) carries; the wire refuses 0 or more than this. */
+export const MAX_ORDERS_PER_BATCH = 100;
+
+/** A limit order of a {@link PlaceOrders}: a {@link PlaceOrder} without its
+ *  owner. `kind` may be omitted. */
+export type LimitOrderEntry = Omit<PlaceOrder, "owner"> & { kind?: "limit" };
+
+/** A market order of a {@link PlaceOrders}: a {@link MarketOrder} without its
+ *  owner. */
+export type MarketOrderEntry = Omit<MarketOrder, "owner"> & { kind: "market" };
+
+/** One order of a {@link PlaceOrders}, limit or market. */
+export type OrderEntry = LimitOrderEntry | MarketOrderEntry;
+
+/** 1 to {@link MAX_ORDERS_PER_BATCH} limit or market orders for one account
+ *  under one signature and nonce (action `0x35`). Each runs in turn as its
+ *  own order would and stands or is refused on its own; the transaction
+ *  succeeds and `orders_placed` reports every order. */
+export interface PlaceOrders {
+  /** Account every order is placed for (20 bytes). */
+  owner: Address;
+  /** The orders, run in this order. */
+  orders: OrderEntry[];
+}
+
+/** Cancel 1 to {@link MAX_ORDERS_PER_BATCH} resting orders by order ID (action
+ *  `0x36`); each cancel stands or is refused on its own. */
+export interface CancelOrders {
+  /** Account address of the orders' owner (20 bytes). */
+  owner: Address;
+  /** Engine-assigned order IDs to cancel, in order. */
+  orderIds: bigint[];
+}
+
+/** Cancel 1 to {@link MAX_ORDERS_PER_BATCH} resting orders by client order ID
+ *  (action `0x37`); each cancel stands or is refused on its own. */
+export interface CancelClientOrders {
+  /** Account address of the orders' owner (20 bytes). */
+  owner: Address;
+  /** Client-assigned order IDs to cancel, in order. */
+  clientOrderIds: bigint[];
 }
 
 /** Cancel all resting orders for an account, optionally scoped to one market. */
@@ -243,7 +300,8 @@ export interface AmendOrder {
   newQuantity?: bigint | null;
 }
 
-/** Place a market order that crosses immediately against resting orders. */
+/** Place a market order that crosses immediately against resting orders:
+ *  immediate-or-cancel, sized level by level to what the account can afford. */
 export interface MarketOrder {
   /** Market identifier. */
   market: number;
@@ -264,6 +322,12 @@ export interface MarketOrder {
   stopLoss?: TriggerLimb | null;
   /** Optional take-profit limb; see {@link MarketOrder.stopLoss}. */
   takeProfit?: TriggerLimb | null;
+  /** Optional worst price: stops the walk through the book at this price.
+   *  Bounds fills, not admission. */
+  worstPrice?: bigint | null;
+  /** When true, only reduces the position: refused with no position or on
+   *  its side (code 35), clamped to the position's size. Defaults to false. */
+  reduceOnly?: boolean;
 }
 
 /**
@@ -432,144 +496,134 @@ export interface WithdrawalRecord {
   status: WithdrawalStatus;
   /** Block height at which the request was admitted. */
   requestHeight: bigint;
+  /** The bridge-vote upgrade quarantined this pending withdrawal: it held a
+   *  payout record of the retired lease model, so it refuses payout records
+   *  until operators resolve it. Set by the `/v2/bridge/*` reads only. */
+  quarantined?: boolean;
 }
 
 // ---------------------------------------------------------------------------
-// Bridge custody reads (`/v2/bridge/*` — wire 13)
+// Bridge custody reads (`/v2/bridge/*`)
 // ---------------------------------------------------------------------------
 
-/** The bridge's governance state (`/v2/bridge/status`). Payout
- *  configuration fields are absent while unset. */
-export type BridgeStatus = "Active" | "Paused" | "WithdrawalsFull";
+/** The bridge's state (`/v2/bridge/status`): paused, active with the
+ *  pending withdrawal count at or above the alert level
+ *  (`WithdrawalBacklog`, an alert, never a refusal), or active. */
+export type BridgeStatus = "Active" | "Paused" | "WithdrawalBacklog";
 
-/** One operator-registry member: its ed25519 verification key and the
- *  engine address it controls. `owner` is absent on a roster stored before
- *  wire 12 (that roster fails closed at the payout gates). */
+/** The governed Squads payout vault and its rent collector
+ *  (`/v2/bridge/payout-config`): what every operator checks the on-chain
+ *  multisig against before proposing or approving a payout. */
+export interface BridgePayoutConfig {
+  /** The Squads vault withdrawals pay from (32 bytes). Every payout record
+   *  must name it. */
+  payoutMultisig: Uint8Array;
+  /** The wallet the vault's rent refunds go to (32 bytes). */
+  opsWallet: Uint8Array;
+}
+
+/** One bridge operator: its ed25519 key, the operator's only identity. It
+ *  signs the operator's votes, pause votes and payout records. */
 export interface OperatorMember {
-  /** The member's 32-byte ed25519 verification key. */
+  /** The operator's 32-byte ed25519 verification key. */
   key: Uint8Array;
-  /** The 20-byte engine signer address this key controls. */
-  owner?: Address;
 }
 
 /** The operator receipt registry at one epoch
- *  (`/v2/bridge/registry[/{epoch}]`): the roster every payout gate and
- *  vote verifies against. */
+ *  (`/v2/bridge/registry[/{epoch}]`): the roster every vote and payout
+ *  record verifies against. */
 export interface OperatorRegistry {
-  /** The deployment every vote and payout report must match (32 bytes). */
+  /** The deployment every vote and payout record must name (32 bytes). */
   deploymentId: Uint8Array;
   /** The epoch this roster was pinned to. */
   epoch: bigint;
-  /** *m* — distinct operator members required. */
+  /** *m*: distinct operators required. */
   threshold: number;
   /** The roster, in registry index order. */
   members: OperatorMember[];
 }
 
-/** One member's vote on a pending bridge item: the verifying key that
- *  produced it and the signature itself, so a reader can re-verify without
- *  trusting the aggregation. */
-export interface BridgeVote {
-  /** The member's 32-byte ed25519 verification key. */
+/** What an operator attests about a withdrawal's recorded payout.
+ *  `Unknown` is a verdict a later engine added. */
+export type PayoutVerdict = "Paid" | "Dead" | "Unknown";
+
+/** One operator's vote on a pending withdrawal's recorded payout, with the
+ *  key and signature, so a reader can re-verify it without trusting the
+ *  aggregation. */
+export interface WithdrawalPayoutVote {
+  /** The operator's 32-byte ed25519 verification key. */
   voter: Uint8Array;
-  /** The member's 64-byte signature over the canonical vote message. */
-  signature: Uint8Array;
   registryEpoch: bigint;
-  dead: boolean;
+  verdict: PayoutVerdict;
+  /** The payout's Squads vault (32 bytes). */
   vault: Uint8Array;
   squadsTransactionIndex: number;
+  /** The operator's 64-byte signature over the vote message. */
+  signature: Uint8Array;
 }
 
-/** The Paid votes on one pending withdrawal: the binding epoch and one
- *  entry per distinct member. */
-export interface WithdrawalVotes {
-  /** The epoch every vote in `votes` is bound to. */
-  registryEpoch: bigint;
-  /** One entry per distinct member that voted. */
-  votes: BridgeVote[];
-}
-
-/** The Squads payout a lease holder reported for a pending withdrawal. */
+/** The Squads payout an operator recorded for a pending withdrawal. */
 export interface WithdrawalPayoutReport {
-  /** The reporting watcher's owner address (20 bytes). */
-  holder: Address;
+  /** The registry key that signed the record (32 bytes). */
+  recorder: Uint8Array;
   /** The Squads vault the payout pays from (32 bytes). */
   vault: Uint8Array;
   /** The recorded Squads vault-transaction index. */
   squadsTransactionIndex: number;
-  /** The registry epoch the report bound to. */
+  /** The registry epoch the payout proposal was made under. */
   registryEpoch: bigint;
+  /** Engine block time of the record, in Unix milliseconds. Operators
+   *  approve only after it, so the payout's execute is never older. */
+  recordedAtMs: bigint;
 }
 
-/** The payout lease on a pending withdrawal. */
-export interface WithdrawalPayoutLease {
-  /** The watcher that may sign the payout (20-byte owner address). */
-  holder: Address;
-  /** Height at which the claim was accepted. */
-  acquiredHeight: bigint;
-  /** Exclusive: the first height at which the lease no longer binds. */
-  expiresAtHeight: bigint;
-}
-
-/** A pending withdrawal with everything a peer member needs to act on it:
- *  the record, the live lease, the reported payout proposals and the Paid
- *  votes so far (`/v2/bridge/pending-withdrawals`). */
+/** A pending withdrawal with what an operator needs to act on it: the
+ *  record, the recorded payout and the votes so far
+ *  (`/v2/bridge/pending-withdrawals`). */
 export interface PendingWithdrawal {
   withdrawal: WithdrawalRecord;
-  /** The live payout lease, if one is held. */
-  lease?: WithdrawalPayoutLease;
-  /** The currently recorded Squads payout, if any. */
+  /** The recorded Squads payout, if any. */
   payout?: WithdrawalPayoutReport;
-  /** Votes on the current payout, both Paid and payout-dead. */
-  votes: BridgeVote[];
+  /** Votes on the recorded payout, Paid and Dead. */
+  votes: WithdrawalPayoutVote[];
 }
 
 /** One page of the pending-withdrawals read. `nextCursor` is the id to
- *  resume after (the last row's withdrawal id); `null` once the read
- *  walked past the last pending withdrawal. */
+ *  resume after (the last scanned withdrawal id); `null` once exhausted. */
 export interface PendingWithdrawalPage {
   rows: PendingWithdrawal[];
   /** Pass back as the route's `cursor` to continue; `null` = exhausted. */
   nextCursor: bigint | null;
 }
 
-/** One (owner, amount) reading of a pending deposit, with the distinct
- *  member votes backing that reading. */
-export interface PendingDepositObservation {
-  /** The receiving engine account this reading credits (20 bytes). */
-  owner: Address;
-  /** The observed amount in micro-USDC. */
-  amountMicroUsdc: bigint;
-  /** The votes backing THIS reading, one per distinct member. */
-  votes: BridgeVote[];
-}
-
-/** One member vote recorded for a pending deposit transfer. */
+/** One operator's vote on a pending deposit: the credit it observed. */
 export interface PendingDepositVote {
+  /** The operator's 32-byte ed25519 verification key. */
   voter: Uint8Array;
   registryEpoch: bigint;
+  /** The receiving engine account (20 bytes). */
   owner: Address;
   amountMicroUsdc: bigint;
+  /** The operator's 64-byte signature over the vote message. */
   signature: Uint8Array;
 }
 
-/** A pending deposit: the voted readings of one transfer identity and the
- *  aggregation so far (`/v2/bridge/pending-deposits`). Usually exactly one
- *  observation; more means members currently disagree, and the first
- *  reading to reach the roster threshold credits. */
+/** A pending deposit: one transfer identity and every operator's vote on
+ *  it (`/v2/bridge/pending-deposits`). Votes for different credits mean
+ *  the operators currently disagree; the first credit to reach the roster
+ *  threshold is agreed. */
 export interface PendingDeposit {
-  /** The transfer's Solana signature (64 bytes) — half of the dedup
-   *  identity; the other half rides the store key this row was read from. */
+  /** The transfer's Solana signature (64 bytes), half of the identity. */
   solanaTxSig: Uint8Array;
-  /** Transfer instruction locator; absent represents the legacy identity. */
+  /** Transfer instruction locator, the other half; absent is the legacy
+   *  identity. */
   locator?: DepositLocator | null;
-  /** Member votes recorded for this transfer identity. */
   votes: PendingDepositVote[];
 }
 
-/** One page of the pending-deposits read. `nextCursor` is an opaque
- *  resumption token (the route hex-encodes the raw store key); `null` once
- *  exhausted. Never parse it — pass it back verbatim. */
+/** One page of the pending-deposits read. `nextCursor` is the last scanned
+ *  transfer identity, already in the route's cursor form (lowercase hex);
+ *  `null` once exhausted. Pass it back verbatim. */
 export interface PendingDepositPage {
   rows: PendingDeposit[];
   /** Pass back as the route's `cursor` to continue; `null` = exhausted. */
@@ -744,37 +798,46 @@ export interface SubAccountTransfer {
   amount: bigint;
 }
 
-/** Acquire the single-holder Solana payout lease on a pending withdrawal
- *  (0x2e). `holder` is the claiming watcher's own address. */
-export interface ClaimWithdrawalPayout {
-  withdrawalId: bigint;
-  holder: Address;
-}
-
-/** Record the Squads vault payout a payout-lease holder proposed for a
- *  pending withdrawal (0x31), while its lease is live. Under the vote model
- *  withdrawals pay from a Squads v4 vault the operator registry members
- *  jointly control: the lease holder proposes the vault transaction, peer
- *  members verify it against the engine's withdrawal record, approve and
- *  execute. Every distinct (vault, index) report is retained until
- *  settlement. */
+/** One bridge operator's record of the Squads vault payout it proposed for
+ *  a pending withdrawal (0x31). Withdrawals pay from a Squads v4 vault the
+ *  operators jointly control: one operator proposes the vault transaction
+ *  and records it here; the others verify it against the engine's
+ *  withdrawal record, approve and execute, then vote `Paid`. The first
+ *  record fills the withdrawal's payout slot, and a threshold of dead votes
+ *  clears it. Signed by the operator's registry key, so any envelope signer
+ *  may submit it; build it with `signRecordWithdrawalPayout`. */
 export interface RecordWithdrawalPayout {
   withdrawalId: bigint;
-  /** The reporting watcher's own address; must equal the envelope signer,
-   *  the withdrawal's payout lease holder, and an operator-registry
-   *  member's owner. */
-  holder: Address;
   /** The Squads vault the payout pays from (32 bytes); must equal the
-   *  governed `payoutMultisig`, so a report can never pin payout evidence to
-   *  a vault the quorum has not configured. */
+   *  governed `payoutMultisig`. */
   vault: Uint8Array;
-  /** The Squads vault-transaction index of the recorded payout proposal,
-   *  stored byte-exact as reported. */
+  /** The Squads vault-transaction index of the payout proposal. */
   squadsTransactionIndex: number;
-  /** The registry epoch the report binds to; must be the current one — a
-   *  rotation is a full-vault migration, and a successor re-claims and
-   *  re-records under the new roster. */
+  /** The bridge deployment, as the registry names it (32 bytes). */
+  deploymentId: Uint8Array;
+  /** The chain id the envelope is signed for (32 bytes). */
+  chainId: Uint8Array;
+  /** The registry epoch the proposal was made under: at most the current
+   *  one, judged by that epoch's roster while it is retained. */
   registryEpoch: bigint;
+  /** The recording operator's 64-byte ed25519 signature over the record
+   *  message. */
+  signature: Uint8Array;
+}
+
+/** One operator's vote to pause the bridge (0x33). The roster threshold of
+ *  votes pauses it; only the admin quorum's `UnpauseBridge` lifts it. Build
+ *  it with `signVotePauseBridge`. */
+export interface VotePauseBridge {
+  /** Unix ms the operator signed at: no later than the executing block,
+   *  after the bridge's last unpause, and counted for the vote's lifetime
+   *  from here, so a vote cannot be replayed into a later pause. */
+  signedAtMs: bigint;
+  deploymentId: Uint8Array;
+  chainId: Uint8Array;
+  /** Must be the current registry epoch. */
+  registryEpoch: bigint;
+  signature: Uint8Array;
 }
 
 /**
@@ -782,10 +845,9 @@ export interface RecordWithdrawalPayout {
  * Individually submittable — no combined proof: the engine aggregates
  * distinct member signatures and settles at the roster's threshold.
  * `signature` is a 64-byte ed25519 signature over the canonical vote
- * message (`PROOF_BRIDGE_VOTE_V1 || kind || …`, see `bridge_votes` in the
- * Rust core and `voteWithdrawalPaidMessage` in the Python SDK) — NOT the
- * envelope signing convention; the envelope signer is an untrusted
- * courier. Build the signed payload with the `bridge_votes` helpers.
+ * message (`PROOF_BRIDGE_VOTE_V1 || kind || …`), not the envelope signing
+ * convention: the envelope signer is an untrusted courier. Build it with
+ * `signVoteWithdrawalPaid`.
  */
 export interface VoteWithdrawalPaid {
   /** Engine-assigned withdrawal ID. */
@@ -809,7 +871,8 @@ export interface VoteWithdrawalPaid {
   signature: Uint8Array;
 }
 
-/** One registry member's vote to clear a payout rejected by Squads (0x33). */
+/** One registry member's vote that a recorded payout was rejected on Squads
+ *  (0x34); the roster threshold clears the payout slot. */
 export interface VoteWithdrawalPayoutDead {
   withdrawalId: bigint;
   vault: Uint8Array;
@@ -946,8 +1009,9 @@ export interface EventInfo {
  * chain we couldn't rebase. This is the engine-level lever to tighten
  * parameters on a running market.
  *
- * `kind` and `szDecimals` remain immutable. Margin ratios may only be
- * tightened by the engine; lowering either live risk floor is rejected.
+ * `kind` and `szDecimals` remain immutable. Lowering either margin ratio
+ * needs a `MarketParams` grant for the signing key; the admin quorum
+ * (`MarketSettingsChange`) needs none.
  */
 export interface UpdateMarketFees {
   market: number;
@@ -982,12 +1046,14 @@ export interface UpdateMarketFees {
   netDeltaMargin?: boolean | null;
   /**
    * New tick size in micro-USDC. Omit (or null) to leave unchanged.
-   * 0 disables the tick gate (any price accepted). BE-48.
+   * 0 means no tick gate (any price accepted); a market that has one
+   * cannot be set back to 0. BE-48.
    */
   tickSize?: bigint | null;
   /**
    * New lot size in contracts. Omit (or null) to leave unchanged.
-   * 0 disables the lot gate (any quantity accepted). BE-48.
+   * 0 means no lot gate (any quantity accepted); a market that has one
+   * cannot be set back to 0. BE-48.
    */
   lotSize?: bigint | null;
   /**
@@ -1025,19 +1091,20 @@ export interface UpdateMarketFees {
    */
   feeTiers?: FeeTier[] | null;
   /**
-   * New initial margin ratio in basis points. Omit to leave unchanged.
-   * Must be greater than or equal to the current market value.
+   * New initial margin ratio in basis points, 1 to 10,000. Omit to leave
+   * unchanged. Lowering it needs a `MarketParams` grant for the signing
+   * key; the admin quorum needs none.
    */
   imBps?: number | null;
   /**
    * New maintenance margin ratio in basis points. Omit to leave unchanged.
-   * Must be greater than or equal to the current value, positive, and no
-   * greater than the resulting `imBps`.
+   * Positive and no greater than the resulting `imBps`; lowering it follows
+   * the same rule as `imBps`.
    */
   mmBps?: number | null;
   /**
-   * New aggregate open-interest cap in contracts. Omit to leave unchanged;
-   * 0 disables the cap.
+   * New aggregate open-interest cap in contracts. Omit to leave unchanged.
+   * Must be greater than 0: the cap cannot be removed.
    */
   maxOpenInterest?: bigint | null;
   /**
@@ -1076,17 +1143,6 @@ export interface SetUserMarketLeverage {
    *  otherwise must be `>= market.imBps` (engine rejects with
    *  `UserLeverageBelowMarketIm`, code 38). */
   userImBps: number;
-}
-
-/** Close an entire position on a market by placing an opposite-side IOC
- *  order at oracle±spread. Idempotent: returns code=0 without events if
- *  no position exists. User-signed (signer == owner). S49. */
-export interface ClosePosition {
-  /** Market identifier to close the position on. */
-  market: number;
-  /** Account address of the position owner (20 bytes). Must equal the
-   *  envelope signer's derived address. */
-  owner: Address;
 }
 
 /** One leg of a native all-or-revert basket. The engine executes every leg as
@@ -1131,6 +1187,9 @@ export type TraderAction =
   | { type: "PlaceOrder"; data: PlaceOrder }
   | { type: "CancelOrder"; data: CancelOrder }
   | { type: "CancelClientOrder"; data: CancelClientOrder }
+  | { type: "PlaceOrders"; data: PlaceOrders }
+  | { type: "CancelOrders"; data: CancelOrders }
+  | { type: "CancelClientOrders"; data: CancelClientOrders }
   | { type: "CancelAllOrders"; data: CancelAllOrders }
   | { type: "CancelReplaceOrder"; data: CancelReplaceOrder }
   | { type: "AmendOrder"; data: AmendOrder }
@@ -1140,7 +1199,6 @@ export type TraderAction =
   | { type: "ApproveAgent"; data: ApproveAgent }
   | { type: "RevokeAgent"; data: RevokeAgent }
   | { type: "SetUserMarketLeverage"; data: SetUserMarketLeverage }
-  | { type: "ClosePosition"; data: ClosePosition }
   | { type: "SetPositionTriggers"; data: SetPositionTriggers }
   | { type: "CancelPositionTriggers"; data: CancelPositionTriggers }
   | { type: "CreateSubAccount"; data: CreateSubAccount }
@@ -1164,10 +1222,10 @@ export type OperatorAction =
   | { type: "ConfirmWithdrawal"; data: ConfirmWithdrawal }
   | { type: "FailWithdrawal"; data: FailWithdrawal }
   | { type: "ResolveEvent"; data: ResolveEvent }
-  | { type: "ClaimWithdrawalPayout"; data: ClaimWithdrawalPayout }
   | { type: "VoteWithdrawalPaid"; data: VoteWithdrawalPaid }
   | { type: "RecordWithdrawalPayout"; data: RecordWithdrawalPayout }
   | { type: "VoteDeposit"; data: VoteDeposit }
+  | { type: "VotePauseBridge"; data: VotePauseBridge }
   | { type: "VoteWithdrawalPayoutDead"; data: VoteWithdrawalPayoutDead }
   | { type: "UpdateMarketFees"; data: UpdateMarketFees };
 
@@ -1220,16 +1278,13 @@ export interface CancelAllOrdersForAccount {
 
 /** One operator-authority allowlist an `UpdateAuthoritySet` action targets.
  *  Externally tagged on the wire, so the domain arrives as this bare
- *  string, never a numeric discriminant. `Custody`/`MarketParams`/
- *  `ScheduledOps` are the capability-split sets; `Oracle`/`CexComposite`/
- *  `Relayer` are the genesis-seeded presence sets. */
-export type AuthorityDomain =
-  | "Oracle"
-  | "CexComposite"
-  | "Relayer"
-  | "Custody"
-  | "MarketParams"
-  | "ScheduledOps";
+ *  string, never a numeric discriminant. `Custody`/`MarketParams` are the
+ *  capability sets; `Oracle`/`Relayer` are the genesis-seeded presence sets. */
+export type AuthorityDomain = "Oracle" | "Relayer" | "Custody" | "MarketParams";
+
+/** A retired authority list. The engine refuses any change naming one; the
+ *  names still decode from historical proposals. */
+export type RetiredAuthorityDomain = "CexComposite" | "ScheduledOps";
 
 /**
  * Governance addition/removal of members in one privileged authorization
@@ -1310,13 +1365,36 @@ export interface SetOperatorReceiptRegistry {
   epoch: bigint;
   /** *m* — distinct operator members required; 1..=roster length. */
   threshold: number;
-  /** The *n* operator ed25519 verification keys (32 bytes each). */
+  /** The *n* operators' ed25519 verification keys (32 bytes each), in
+   *  registry index order. Each is one operator's only identity: it signs
+   *  the operator's votes, pause votes and payout records. Non-empty and
+   *  duplicate-free. */
   operatorKeys: Uint8Array[];
-  /** The *n* operators' engine signer addresses (20 bytes each), in the
-   *  SAME registry index order as `operatorKeys`: `operatorOwners[i]` is
-   *  the chain account `operatorKeys[i]` controls. The payout-lease and
-   *  payout-record gates admit an address only from here. All non-zero. */
-  operatorOwners: Address[];
+}
+
+/** The governed Squads payout vault (inner tag 0x21). Every payout record
+ *  must name `payoutMultisig`, so no withdrawal can be voted `Paid` until it
+ *  is set. */
+export interface SetBridgePayoutConfig {
+  /** The Squads v4 vault withdrawals pay from (32 bytes): the multisig the
+   *  registry's operators jointly control. */
+  payoutMultisig: Uint8Array;
+  /** The wallet that collects the vault's rent refunds (32 bytes); must
+   *  differ from `payoutMultisig`. */
+  opsWallet: Uint8Array;
+}
+
+/** The caps on what operator votes may credit through `VoteDeposit`
+ *  (inner tag 0x22), a ledger separate from `SetDepositLimit`. A deposit
+ *  over a cap stays queued or parked, never credited. */
+export interface SetDepositReceiptLimit {
+  /** Largest single vote-credited deposit in micro-USDC; 0 disables it. */
+  perReceiptMaxMicroUsdc: bigint;
+  /** Most all vote-credited deposits may add in any rolling `windowSecs`,
+   *  in micro-USDC; 0 disables it. */
+  windowCapMicroUsdc: bigint;
+  /** Rolling-window length in seconds; at least 1. */
+  windowSecs: number;
 }
 
 /** One insurance pool's share of a funding or withdrawal transfer. */
@@ -1374,9 +1452,12 @@ export interface SetMarginOffsetPolicy {
   pairs: MarginOffsetPair[];
 }
 
-/** Settles a price event whose resolution window closed unresolved
- *  (inner tag 30), on the outcome the quorum names. `Yes` or `No` only:
- *  the encoder and the engine refuse `Void`. */
+/** Settles an unresolved event on the outcome the quorum names (inner tag
+ *  30): a price event (`MarketOracle`) once its resolution window has
+ *  closed and, on an engine whose `SettleEvent` accepts it, an event without
+ *  an oracle rule (`RelayerAttested`, or no source) from its settlement time;
+ *  an older engine refuses that event as not a price event. `Yes` or `No`
+ *  only: the encoder and the engine refuse `Void`. */
 export interface SettleEvent {
   eventId: number;
   outcome: Outcome;
@@ -1391,6 +1472,45 @@ export type MarketStatus = "Trading" | "ReduceOnly" | "Halted" | "Delisted";
 export interface SetMarketStatus {
   market: number;
   status: MarketStatus;
+}
+
+/** The settings a quorum `UpdateMarketFees` sets on `market`: every field of
+ *  {@link UpdateMarketFees} but `signer`, with the same meaning, because the
+ *  quorum is the authorization. An omitted or `null` field keeps its
+ *  setting. The quorum may also lower a margin rate, which a key may do only
+ *  with a `MarketParams` grant. */
+export type MarketSettingsChange = Omit<UpdateMarketFees, "signer">;
+
+/** Changes a live market's settings through the admin quorum (inner tag 35).
+ *  The engine refuses the proposal with code 155 (`MarketSettingsChanged`)
+ *  unless `predecessor` is the market's settings sequence when it is
+ *  proposed, and fails it with 155 at execution if another settings change
+ *  landed in between. */
+export interface QuorumUpdateMarketFees {
+  /** The market's settings sequence when proposed (`MarketSettingsSequence`
+   *  in proof-wire): `settingsSequence` in the version 2 markets snapshot
+   *  (`MarketView`). */
+  predecessor: bigint;
+  change: MarketSettingsChange;
+}
+
+/** Sets one account's taker and maker fee through the admin quorum (inner
+ *  tag 36): the per-account fee tier a market maker trades at. The quorum is
+ *  the authorization, so the change names no signer. The engine refuses a
+ *  fee above 10,000 basis points that is not the revert sentinel
+ *  `0xFFFF_FFFF` (code 42), and a `seq` at or below the account's stored one
+ *  (code 43), at proposal and again at execution. */
+export interface AccountFeeOverrideChange {
+  /** The account whose fees change (20-byte address). */
+  account: Address;
+  /** Taker fee in basis points, `0..=10_000`, or `0xFFFF_FFFF` to return
+   *  the account's taker fills to the market's fee. */
+  takerFeeBps: number;
+  /** Maker fee in basis points, `0..=10_000`, or `0xFFFF_FFFF` to return
+   *  the account's maker fills to the market's fee. */
+  makerFeeBps: number;
+  /** Replay guard: must exceed the account's stored sequence. */
+  seq: bigint;
 }
 
 /** Voids an event (inner tag 29): every binary and conditional on it
@@ -1466,6 +1586,8 @@ export type AdminAction =
   | { kind: "VoidEvent"; value: VoidEvent }
   | { kind: "SettleEvent"; value: SettleEvent }
   | { kind: "SetMarketStatus"; value: SetMarketStatus }
+  | { kind: "UpdateMarketFees"; value: QuorumUpdateMarketFees }
+  | { kind: "SetAccountFeeOverride"; value: AccountFeeOverrideChange }
   | { kind: "SetOracleGuards"; value: SetOracleGuards }
   | { kind: "CancelAllOrdersForAccount"; value: CancelAllOrdersForAccount }
   | { kind: "ConfigureOraclePolicy"; value: ConfigureOraclePolicy }
@@ -1478,9 +1600,13 @@ export type AdminAction =
   | { kind: "SetDepositLimit"; value: SetDepositLimit }
   | { kind: "SetOperatorReceiptRegistry"; value: SetOperatorReceiptRegistry }
   | { kind: "SetLiquidationConfig"; value: SetLiquidationConfig }
-  // Unit variant — no fields; lifts a bridge pause under multisig
-  // authorization. Serializes as the bare string `"UnpauseBridge"`.
+  // Unit variants: no fields; each serializes as its bare name. The
+  // quorum pauses or unpauses the bridge; operators can also pause it by
+  // vote (`VotePauseBridge`), but only the quorum unpauses.
+  | { kind: "PauseBridge" }
   | { kind: "UnpauseBridge" }
+  | { kind: "SetBridgePayoutConfig"; value: SetBridgePayoutConfig }
+  | { kind: "SetDepositReceiptLimit"; value: SetDepositReceiptLimit }
   | { kind: "UpdateAuthoritySet"; value: UpdateAuthoritySet }
   | { kind: "ScheduleUpgrade"; value: ScheduleUpgrade }
   | { kind: "CancelUpgrade"; value: CancelUpgrade };
@@ -1492,8 +1618,18 @@ export type RetiredAdminAction = {
   value: RetiredTriggerMarketConfig;
 };
 
+/** An `UpdateAuthoritySet` naming a retired list: still decodable from
+ * historical proposals, never submittable. */
+export type RetiredAuthoritySetUpdate = {
+  kind: "UpdateAuthoritySet";
+  value: Omit<UpdateAuthoritySet, "domain"> & {
+    domain: RetiredAuthorityDomain;
+  };
+};
+
 /** Historical proposals may contain retired actions; these cannot be submitted. */
-export type DecodedAdminAction = AdminAction | RetiredAdminAction;
+export type DecodedAdminAction =
+  AdminAction | RetiredAdminAction | RetiredAuthoritySetUpdate;
 
 /** Authenticated relay attestation, not a cryptographic provider-proof verifier.
  * Price and confidence are integers in the policy's normalized micro unit. */
@@ -1654,7 +1790,11 @@ export interface NodeVersion {
 export interface AdminSignerRegistry {
   /** Monotone, starts at 1, never reused; a rotation assigns +1. */
   version: bigint;
-  /** Approvals required to execute a proposal (`2 <= threshold <= members`). */
+  /** The roster's single approval count. From the engine release with
+   *  exchange #1593, each proposal takes its own threshold from its action's
+   *  severity (stop 1, low impact 2, high impact 3, with low and high never
+   *  below this count, and never more than the roster has members) and
+   *  carries it as `ProposalDisplayInfo.threshold`. */
   threshold: number;
   /** Canonically sorted, duplicate-free roster (each a 20-byte address). */
   members: Address[];
@@ -1662,18 +1802,16 @@ export interface AdminSignerRegistry {
 
 /**
  * The engine's privileged authorization sets, as read from
- * `GET /v1/admin/authorities` (engine `AuthoritiesSnapshot`, field order
- * relayer, oracle, cex_composite, custody, market_params, scheduled_ops).
- * Each is a list of 20-byte addresses. An empty list is a real chain state:
- * no signer holds that authority.
+ * `GET /v1/admin/authorities`. Each is a list of 20-byte addresses. An empty
+ * list is a real chain state: no signer holds that authority. The engine's
+ * response still carries the retired composite-feeder and
+ * scheduled-operations slots, always empty; they are decoded and dropped.
  */
 export interface AuthoritiesSnapshot {
   relayer: Address[];
   oracle: Address[];
-  cexComposite: Address[];
   custody: Address[];
   marketParams: Address[];
-  scheduledOps: Address[];
 }
 
 /** Why a pending proposal expired. */
@@ -1714,7 +1852,9 @@ export interface ProposalDisplayInfo {
   statusEffective: ProposalStatus;
   /** Registry version the proposal was created under. */
   registryVersion: bigint;
-  /** Approvals required, captured at creation. */
+  /** Approvals this proposal needs, resolved from its action's severity
+   *  when it was made. Proposals in one registry can need different counts,
+   *  so use this, not the registry's `threshold`. */
   threshold: number;
   proposer: Address;
   /** Distinct approving members. The proposer counts as approval #1. */
@@ -1746,7 +1886,9 @@ export interface ProposalPage {
 // Event types (emitted by engine, delivered via ABCI/WebSocket)
 // ---------------------------------------------------------------------------
 
-/** Emitted when a limit order is placed on the order book. All string fields are stringified numbers. */
+/** Retired: no longer emitted, replaced by `orders_placed`
+ *  ({@link OrdersPlacedEvent}); kept so stored history reads. All string
+ *  fields are stringified numbers. */
 export interface OrderPlacedEvent {
   type: "OrderPlaced";
   /** Engine-assigned order ID. */
@@ -1765,7 +1907,8 @@ export interface OrderPlacedEvent {
   clientOrderId: string;
 }
 
-/** Emitted when an order is cancelled. */
+/** Retired: no longer emitted, replaced by `orders_cancelled`
+ *  ({@link OrdersCancelledEvent}); kept so stored history reads. */
 export interface OrderCancelledEvent {
   type: "OrderCancelled";
   /** Engine-assigned order ID. */
@@ -1937,9 +2080,10 @@ export interface PositionUpdatedEvent {
   entryPrice: string;
   /** Absolute position size in contracts (integer lots). */
   size: string;
-  /** PnL this update booked to cash without a fill, in microUSDC (signed):
-   *  a gain realized in place to pay a resolution deficit. "0" for every
-   *  other update. */
+  /** Gross PnL this update realized, in microUSDC (signed): the closed part
+   *  of a partial close or of an insurance-fund takeover netting, or a gain
+   *  realized in place to pay a resolution deficit. Its closed funding debt
+   *  is reported in `FundingSettled`. "0" when nothing is closed. */
   realizedPnl: string;
 }
 
@@ -2083,18 +2227,9 @@ export interface AgentRevokedEvent {
 }
 
 /**
- * Emitted exactly once at the end of every market-order tx that passes
- * envelope checks, regardless of how many fills happened.
- *
- * This is the authoritative "did my market order do anything?" signal:
- *   - `filledQuantity == requestedQuantity`  → fully filled
- *   - `0 < filledQuantity < requestedQuantity` → partial fill, IOC remainder dropped
- *   - `filledQuantity == 0` → no counterparty (or all counterparties were
- *      the taker themselves and got rejected by self-match prevention)
- *
- * Without this event, callers would have to count downstream `TradeExecuted`
- * events and could not distinguish "no counterparty" from "trade events
- * arrived in a different stream view".
+ * Retired: no longer emitted. An order that never rests is an `executed`
+ * entry of `orders_placed` ({@link OrdersPlacedEvent}) with the same
+ * requested and filled quantity; kept so stored history reads.
  */
 export interface MarketOrderProcessedEvent {
   type: "MarketOrderProcessed";
@@ -2128,6 +2263,8 @@ export interface OrderbookLevelUpdatedEvent {
 
 /** Union of all exchange events. */
 export type ExchangeEvent =
+  | OrdersPlacedEvent
+  | OrdersCancelledEvent
   | OrderPlacedEvent
   | OrderCancelledEvent
   | TradeExecutedEvent
@@ -2171,8 +2308,12 @@ export type ExchangeEvent =
  * - `"timeout"`   — no final chain verdict is available yet (`code === -1`):
  *                   either the gateway returned a hash-only ambiguous response
  *                   or inclusion polling expired. The tx may still land.
+ * - `"unreadable"`: the tx executed with code 0 (`height` set), but its order
+ *                   event did not decode (`code === -1`). What each order did
+ *                   is unknown; reconcile by `hash` and never resubmit.
  */
-export type TxOutcome = "ok" | "engine" | "transport" | "timeout";
+export type TxOutcome =
+  "ok" | "engine" | "transport" | "timeout" | "unreadable";
 
 /**
  * The gateway's machine-readable `errorCode` on a refusal (`status:
@@ -2205,7 +2346,8 @@ export interface TxResult {
   /**
    * Status code. `0` on success; the engine `ExecError` code on
    * `outcome === "engine"`; a synthesized HTTP status on `"transport"`; `-1` on
-   * `"timeout"`. Retained for back-compat with `result.code === 0` checks.
+   * `"timeout"` and `"unreadable"`. Retained for back-compat with
+   * `result.code === 0` checks.
    */
   code: number;
   /**
@@ -2237,6 +2379,13 @@ export interface TxResult {
   /** ABCI events emitted by the transaction. */
   events?: TxEvent[];
 }
+
+/** What `ExchangeClient.closePosition` did: `sent` carries the close's
+ *  transaction and its order's outcome; `nothingToClose` means the account held no position on the
+ *  market, so nothing was sent. */
+export type CloseOutcome =
+  | { kind: "sent"; tx: TxResult; order: OrderPlacement | null }
+  | { kind: "nothingToClose" };
 
 /** A single ABCI event with key-value attributes. */
 export interface TxEvent {
