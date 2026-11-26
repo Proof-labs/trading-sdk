@@ -19,7 +19,9 @@ fn consumers_can_match_account_directions_without_a_wire_dependency() {
     let bytes: Vec<u8> = include_str!("../../../conformance/account-v2.hex")
         .trim()
         .as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             u8::from_str_radix(std::str::from_utf8(pair).expect("fixture hex is ASCII"), 16)
                 .expect("fixture hex is valid")
