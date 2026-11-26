@@ -99,7 +99,7 @@ export async function signVoteWithdrawalPaid(
   const fields = { ...payout, ...binding };
   return {
     ...fields,
-    signature: await sign(signer, { kind: "withdrawalPaid", ...fields }),
+    signature: await sign(signer, { ...fields, kind: "withdrawalPaid" }),
   };
 }
 
@@ -113,7 +113,7 @@ export async function signRecordWithdrawalPayout(
   const fields = { ...payout, ...binding };
   return {
     ...fields,
-    signature: await sign(signer, { kind: "payoutRecord", ...fields }),
+    signature: await sign(signer, { ...fields, kind: "payoutRecord" }),
   };
 }
 
@@ -127,7 +127,7 @@ export async function signVoteWithdrawalPayoutDead(
   const fields = { ...payout, ...binding };
   return {
     ...fields,
-    signature: await sign(signer, { kind: "withdrawalPayoutDead", ...fields }),
+    signature: await sign(signer, { ...fields, kind: "withdrawalPayoutDead" }),
   };
 }
 
@@ -144,7 +144,7 @@ export async function signVoteDeposit(
   const fields = { ...deposit, ...binding };
   return {
     ...fields,
-    signature: await sign(signer, { kind: "deposit", ...fields }),
+    signature: await sign(signer, { ...fields, kind: "deposit" }),
   };
 }
 
@@ -159,7 +159,7 @@ export async function signVotePauseBridge(
   const fields = { signedAtMs, ...binding };
   return {
     ...fields,
-    signature: await sign(signer, { kind: "pauseBridge", ...fields }),
+    signature: await sign(signer, { ...fields, kind: "pauseBridge" }),
   };
 }
 
