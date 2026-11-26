@@ -17,9 +17,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Breaking, all SDKs:** `SetOperatorReceiptRegistry` carries only
   `operatorKeys`, one per operator; TypeScript refuses a key named twice.
 - **Rust and the conformance runners:** proof-wire is pinned by full commit
-  hash to exchange `5b35372f`, the tree exchange release 2.29.0 (protocol
-  17.0, wire 14.0.0) is cut from. The pin moves to the v14.0.0 tag commit on
-  Proof-labs/wire once that release publishes.
+  hash to `0f6231a`, the v14.0.0 tag commit on Proof-labs/wire (exchange
+  release 2.29.0, protocol 17.0).
 - **Breaking, all SDKs (needs proof-wire 14):** a liquidation configuration
   carries `fundLimits` (`fund_limits` in Rust and Python): the most gross
   notional a pool's insurance fund holds after a takeover, `grossBps` over all
