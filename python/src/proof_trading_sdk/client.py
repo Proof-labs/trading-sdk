@@ -1304,8 +1304,28 @@ class ExchangeClient:
             "squads_transaction_index": self._bridge_uint(
                 value.get("squads_transaction_index"), "squads_transaction_index"
             ),
+            "signed_at_ms": self._bridge_uint(value.get("signed_at_ms"), "signed_at_ms"),
             "signature": self._bridge_bytes(value.get("signature"), 64, "signature"),
         }
+
+    def _cleared_payouts(self, value: t.Any) -> list[dict[str, t.Any]]:
+        """A row's ``cleared_payouts``; the view's serde default reads an
+        absent list as none cleared."""
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise CodecError("bridge decode: cleared_payouts (expected a list)")
+        cleared: list[dict[str, t.Any]] = []
+        for payout in value:
+            if not isinstance(payout, dict):
+                raise CodecError("bridge decode: cleared payout (expected a field map)")
+            cleared.append({
+                "vault": self._bridge_bytes(payout.get("vault"), 32, "vault"),
+                "squads_transaction_index": self._bridge_uint(
+                    payout.get("squads_transaction_index"), "squads_transaction_index"
+                ),
+            })
+        return cleared
 
     def bridge_status(self) -> str:
         """The bridge's state (`/v2/bridge/status`): ``"Active"``,
@@ -1355,7 +1375,9 @@ class ExchangeClient:
         self, cursor: int | None = None, limit: int | None = None
     ) -> dict[str, t.Any]:
         """One page of pending withdrawals (`/v2/bridge/pending-withdrawals`)
-        with their recorded payout and votes so far. ``cursor`` is the
+        with their recorded payout, votes so far and the payouts a Dead
+        threshold cleared (``cleared_payouts``), which a Paid vote may still
+        name. ``cursor`` is the
         previous page's ``next_cursor`` (the last scanned withdrawal id);
         ``None`` starts from the first. The status reads ``"Pending"``,
         ``"Completed"``, ``"Failed"`` or ``"Unknown"``, as in TypeScript.
@@ -1422,6 +1444,7 @@ class ExchangeClient:
             if not isinstance(vote_rows, list):
                 raise CodecError("bridge decode: votes (expected a list)")
             decoded["votes"] = [self._payout_vote(v) for v in vote_rows]
+            decoded["cleared_payouts"] = self._cleared_payouts(row.get("cleared_payouts"))
             rows.append(decoded)
         next_cursor = raw.get("next_cursor")
         return {
@@ -1463,6 +1486,7 @@ class ExchangeClient:
                     "registry_epoch": self._bridge_uint(vote.get("registry_epoch"), "registry_epoch"),
                     "owner": self._bridge_bytes(vote.get("owner"), 20, "owner"),
                     "amount_micro_usdc": self._bridge_uint(vote.get("amount_micro_usdc"), "amount_micro_usdc"),
+                    "signed_at_ms": self._bridge_uint(vote.get("signed_at_ms"), "signed_at_ms"),
                     "signature": self._bridge_bytes(vote.get("signature"), 64, "signature"),
                 })
             rows.append(
@@ -1502,6 +1526,7 @@ class ExchangeClient:
     _PARK_CAUSES = {
         "over_per_receipt_max": "OverPerReceiptMax",
         "over_window_cap": "OverWindowCap",
+        "balance_overflow": "BalanceOverflow",
         "unknown": "Unknown",
     }
 

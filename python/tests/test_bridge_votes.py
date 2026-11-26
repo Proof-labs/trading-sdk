@@ -47,6 +47,12 @@ BRIDGE_VOTE_KIND_PAUSE = 6
 DEPLOYMENT = b"\xa1" * 32
 CHAIN = b"\xc7" * 32
 VAULT = b"\xb2" * 32
+SIGNED_AT = 1_700_000_000_123
+
+
+def _tail(epoch: int, signed_at_ms: int = SIGNED_AT) -> bytes:
+    """The signed tail every bridge message ends in."""
+    return DEPLOYMENT + CHAIN + epoch.to_bytes(8, "big") + signed_at_ms.to_bytes(8, "big")
 
 
 class _Key:
@@ -70,23 +76,21 @@ class _Key:
 
 
 def test_withdrawal_vote_preimage_is_the_documented_layout():
-    message = vote_withdrawal_paid_message(777, VAULT, 11, DEPLOYMENT, CHAIN, 3)
+    message = vote_withdrawal_paid_message(777, VAULT, 11, DEPLOYMENT, CHAIN, 3, SIGNED_AT)
     assert message == (
         b"PROOF_BRIDGE_VOTE_V1"
         + bytes([BRIDGE_VOTE_KIND_WITHDRAWAL_PAID])
         + (777).to_bytes(8, "big")
         + VAULT
         + (11).to_bytes(4, "big")
-        + DEPLOYMENT
-        + CHAIN
-        + (3).to_bytes(8, "big")
+        + _tail(3)
     )
 
 
 def test_deposit_vote_preimage_carries_the_locator_suffix():
     locator = actions.DepositLocator(top_index=2, inner_index=5)
     message = vote_deposit_message(
-        b"\x11" * 20, 1_000_000, b"\x22" * 64, locator, DEPLOYMENT, CHAIN, 9
+        b"\x11" * 20, 1_000_000, b"\x22" * 64, locator, DEPLOYMENT, CHAIN, 9, SIGNED_AT
     )
     assert message == (
         BRIDGE_VOTE_DOMAIN
@@ -96,15 +100,13 @@ def test_deposit_vote_preimage_carries_the_locator_suffix():
         + b"\x22" * 64
         + (2).to_bytes(2, "big")
         + (5).to_bytes(2, "big")
-        + DEPLOYMENT
-        + CHAIN
-        + (9).to_bytes(8, "big")
+        + _tail(9)
     )
 
 
 def test_an_absent_locator_signs_the_legacy_suffix():
     absent = vote_deposit_message(
-        b"\x11" * 20, 5, b"\x22" * 64, None, DEPLOYMENT, CHAIN, 1
+        b"\x11" * 20, 5, b"\x22" * 64, None, DEPLOYMENT, CHAIN, 1, SIGNED_AT
     )
     legacy = vote_deposit_message(
         b"\x11" * 20,
@@ -114,6 +116,7 @@ def test_an_absent_locator_signs_the_legacy_suffix():
         DEPLOYMENT,
         CHAIN,
         1,
+        SIGNED_AT,
     )
     # None and the LEGACY locator are the same reading: identical bytes.
     assert absent == legacy
@@ -123,10 +126,10 @@ def test_an_absent_locator_signs_the_legacy_suffix():
 
 def test_sign_fills_the_payload_signature():
     key = _Key(b"\x42")
-    vote = VoteWithdrawalPaid.sign(key.signer(), 777, VAULT, 11, DEPLOYMENT, CHAIN, 3)
+    vote = VoteWithdrawalPaid.sign(key.signer(), 777, VAULT, 11, DEPLOYMENT, CHAIN, 3, signed_at_ms=SIGNED_AT)
     assert len(vote.signature) == 64
     # The signature is over exactly the canonical preimage of the same fields.
-    assert key.signed == [vote_withdrawal_paid_message(777, VAULT, 11, DEPLOYMENT, CHAIN, 3)]
+    assert key.signed == [vote_withdrawal_paid_message(777, VAULT, 11, DEPLOYMENT, CHAIN, 3, SIGNED_AT)]
     assert dataclasses.asdict(vote) == {
         "withdrawal_id": 777,
         "vault": VAULT,
@@ -134,49 +137,50 @@ def test_sign_fills_the_payload_signature():
         "deployment_id": DEPLOYMENT,
         "chain_id": CHAIN,
         "registry_epoch": 3,
+        "signed_at_ms": SIGNED_AT,
         "signature": vote.signature,
     }
 
     deposit = VoteDeposit.sign(
-        key.signer(), b"\x11" * 20, 1_000_000, b"\x22" * 64, None, DEPLOYMENT, CHAIN, 9
+        key.signer(),
+        b"\x11" * 20, 1_000_000, b"\x22" * 64, None, DEPLOYMENT,
+        CHAIN,
+        9,
+        signed_at_ms=SIGNED_AT,
     )
     assert key.signed[-1] == vote_deposit_message(
-        b"\x11" * 20, 1_000_000, b"\x22" * 64, None, DEPLOYMENT, CHAIN, 9
+        b"\x11" * 20, 1_000_000, b"\x22" * 64, None, DEPLOYMENT, CHAIN, 9, SIGNED_AT
     )
     assert deposit.locator is None
 
 
 def test_payout_dead_vote_uses_its_distinct_canonical_kind():
     key = _Key(b"\x51")
-    msg = vote_withdrawal_payout_dead_message(8, VAULT, 13, DEPLOYMENT, CHAIN, 4)
+    msg = vote_withdrawal_payout_dead_message(8, VAULT, 13, DEPLOYMENT, CHAIN, 4, SIGNED_AT)
     assert msg == (
         BRIDGE_VOTE_DOMAIN + bytes([BRIDGE_VOTE_KIND_PAYOUT_DEAD])
         + (8).to_bytes(8, "big") + VAULT + (13).to_bytes(4, "big")
-        + DEPLOYMENT + CHAIN + (4).to_bytes(8, "big")
+        + _tail(4)
     )
-    vote = VoteWithdrawalPayoutDead.sign(key.signer(), 8, VAULT, 13, DEPLOYMENT, CHAIN, 4)
+    vote = VoteWithdrawalPayoutDead.sign(key.signer(), 8, VAULT, 13, DEPLOYMENT, CHAIN, 4, signed_at_ms=SIGNED_AT)
     assert _native.verify_raw_signature(key.public_key, vote.signature, msg)
     assert key.signed == [msg]
 
 
 def test_the_record_and_pause_messages_carry_their_kinds():
     key = _Key(b"\x5d")
-    record = RecordWithdrawalPayout.sign(key.signer(), 8, VAULT, 13, DEPLOYMENT, CHAIN, 4)
+    record = RecordWithdrawalPayout.sign(
+        key.signer(), 8, VAULT, 13, DEPLOYMENT, CHAIN, 4, signed_at_ms=SIGNED_AT
+    )
     assert key.signed[-1] == record_withdrawal_payout_message(
-        8, VAULT, 13, DEPLOYMENT, CHAIN, 4
+        8, VAULT, 13, DEPLOYMENT, CHAIN, 4, SIGNED_AT
     )
     assert key.signed[-1][len(BRIDGE_VOTE_DOMAIN)] == BRIDGE_VOTE_KIND_PAYOUT_RECORD
     assert _native.verify_raw_signature(key.public_key, record.signature, key.signed[-1])
 
-    pause = VotePauseBridge.sign(key.signer(), 1_700_000_000_123, DEPLOYMENT, CHAIN, 2)
-    assert key.signed[-1] == (
-        BRIDGE_VOTE_DOMAIN
-        + bytes([BRIDGE_VOTE_KIND_PAUSE])
-        + (1_700_000_000_123).to_bytes(8, "big")
-        + DEPLOYMENT
-        + CHAIN
-        + (2).to_bytes(8, "big")
-    )
+    pause = VotePauseBridge.sign(key.signer(), DEPLOYMENT, CHAIN, 2, signed_at_ms=SIGNED_AT)
+    # The pause vote signs the tail alone.
+    assert key.signed[-1] == BRIDGE_VOTE_DOMAIN + bytes([BRIDGE_VOTE_KIND_PAUSE]) + _tail(2)
     assert _native.verify_raw_signature(key.public_key, pause.signature, key.signed[-1])
 
 
@@ -190,11 +194,11 @@ def test_a_key_handle_signs_the_message_in_rust():
         handle = _native.load_key_from_fd(read_fd)
     finally:
         os.close(read_fd)
-    vote = VotePauseBridge.sign(handle, 5, DEPLOYMENT, CHAIN, 2)
+    vote = VotePauseBridge.sign(handle, DEPLOYMENT, CHAIN, 2, signed_at_ms=5)
     assert _native.verify_raw_signature(
         handle.public_key,
         vote.signature,
-        vote_pause_bridge_message(5, DEPLOYMENT, CHAIN, 2),
+        vote_pause_bridge_message(DEPLOYMENT, CHAIN, 2, 5),
     )
     # The handle signs only bridge messages it built, never arbitrary bytes.
     assert not hasattr(handle, "sign_raw")
@@ -204,7 +208,7 @@ def test_a_key_handle_signs_the_message_in_rust():
 @pytest.mark.parametrize("length", [63, 65])
 def test_an_external_signer_must_return_64_bytes(length):
     with pytest.raises(ValueError, match="64 signature bytes"):
-        VotePauseBridge.sign(_Key(b"\x01", length).signer(), 5, DEPLOYMENT, CHAIN, 2)
+        VotePauseBridge.sign(_Key(b"\x01", length).signer(), DEPLOYMENT, CHAIN, 2, signed_at_ms=5)
 
 
 @pytest.mark.parametrize(
@@ -235,6 +239,7 @@ def test_preimages_match_rust_generated_shared_vectors():
             bytes.fromhex(row["deployment_id"]),
             bytes.fromhex(row["chain_id"]),
             int(row["registry_epoch"]),
+            int(row["signed_at_ms"]),
         )
         kind = row["kind"]
         if kind in ("withdrawal_paid", "withdrawal_payout_dead", "payout_record"):
@@ -261,7 +266,7 @@ def test_preimages_match_rust_generated_shared_vectors():
                 *binding,
             )
         elif kind == "pause_bridge":
-            actual = vote_pause_bridge_message(int(row["signed_at_ms"]), *binding)
+            actual = vote_pause_bridge_message(*binding)
         else:
             raise AssertionError(f"unknown bridge message kind {kind}")
         assert actual.hex() == row["preimage_hex"], row["case"]
@@ -275,6 +280,7 @@ def _fields(row: dict) -> dict:
         "deployment_id": bytes.fromhex(row["deployment_id"]),
         "chain_id": bytes.fromhex(row["chain_id"]),
         "registry_epoch": int(row["registry_epoch"]),
+        "signed_at_ms": int(row["signed_at_ms"]),
     }
     if "withdrawal_id" in row:
         fields |= {
@@ -289,14 +295,14 @@ def _fields(row: dict) -> dict:
             "solana_tx_sig": bytes.fromhex(row["solana_tx_sig"]),
             "locator": row["locator"],
         }
-    if row["kind"] == "pause_bridge":
-        fields["signed_at_ms"] = int(row["signed_at_ms"])
     return fields
 
 
 def test_an_external_signature_from_another_key_is_refused():
     with pytest.raises(ValueError, match="does not verify"):
-        VotePauseBridge.sign(_Key(b"\x01", wrong_key=True).signer(), 5, DEPLOYMENT, CHAIN, 2)
+        VotePauseBridge.sign(
+            _Key(b"\x01", wrong_key=True).signer(), DEPLOYMENT, CHAIN, 2, signed_at_ms=5
+        )
 
 
 @pytest.mark.parametrize("value", [32, "a" * 32, None])
@@ -305,7 +311,7 @@ def test_a_byte_field_must_be_bytes(value):
     with pytest.raises(TypeError, match="vault must be bytes"):
         VoteWithdrawalPaid.sign(key.signer(), 7, value, 3, DEPLOYMENT, CHAIN, 1)
     with pytest.raises(TypeError, match="vault must be bytes"):
-        vote_withdrawal_paid_message(7, value, 3, DEPLOYMENT, CHAIN, 1)
+        vote_withdrawal_paid_message(7, value, 3, DEPLOYMENT, CHAIN, 1, SIGNED_AT)
     assert key.signed == []
 
 
@@ -318,6 +324,7 @@ def test_the_dict_entry_point_refuses_text_unknown_keys_and_the_sentinel():
         "deployment_id": DEPLOYMENT,
         "chain_id": CHAIN,
         "registry_epoch": 1,
+        "signed_at_ms": SIGNED_AT,
     }
     with pytest.raises(ValueError):
         bridge_message_preimage(payout | {"vault": "a" * 32})
@@ -331,6 +338,7 @@ def test_the_dict_entry_point_refuses_text_unknown_keys_and_the_sentinel():
         "deployment_id": DEPLOYMENT,
         "chain_id": CHAIN,
         "registry_epoch": 1,
+        "signed_at_ms": SIGNED_AT,
     }
     # A misspelled locator would otherwise sign the legacy identity.
     with pytest.raises(ValueError, match="locater"):
@@ -399,3 +407,31 @@ def test_a_cap_of_zero_is_off():
         registry_version=1,
         action={"SetDepositReceiptLimit": {"per_receipt_max_micro_usdc": 2, "window_cap_micro_usdc": 0, "window_secs": 60}},
     )
+
+
+def test_every_kind_signs_its_time():
+    """The same item signed at another time is another message, so a
+    signature cannot be replayed at a later time."""
+    builds = [
+        lambda at: vote_withdrawal_paid_message(1, VAULT, 1, DEPLOYMENT, CHAIN, 1, at),
+        lambda at: vote_withdrawal_payout_dead_message(1, VAULT, 1, DEPLOYMENT, CHAIN, 1, at),
+        lambda at: record_withdrawal_payout_message(1, VAULT, 1, DEPLOYMENT, CHAIN, 1, at),
+        lambda at: vote_deposit_message(b"\x11" * 20, 1, b"\x22" * 64, None, DEPLOYMENT, CHAIN, 1, at),
+        lambda at: vote_pause_bridge_message(DEPLOYMENT, CHAIN, 1, at),
+    ]
+    for build in builds:
+        now, later = build(SIGNED_AT), build(SIGNED_AT + 1)
+        assert now != later
+        assert now[-8:] == SIGNED_AT.to_bytes(8, "big")
+        assert later[-8:] == (SIGNED_AT + 1).to_bytes(8, "big")
+
+
+def test_sign_uses_the_current_time_when_none_is_passed(monkeypatch):
+    monkeypatch.setattr(actions.time, "time_ns", lambda: 1_800_000_000_456_000_000)
+    key = _Key(b"\x42")
+    pause = VotePauseBridge.sign(key.signer(), DEPLOYMENT, CHAIN, 2)
+    assert pause.signed_at_ms == 1_800_000_000_456
+    assert key.signed[-1] == vote_pause_bridge_message(DEPLOYMENT, CHAIN, 2, 1_800_000_000_456)
+    paid = VoteWithdrawalPaid.sign(key.signer(), 1, VAULT, 1, DEPLOYMENT, CHAIN, 2)
+    assert paid.signed_at_ms == 1_800_000_000_456
+    assert key.signed[-1][-8:] == (1_800_000_000_456).to_bytes(8, "big")

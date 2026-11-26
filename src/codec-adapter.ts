@@ -1129,6 +1129,7 @@ function payoutVoteFromWasm(v: WasmRecord): WithdrawalPayoutVote {
     verdict: payoutVerdictFromWasm(v.verdict),
     vault: bytesOf(v.vault),
     squadsTransactionIndex: v.squads_transaction_index as number,
+    signedAtMs: v.signed_at_ms as bigint,
     signature: bytesOf(v.signature),
   };
 }
@@ -1177,6 +1178,12 @@ function pendingWithdrawalFromWasm(w: WasmRecord): PendingWithdrawal {
   const row: PendingWithdrawal = {
     withdrawal: withdrawalFromWasm(w.withdrawal as WasmRecord),
     votes: (w.votes as WasmRecord[]).map(payoutVoteFromWasm),
+    clearedPayouts: ((w.cleared_payouts as WasmRecord[] | undefined) ?? []).map(
+      (c) => ({
+        vault: bytesOf(c.vault),
+        squadsTransactionIndex: c.squads_transaction_index as number,
+      }),
+    ),
   };
   if (w.payout != null) {
     row.payout = payoutReportFromWasm(w.payout as WasmRecord);
@@ -1235,6 +1242,7 @@ function pendingDepositFromWasm(d: WasmRecord): PendingDeposit {
       registryEpoch: raw.registry_epoch as bigint,
       owner: bytesOf(raw.owner),
       amountMicroUsdc: raw.amount_micro_usdc as bigint,
+      signedAtMs: raw.signed_at_ms as bigint,
       signature: bytesOf(raw.signature),
     })),
   };
@@ -1285,6 +1293,7 @@ export function agreedDepositsFromWasm(v: unknown): QueuedDepositPage {
 const PARK_CAUSES: ReadonlyMap<unknown, ParkCause> = new Map([
   ["over_per_receipt_max", "OverPerReceiptMax"],
   ["over_window_cap", "OverWindowCap"],
+  ["balance_overflow", "BalanceOverflow"],
   ["unknown", "Unknown"],
 ]);
 

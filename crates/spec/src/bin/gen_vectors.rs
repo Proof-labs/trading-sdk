@@ -1035,6 +1035,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "deployment_id": vec![0xA1u8; 32],
                     "chain_id": vec![0xC7u8; 32],
                     "registry_epoch": 3u64,
+                    "signed_at_ms": 1_700_000_000_123u64,
                     "signature": vec![0x5Du8; 64] }),
         ),
         // Every u64 at u64::MAX and the u32 index at its own bound, so every
@@ -1049,24 +1050,25 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "deployment_id": (1u8..33).collect::<Vec<u8>>(),
                     "chain_id": (2u8..34).collect::<Vec<u8>>(),
                     "registry_epoch": u64::MAX,
+                    "signed_at_ms": u64::MAX,
                     "signature": (0u8..64).collect::<Vec<u8>>() }),
         ),
         codec_case(
             "vote_pause_bridge/basic",
             VOTE_PAUSE_BRIDGE,
-            json!({ "signed_at_ms": 1_700_000_000_123u64,
-                    "deployment_id": vec![0xA1u8; 32],
+            json!({ "deployment_id": vec![0xA1u8; 32],
                     "chain_id": vec![0xC7u8; 32],
                     "registry_epoch": 2u64,
+                    "signed_at_ms": 1_700_000_000_123u64,
                     "signature": vec![0x5Eu8; 64] }),
         ),
         codec_case(
             "vote_pause_bridge/u64_bounds",
             VOTE_PAUSE_BRIDGE,
-            json!({ "signed_at_ms": u64::MAX,
-                    "deployment_id": (1u8..33).collect::<Vec<u8>>(),
+            json!({ "deployment_id": (1u8..33).collect::<Vec<u8>>(),
                     "chain_id": (2u8..34).collect::<Vec<u8>>(),
                     "registry_epoch": u64::MAX,
+                    "signed_at_ms": u64::MAX,
                     "signature": (0u8..64).collect::<Vec<u8>>() }),
         ),
         // Operator votes: one registry member's
@@ -1083,6 +1085,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "deployment_id": vec![0xA1u8; 32],
                     "chain_id": vec![0xC7u8; 32],
                     "registry_epoch": 3u64,
+                    "signed_at_ms": 1_700_000_000_123u64,
                     "signature": vec![0x5Cu8; 64] }),
         ),
         codec_case(
@@ -1094,6 +1097,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "deployment_id": (1u8..33).collect::<Vec<u8>>(),
                     "chain_id": (2u8..34).collect::<Vec<u8>>(),
                     "registry_epoch": u64::MAX,
+                    "signed_at_ms": u64::MAX,
                     "signature": (0u8..64).collect::<Vec<u8>>() }),
         ),
         codec_case(
@@ -1102,7 +1106,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             json!({ "withdrawal_id": 8u64, "vault": vec![0xB2u8; 32],
                     "squads_transaction_index": 13u32,
                     "deployment_id": vec![0xA1u8; 32], "chain_id": vec![0xC7u8; 32],
-                    "registry_epoch": 4u64, "signature": vec![0x51u8; 64] }),
+                    "registry_epoch": 4u64,
+                    "signed_at_ms": 1_700_000_000_123u64, "signature": vec![0x51u8; 64] }),
         ),
         codec_case(
             "vote_deposit/basic",
@@ -1113,6 +1118,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "deployment_id": vec![0xA1u8; 32],
                     "chain_id": vec![0xC7u8; 32],
                     "registry_epoch": 9u64,
+                    "signed_at_ms": 1_700_000_000_123u64,
                     "signature": vec![0x5Cu8; 64] }),
         ),
         // The LEGACY reading: an absent locator rides the vote preimage as
@@ -1126,6 +1132,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "deployment_id": vec![0xA1u8; 32],
                     "chain_id": vec![0xC7u8; 32],
                     "registry_epoch": 1u64,
+                    "signed_at_ms": 1_700_000_000_123u64,
                     "signature": vec![0x5Cu8; 64] }),
         ),
         codec_case(
@@ -1137,6 +1144,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "deployment_id": (1u8..33).collect::<Vec<u8>>(),
                     "chain_id": (2u8..34).collect::<Vec<u8>>(),
                     "registry_epoch": u64::MAX,
+                    "signed_at_ms": u64::MAX,
                     "signature": (64u8..128).collect::<Vec<u8>>() }),
         ),
         // `outcome` is a NUMERIC_ENUM_FIELDS entry in codec-adapter.ts (the
@@ -1814,10 +1822,19 @@ fn bridge_message_vectors() -> Vec<serde_json::Value> {
     const VAULT: [u8; 32] = [0xB2; 32];
     const UNSIGNED: OperatorSignature = OperatorSignature::new([0; 64]);
 
+    // The signed tail: the largest epoch rows also sign at u64::MAX.
+    let signed_at = |epoch: u64| {
+        if epoch == u64::MAX {
+            u64::MAX
+        } else {
+            1_700_000_000_123
+        }
+    };
     let binding = |row: &mut serde_json::Value, epoch: u64| {
         row["deployment_id"] = json!(hex::encode(DEPLOYMENT));
         row["chain_id"] = json!(hex::encode(CHAIN));
         row["registry_epoch"] = json!(epoch.to_string());
+        row["signed_at_ms"] = json!(signed_at(epoch).to_string());
     };
     let payout = |case: &str, kind: &str, id: u64, index: u32, epoch: u64| {
         let (withdrawal_id, vault, deployment_id, registry_epoch) = (
@@ -1834,6 +1851,7 @@ fn bridge_message_vectors() -> Vec<serde_json::Value> {
                 deployment_id,
                 chain_id: CHAIN,
                 registry_epoch,
+                signed_at_ms: signed_at(epoch),
                 signature: UNSIGNED,
             }
             .vote_message(),
@@ -1844,6 +1862,7 @@ fn bridge_message_vectors() -> Vec<serde_json::Value> {
                 deployment_id,
                 chain_id: CHAIN,
                 registry_epoch,
+                signed_at_ms: signed_at(epoch),
                 signature: UNSIGNED,
             }
             .vote_message(),
@@ -1854,6 +1873,7 @@ fn bridge_message_vectors() -> Vec<serde_json::Value> {
                 deployment_id,
                 chain_id: CHAIN,
                 registry_epoch,
+                signed_at_ms: signed_at(epoch),
                 signature: UNSIGNED,
             }
             .record_message(),
@@ -1874,6 +1894,7 @@ fn bridge_message_vectors() -> Vec<serde_json::Value> {
             deployment_id: DeploymentId::new(DEPLOYMENT),
             chain_id: CHAIN,
             registry_epoch: RegistryEpoch::new(epoch),
+            signed_at_ms: signed_at(epoch),
             signature: UNSIGNED,
         }
         .vote_message();
@@ -1885,17 +1906,17 @@ fn bridge_message_vectors() -> Vec<serde_json::Value> {
         binding(&mut row, epoch);
         row
     };
-    let pause = |case: &str, signed_at_ms: u64, epoch: u64| {
+    let pause = |case: &str, epoch: u64| {
         let preimage = VotePauseBridge {
-            signed_at_ms,
             deployment_id: DeploymentId::new(DEPLOYMENT),
             chain_id: CHAIN,
             registry_epoch: RegistryEpoch::new(epoch),
+            signed_at_ms: signed_at(epoch),
             signature: UNSIGNED,
         }
         .vote_message();
         let mut row = json!({ "case": case, "kind": "pause_bridge",
-            "signed_at_ms": signed_at_ms.to_string(), "preimage_hex": hex::encode(preimage) });
+            "preimage_hex": hex::encode(preimage) });
         binding(&mut row, epoch);
         row
     };
@@ -1929,7 +1950,7 @@ fn bridge_message_vectors() -> Vec<serde_json::Value> {
             }),
             u64::MAX,
         ),
-        pause("pause_bridge", 1_700_000_000_123, 2),
-        pause("pause_bridge_max", u64::MAX, u64::MAX),
+        pause("pause_bridge", 2),
+        pause("pause_bridge_max", u64::MAX),
     ]
 }

@@ -454,6 +454,7 @@ function toAction(
           deploymentId: bytes(input.deployment_id),
           chainId: bytes(input.chain_id),
           registryEpoch: big(input.registry_epoch),
+          signedAtMs: big(input.signed_at_ms),
           signature: bytes(input.signature),
         },
       };
@@ -461,10 +462,10 @@ function toAction(
       return {
         type: "VotePauseBridge",
         data: {
-          signedAtMs: big(input.signed_at_ms),
           deploymentId: bytes(input.deployment_id),
           chainId: bytes(input.chain_id),
           registryEpoch: big(input.registry_epoch),
+          signedAtMs: big(input.signed_at_ms),
           signature: bytes(input.signature),
         },
       };
@@ -562,6 +563,7 @@ function toAction(
           deploymentId: bytes(input.deployment_id),
           chainId: bytes(input.chain_id),
           registryEpoch: big(input.registry_epoch),
+          signedAtMs: big(input.signed_at_ms),
           signature: bytes(input.signature),
         },
       };
@@ -575,6 +577,7 @@ function toAction(
           deploymentId: bytes(input.deployment_id),
           chainId: bytes(input.chain_id),
           registryEpoch: big(input.registry_epoch),
+          signedAtMs: big(input.signed_at_ms),
           signature: bytes(input.signature),
         },
       };
@@ -598,6 +601,7 @@ function toAction(
           deploymentId: bytes(input.deployment_id),
           chainId: bytes(input.chain_id),
           registryEpoch: big(input.registry_epoch),
+          signedAtMs: big(input.signed_at_ms),
           signature: bytes(input.signature),
         },
       };
@@ -1508,6 +1512,7 @@ describe("conformance vectors (TypeScript)", () => {
         deploymentId: hex(row.deployment_id),
         chainId: hex(row.chain_id),
         registryEpoch: decimal(row.registry_epoch),
+        signedAtMs: decimal(row.signed_at_ms),
       };
       const payout = () => ({
         withdrawalId: decimal(row.withdrawal_id),
@@ -1555,7 +1560,7 @@ describe("conformance vectors (TypeScript)", () => {
           break;
         }
         case "pause_bridge":
-          await signVotePauseBridge(signer, decimal(row.signed_at_ms), binding);
+          await signVotePauseBridge(signer, binding);
           break;
         default:
           throw new Error(`unknown bridge message kind ${String(row.kind)}`);
@@ -1571,7 +1576,7 @@ describe("conformance vectors (TypeScript)", () => {
       registryEpoch: 1n,
     };
     await expect(
-      signVotePauseBridge(async () => new Uint8Array(63), 1n, binding),
+      signVotePauseBridge(async () => new Uint8Array(63), binding),
     ).rejects.toThrow("64 signature bytes");
   });
 
@@ -1584,6 +1589,7 @@ describe("conformance vectors (TypeScript)", () => {
       deploymentId: new Uint8Array(32),
       chainId: new Uint8Array(32),
       registryEpoch: 1n,
+      signedAtMs: 1n,
     };
     expect(() =>
       bridgeMessagePreimage({
@@ -1607,6 +1613,7 @@ describe("conformance vectors (TypeScript)", () => {
         deploymentId: new Uint8Array(32),
         chainId: new Uint8Array(32),
         registryEpoch: 1n,
+        signedAtMs: 1n,
       }),
     ).toThrow(/sentinel/);
   });

@@ -299,6 +299,7 @@ describe("bridge-operator message submission", () => {
         deploymentId: new Uint8Array(32).fill(0xa1),
         chainId: new Uint8Array(32).fill(0xc7),
         registryEpoch: 3n,
+        signedAtMs: 1_700_000_000_123n,
         signature: new Uint8Array(64).fill(0x5c),
       },
     } as const;

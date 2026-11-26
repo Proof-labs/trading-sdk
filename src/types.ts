@@ -558,8 +558,19 @@ export interface WithdrawalPayoutVote {
   /** The payout's Squads vault (32 bytes). */
   vault: Uint8Array;
   squadsTransactionIndex: number;
+  /** The Unix time in milliseconds the operator signed at; the signature
+   *  covers it. */
+  signedAtMs: bigint;
   /** The operator's 64-byte signature over the vote message. */
   signature: Uint8Array;
+}
+
+/** A Squads payout a Dead threshold cleared from a withdrawal's slot. It
+ *  can still have executed, so operators may vote it Paid. */
+export interface ClearedPayout {
+  /** The payout's Squads vault (32 bytes). */
+  vault: Uint8Array;
+  squadsTransactionIndex: number;
 }
 
 /** The Squads payout an operator recorded for a pending withdrawal. */
@@ -578,14 +589,17 @@ export interface WithdrawalPayoutReport {
 }
 
 /** A pending withdrawal with what an operator needs to act on it: the
- *  record, the recorded payout and the votes so far
- *  (`/v2/bridge/pending-withdrawals`). */
+ *  record, the recorded payout, the votes so far and the payouts a Dead
+ *  threshold cleared (`/v2/bridge/pending-withdrawals`). */
 export interface PendingWithdrawal {
   withdrawal: WithdrawalRecord;
   /** The recorded Squads payout, if any. */
   payout?: WithdrawalPayoutReport;
-  /** Votes on the recorded payout, Paid and Dead. */
+  /** Votes on the recorded payout, and Paid votes on cleared ones. */
   votes: WithdrawalPayoutVote[];
+  /** Payouts a Dead threshold cleared; a Paid vote may still name one that
+   *  executed. */
+  clearedPayouts: ClearedPayout[];
 }
 
 /** One page of the pending-withdrawals read. `nextCursor` is the id to
@@ -604,6 +618,9 @@ export interface PendingDepositVote {
   /** The receiving engine account (20 bytes). */
   owner: Address;
   amountMicroUsdc: bigint;
+  /** The Unix time in milliseconds the operator signed at; the signature
+   *  covers it. */
+  signedAtMs: bigint;
   /** The operator's 64-byte signature over the vote message. */
   signature: Uint8Array;
 }
@@ -653,9 +670,11 @@ export interface QueuedDepositPage {
 }
 
 /** Why an agreed deposit is parked: its amount is over the per-deposit
- *  maximum or over the window cap, so no window can admit it. `Unknown` is
- *  a cause this SDK does not name. */
-export type ParkCause = "OverPerReceiptMax" | "OverWindowCap" | "Unknown";
+ *  maximum or over the window cap, so no window can admit it, or the
+ *  owner's balance cannot hold it (`BalanceOverflow`). `Unknown` is a cause
+ *  this SDK does not name. */
+export type ParkCause =
+  "OverPerReceiptMax" | "OverWindowCap" | "BalanceOverflow" | "Unknown";
 
 /** An agreed deposit no receipt window can admit. */
 export interface ParkedDeposit {
@@ -871,6 +890,10 @@ export interface RecordWithdrawalPayout {
   /** The registry epoch the proposal was made under: at most the current
    *  one, judged by that epoch's roster while it is retained. */
   registryEpoch: bigint;
+  /** Unix ms the operator signed at, in the signed tail: no later than the
+   *  executing block, within the vote lifetime, and after the bridge's last
+   *  unpause; a vote counts for its lifetime from here. */
+  signedAtMs: bigint;
   /** The recording operator's 64-byte ed25519 signature over the record
    *  message. */
   signature: Uint8Array;
@@ -880,14 +903,14 @@ export interface RecordWithdrawalPayout {
  *  votes pauses it; only the admin quorum's `UnpauseBridge` lifts it. Build
  *  it with `signVotePauseBridge`. */
 export interface VotePauseBridge {
-  /** Unix ms the operator signed at: no later than the executing block,
-   *  after the bridge's last unpause, and counted for the vote's lifetime
-   *  from here, so a vote cannot be replayed into a later pause. */
-  signedAtMs: bigint;
   deploymentId: Uint8Array;
   chainId: Uint8Array;
   /** Must be the current registry epoch. */
   registryEpoch: bigint;
+  /** Unix ms the operator signed at, in the signed tail: no later than the
+   *  executing block, within the vote lifetime, and after the bridge's last
+   *  unpause; a vote counts for its lifetime from here. */
+  signedAtMs: bigint;
   signature: Uint8Array;
 }
 
@@ -917,6 +940,10 @@ export interface VoteWithdrawalPaid {
   /** The registry epoch the vote is bound to; must be the current one, so
    *  a rotation invalidates in-flight votes. */
   registryEpoch: bigint;
+  /** Unix ms the operator signed at, in the signed tail: no later than the
+   *  executing block, within the vote lifetime, and after the bridge's last
+   *  unpause; a vote counts for its lifetime from here. */
+  signedAtMs: bigint;
   /** 64-byte ed25519 signature over the canonical vote message; any other
    *  length does not decode. */
   signature: Uint8Array;
@@ -931,6 +958,10 @@ export interface VoteWithdrawalPayoutDead {
   deploymentId: Uint8Array;
   chainId: Uint8Array;
   registryEpoch: bigint;
+  /** Unix ms the operator signed at, in the signed tail: no later than the
+   *  executing block, within the vote lifetime, and after the bridge's last
+   *  unpause; a vote counts for its lifetime from here. */
+  signedAtMs: bigint;
   signature: Uint8Array;
 }
 
@@ -939,8 +970,8 @@ export interface VoteWithdrawalPayoutDead {
  * the vote-model replacement for the bare relayer `ConfirmDeposit`
  * assertion. Aggregated and settled exactly like
  * {@link VoteWithdrawalPaid}; the signature is over the canonical vote
- * message carrying the full credit identity, so two members voting on the
- * same observation sign identical bytes.
+ * message carrying the full credit identity and the signing time, so two
+ * members voting on the same observation sign the same credit identity.
  */
 export interface VoteDeposit {
   /** The receiving engine account the credit pays (20 bytes). */
@@ -960,6 +991,10 @@ export interface VoteDeposit {
   chainId: Uint8Array;
   /** The registry epoch the vote is bound to; must be the current one. */
   registryEpoch: bigint;
+  /** Unix ms the operator signed at, in the signed tail: no later than the
+   *  executing block, within the vote lifetime, and after the bridge's last
+   *  unpause; a vote counts for its lifetime from here. */
+  signedAtMs: bigint;
   /** 64-byte ed25519 signature over the canonical vote message. */
   signature: Uint8Array;
 }

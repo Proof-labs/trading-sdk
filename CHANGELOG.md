@@ -18,6 +18,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `operatorKeys`, one per operator; TypeScript refuses a key named twice.
 - **Rust and the conformance runners:** proof-wire is pinned to the wire 14
   pre-merge mirror of exchange #1450 by full commit hash.
+- **Breaking, all SDKs, bridge operators:** every bridge-operator message
+  signs its time. The five messages end in one signed tail, `deploymentId`,
+  `chainId`, `registryEpoch` and `signedAtMs` (`signed_at_ms`, 8 bytes
+  big-endian), and every payload carries `signedAtMs` between
+  `registryEpoch` and `signature`. The pause vote's body is now empty: its
+  time moved into the tail, so `VotePauseBridge` lists `signedAtMs` after
+  `registryEpoch`.
+  - TypeScript: `BridgeBinding.signedAtMs` is optional and the `sign*`
+    helpers use the current time when it is absent;
+    `signVotePauseBridge(signer, binding)` drops its separate time argument.
+    `bridgeMessagePreimage` takes a `SignedBridgeBinding`.
+  - Rust: `BridgeBinding` carries `signed_at_ms`;
+    `sign_vote_pause_bridge(signer, binding)` drops its separate argument and
+    `BridgeMessage::PauseBridge` holds only the binding.
+  - Python: each `.sign` takes `signed_at_ms` as an optional last argument
+    (the current time when omitted); each `*_message` builder takes it as a
+    required last argument, and `vote_pause_bridge_message` and
+    `VotePauseBridge.sign` take the binding first.
+  - The engine refuses a message signed after the executing block, 24 hours
+    or more before it, or at or before the bridge's last unpause (codes 146
+    and 148, carrying proof-wire's `SignedTimeRefusal`), and a stored vote
+    stops counting 24 hours after its signing time or once an unpause
+    postdates it.
 
 - **Breaking, TypeScript and Python:** the authorities read no longer exposes the retired
   composite-feeder and scheduled-operations lists. `AuthoritiesSnapshot` carries
@@ -55,6 +78,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - Every binding refuses, before signing: a field of the wrong width, a
     byte field given as text or a number, a field the message does not
     have, and an inner index of 65535 (the wire's absent-index sentinel).
+- **All SDKs:** the pending-withdrawals read lists each row's
+  `clearedPayouts` (`cleared_payouts` in Python): the payouts, by vault and
+  Squads transaction index, that a Dead threshold cleared and a Paid vote may
+  still name; a view without the field reads as none cleared. The pending
+  withdrawal and deposit votes carry the `signedAtMs` their signature
+  covers, and a parked deposit's cause can be `BalanceOverflow` (the owner's
+  balance cannot hold it). The engine refuses a payout record past the most
+  cleared payouts one withdrawal may hold as 148
+  (`ClearedPayoutLimitReached`), and reports a Dead vote refused because
+  another operator voted the payout Paid as a `bridge_vote_conflict` with
+  reason `payout_voted_paid`.
 - **All SDKs:** the bridge reads `/v2/bridge/status`, `/v2/bridge/payout-config`,
   `/v2/bridge/registry[/{epoch}]`, `/v2/bridge/pending-withdrawals`,
   `/v2/bridge/pending-deposits`, `/v2/bridge/agreed-deposits` and

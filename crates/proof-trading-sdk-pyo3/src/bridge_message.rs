@@ -35,6 +35,7 @@ enum BridgeMessageInput {
         #[serde(deserialize_with = "strict_bytes::deserialize")]
         chain_id: Vec<u8>,
         registry_epoch: u64,
+        signed_at_ms: u64,
     },
     WithdrawalPayoutDead {
         withdrawal_id: u64,
@@ -46,6 +47,7 @@ enum BridgeMessageInput {
         #[serde(deserialize_with = "strict_bytes::deserialize")]
         chain_id: Vec<u8>,
         registry_epoch: u64,
+        signed_at_ms: u64,
     },
     PayoutRecord {
         withdrawal_id: u64,
@@ -57,6 +59,7 @@ enum BridgeMessageInput {
         #[serde(deserialize_with = "strict_bytes::deserialize")]
         chain_id: Vec<u8>,
         registry_epoch: u64,
+        signed_at_ms: u64,
     },
     Deposit {
         #[serde(deserialize_with = "strict_bytes::deserialize")]
@@ -71,14 +74,15 @@ enum BridgeMessageInput {
         #[serde(deserialize_with = "strict_bytes::deserialize")]
         chain_id: Vec<u8>,
         registry_epoch: u64,
+        signed_at_ms: u64,
     },
     PauseBridge {
-        signed_at_ms: u64,
         #[serde(deserialize_with = "strict_bytes::deserialize")]
         deployment_id: Vec<u8>,
         #[serde(deserialize_with = "strict_bytes::deserialize")]
         chain_id: Vec<u8>,
         registry_epoch: u64,
+        signed_at_ms: u64,
     },
 }
 
@@ -88,11 +92,17 @@ fn exact<const N: usize>(bytes: &[u8], name: &str) -> PyResult<[u8; N]> {
         .map_err(|_| PyValueError::new_err(format!("{name} must be exactly {N} bytes")))
 }
 
-fn binding(deployment_id: &[u8], chain_id: &[u8], registry_epoch: u64) -> PyResult<BridgeBinding> {
+fn binding(
+    deployment_id: &[u8],
+    chain_id: &[u8],
+    registry_epoch: u64,
+    signed_at_ms: u64,
+) -> PyResult<BridgeBinding> {
     Ok(BridgeBinding {
         deployment_id: DeploymentId::new(exact(deployment_id, "deployment_id")?),
         chain_id: exact(chain_id, "chain_id")?,
         registry_epoch: RegistryEpoch::new(registry_epoch),
+        signed_at_ms,
     })
 }
 
@@ -120,9 +130,10 @@ pub(crate) fn from_py(fields: &Bound<'_, PyAny>) -> PyResult<BridgeMessage> {
             deployment_id,
             chain_id,
             registry_epoch,
+            signed_at_ms,
         } => BridgeMessage::WithdrawalPaid {
             payout: payout(withdrawal_id, &vault, squads_transaction_index)?,
-            binding: binding(&deployment_id, &chain_id, registry_epoch)?,
+            binding: binding(&deployment_id, &chain_id, registry_epoch, signed_at_ms)?,
         },
         BridgeMessageInput::WithdrawalPayoutDead {
             withdrawal_id,
@@ -131,9 +142,10 @@ pub(crate) fn from_py(fields: &Bound<'_, PyAny>) -> PyResult<BridgeMessage> {
             deployment_id,
             chain_id,
             registry_epoch,
+            signed_at_ms,
         } => BridgeMessage::WithdrawalPayoutDead {
             payout: payout(withdrawal_id, &vault, squads_transaction_index)?,
-            binding: binding(&deployment_id, &chain_id, registry_epoch)?,
+            binding: binding(&deployment_id, &chain_id, registry_epoch, signed_at_ms)?,
         },
         BridgeMessageInput::PayoutRecord {
             withdrawal_id,
@@ -142,9 +154,10 @@ pub(crate) fn from_py(fields: &Bound<'_, PyAny>) -> PyResult<BridgeMessage> {
             deployment_id,
             chain_id,
             registry_epoch,
+            signed_at_ms,
         } => BridgeMessage::PayoutRecord {
             payout: payout(withdrawal_id, &vault, squads_transaction_index)?,
-            binding: binding(&deployment_id, &chain_id, registry_epoch)?,
+            binding: binding(&deployment_id, &chain_id, registry_epoch, signed_at_ms)?,
         },
         BridgeMessageInput::Deposit {
             owner,
@@ -154,6 +167,7 @@ pub(crate) fn from_py(fields: &Bound<'_, PyAny>) -> PyResult<BridgeMessage> {
             deployment_id,
             chain_id,
             registry_epoch,
+            signed_at_ms,
         } => BridgeMessage::Deposit {
             deposit: DepositObservation {
                 owner: ProofOwner::new(exact(&owner, "owner")?),
@@ -164,16 +178,15 @@ pub(crate) fn from_py(fields: &Bound<'_, PyAny>) -> PyResult<BridgeMessage> {
                     .transpose()
                     .map_err(PyValueError::new_err)?,
             },
-            binding: binding(&deployment_id, &chain_id, registry_epoch)?,
+            binding: binding(&deployment_id, &chain_id, registry_epoch, signed_at_ms)?,
         },
         BridgeMessageInput::PauseBridge {
-            signed_at_ms,
             deployment_id,
             chain_id,
             registry_epoch,
-        } => BridgeMessage::PauseBridge {
             signed_at_ms,
-            binding: binding(&deployment_id, &chain_id, registry_epoch)?,
+        } => BridgeMessage::PauseBridge {
+            binding: binding(&deployment_id, &chain_id, registry_epoch, signed_at_ms)?,
         },
     })
 }

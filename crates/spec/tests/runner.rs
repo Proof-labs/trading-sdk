@@ -51,6 +51,7 @@ struct PreimageRow {
     deployment_id: String,
     chain_id: String,
     registry_epoch: String,
+    signed_at_ms: String,
     #[serde(flatten)]
     body: PreimageBody,
 }
@@ -67,9 +68,7 @@ enum PreimageBody {
         solana_tx_sig: String,
         locator: Option<LocatorRow>,
     },
-    PauseBridge {
-        signed_at_ms: String,
-    },
+    PauseBridge {},
 }
 
 #[derive(serde::Deserialize)]
@@ -112,6 +111,7 @@ impl PreimageRow {
             deployment_id: DeploymentId::new(hex_array(&self.deployment_id)),
             chain_id: hex_array(&self.chain_id),
             registry_epoch: RegistryEpoch::new(decimal(&self.registry_epoch)),
+            signed_at_ms: decimal(&self.signed_at_ms),
         };
         let payout = |row: &PayoutRow| PayoutIdentity {
             withdrawal_id: WithdrawalId::new(decimal(&row.withdrawal_id)),
@@ -148,10 +148,7 @@ impl PreimageRow {
                 },
                 binding,
             },
-            PreimageBody::PauseBridge { signed_at_ms } => BridgeMessage::PauseBridge {
-                signed_at_ms: decimal(signed_at_ms),
-                binding,
-            },
+            PreimageBody::PauseBridge {} => BridgeMessage::PauseBridge { binding },
         }
     }
 }

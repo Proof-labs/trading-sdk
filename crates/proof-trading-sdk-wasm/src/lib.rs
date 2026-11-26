@@ -520,6 +520,7 @@ enum BridgeMessageInput {
         #[serde(deserialize_with = "strict_bytes::deserialize")]
         chain_id: Vec<u8>,
         registry_epoch: u64,
+        signed_at_ms: u64,
     },
     WithdrawalPayoutDead {
         withdrawal_id: u64,
@@ -531,6 +532,7 @@ enum BridgeMessageInput {
         #[serde(deserialize_with = "strict_bytes::deserialize")]
         chain_id: Vec<u8>,
         registry_epoch: u64,
+        signed_at_ms: u64,
     },
     PayoutRecord {
         withdrawal_id: u64,
@@ -542,6 +544,7 @@ enum BridgeMessageInput {
         #[serde(deserialize_with = "strict_bytes::deserialize")]
         chain_id: Vec<u8>,
         registry_epoch: u64,
+        signed_at_ms: u64,
     },
     Deposit {
         #[serde(deserialize_with = "strict_bytes::deserialize")]
@@ -556,14 +559,15 @@ enum BridgeMessageInput {
         #[serde(deserialize_with = "strict_bytes::deserialize")]
         chain_id: Vec<u8>,
         registry_epoch: u64,
+        signed_at_ms: u64,
     },
     PauseBridge {
-        signed_at_ms: u64,
         #[serde(deserialize_with = "strict_bytes::deserialize")]
         deployment_id: Vec<u8>,
         #[serde(deserialize_with = "strict_bytes::deserialize")]
         chain_id: Vec<u8>,
         registry_epoch: u64,
+        signed_at_ms: u64,
     },
 }
 
@@ -571,11 +575,13 @@ fn bridge_binding(
     deployment_id: &[u8],
     chain_id: &[u8],
     registry_epoch: u64,
+    signed_at_ms: u64,
 ) -> Result<BridgeBinding, JsError> {
     Ok(BridgeBinding {
         deployment_id: DeploymentId::new(arr32(deployment_id, "deploymentId")?),
         chain_id: arr32(chain_id, "chainId")?,
         registry_epoch: RegistryEpoch::new(registry_epoch),
+        signed_at_ms,
     })
 }
 
@@ -602,9 +608,10 @@ impl BridgeMessageInput {
                 deployment_id,
                 chain_id,
                 registry_epoch,
+                signed_at_ms,
             } => BridgeMessage::WithdrawalPaid {
                 payout: payout_identity(withdrawal_id, &vault, squads_transaction_index)?,
-                binding: bridge_binding(&deployment_id, &chain_id, registry_epoch)?,
+                binding: bridge_binding(&deployment_id, &chain_id, registry_epoch, signed_at_ms)?,
             },
             Self::WithdrawalPayoutDead {
                 withdrawal_id,
@@ -613,9 +620,10 @@ impl BridgeMessageInput {
                 deployment_id,
                 chain_id,
                 registry_epoch,
+                signed_at_ms,
             } => BridgeMessage::WithdrawalPayoutDead {
                 payout: payout_identity(withdrawal_id, &vault, squads_transaction_index)?,
-                binding: bridge_binding(&deployment_id, &chain_id, registry_epoch)?,
+                binding: bridge_binding(&deployment_id, &chain_id, registry_epoch, signed_at_ms)?,
             },
             Self::PayoutRecord {
                 withdrawal_id,
@@ -624,9 +632,10 @@ impl BridgeMessageInput {
                 deployment_id,
                 chain_id,
                 registry_epoch,
+                signed_at_ms,
             } => BridgeMessage::PayoutRecord {
                 payout: payout_identity(withdrawal_id, &vault, squads_transaction_index)?,
-                binding: bridge_binding(&deployment_id, &chain_id, registry_epoch)?,
+                binding: bridge_binding(&deployment_id, &chain_id, registry_epoch, signed_at_ms)?,
             },
             Self::Deposit {
                 owner,
@@ -636,6 +645,7 @@ impl BridgeMessageInput {
                 deployment_id,
                 chain_id,
                 registry_epoch,
+                signed_at_ms,
             } => BridgeMessage::Deposit {
                 deposit: DepositObservation {
                     owner: ProofOwner::new(arr20(&owner, "owner")?),
@@ -646,16 +656,15 @@ impl BridgeMessageInput {
                         .transpose()
                         .map_err(JsError::new)?,
                 },
-                binding: bridge_binding(&deployment_id, &chain_id, registry_epoch)?,
+                binding: bridge_binding(&deployment_id, &chain_id, registry_epoch, signed_at_ms)?,
             },
             Self::PauseBridge {
-                signed_at_ms,
                 deployment_id,
                 chain_id,
                 registry_epoch,
-            } => BridgeMessage::PauseBridge {
                 signed_at_ms,
-                binding: bridge_binding(&deployment_id, &chain_id, registry_epoch)?,
+            } => BridgeMessage::PauseBridge {
+                binding: bridge_binding(&deployment_id, &chain_id, registry_epoch, signed_at_ms)?,
             },
         })
     }

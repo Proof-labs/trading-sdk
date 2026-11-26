@@ -27,6 +27,7 @@ def report(**overrides):
         "deployment_id": bytes(range(1, 33)),
         "chain_id": bytes(range(2, 34)),
         "registry_epoch": (1 << 64) - 1,
+        "signed_at_ms": (1 << 64) - 1,
         "signature": bytes(range(64)),
     }
     return RecordWithdrawalPayout(**(fields | overrides))

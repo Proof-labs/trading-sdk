@@ -20,6 +20,7 @@ a decoded action is currently admissible.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Optional
@@ -537,6 +538,7 @@ def _payout_fields(
     deployment_id: bytes,
     chain_id: bytes,
     registry_epoch: int,
+    signed_at_ms: int,
 ) -> dict[str, Any]:
     return {
         "kind": kind,
@@ -546,6 +548,7 @@ def _payout_fields(
         "deployment_id": _as_bytes(deployment_id, "deployment_id"),
         "chain_id": _as_bytes(chain_id, "chain_id"),
         "registry_epoch": registry_epoch,
+        "signed_at_ms": signed_at_ms,
     }
 
 
@@ -556,9 +559,13 @@ def vote_withdrawal_paid_message(
     deployment_id: bytes,
     chain_id: bytes,
     registry_epoch: int,
+    signed_at_ms: int,
 ) -> bytes:
     """The bytes an operator signs for a :class:`VoteWithdrawalPaid`: the
-    wire contract's ``VoteWithdrawalPaid::vote_message``."""
+    wire contract's ``VoteWithdrawalPaid::vote_message``. Every bridge
+    message ends in the signed tail: ``deployment_id``, ``chain_id``,
+    ``registry_epoch`` and ``signed_at_ms``, the Unix time in milliseconds
+    the operator signs at."""
     return bridge_message_preimage(
         _payout_fields(
             "withdrawal_paid",
@@ -568,6 +575,7 @@ def vote_withdrawal_paid_message(
             deployment_id,
             chain_id,
             registry_epoch,
+            signed_at_ms,
         )
     )
 
@@ -579,6 +587,7 @@ def vote_withdrawal_payout_dead_message(
     deployment_id: bytes,
     chain_id: bytes,
     registry_epoch: int,
+    signed_at_ms: int,
 ) -> bytes:
     """The bytes an operator signs for a :class:`VoteWithdrawalPayoutDead`."""
     return bridge_message_preimage(
@@ -590,6 +599,7 @@ def vote_withdrawal_payout_dead_message(
             deployment_id,
             chain_id,
             registry_epoch,
+            signed_at_ms,
         )
     )
 
@@ -601,6 +611,7 @@ def record_withdrawal_payout_message(
     deployment_id: bytes,
     chain_id: bytes,
     registry_epoch: int,
+    signed_at_ms: int,
 ) -> bytes:
     """The bytes an operator signs for a :class:`RecordWithdrawalPayout`."""
     return bridge_message_preimage(
@@ -612,6 +623,7 @@ def record_withdrawal_payout_message(
             deployment_id,
             chain_id,
             registry_epoch,
+            signed_at_ms,
         )
     )
 
@@ -624,6 +636,7 @@ def _deposit_fields(
     deployment_id: bytes,
     chain_id: bytes,
     registry_epoch: int,
+    signed_at_ms: int,
 ) -> dict[str, Any]:
     return {
         "kind": "deposit",
@@ -634,6 +647,7 @@ def _deposit_fields(
         "deployment_id": _as_bytes(deployment_id, "deployment_id"),
         "chain_id": _as_bytes(chain_id, "chain_id"),
         "registry_epoch": registry_epoch,
+        "signed_at_ms": signed_at_ms,
     }
 
 
@@ -645,35 +659,50 @@ def vote_deposit_message(
     deployment_id: bytes,
     chain_id: bytes,
     registry_epoch: int,
+    signed_at_ms: int,
 ) -> bytes:
     """The bytes an operator signs for a :class:`VoteDeposit`. A ``locator``
     of ``None`` is the legacy reading (top-level instruction 0)."""
     return bridge_message_preimage(
         _deposit_fields(
-            owner, amount_micro_usdc, solana_tx_sig, locator, deployment_id, chain_id, registry_epoch
+            owner,
+            amount_micro_usdc,
+            solana_tx_sig,
+            locator,
+            deployment_id,
+            chain_id,
+            registry_epoch,
+            signed_at_ms,
         )
     )
 
 
 def _pause_fields(
-    signed_at_ms: int, deployment_id: bytes, chain_id: bytes, registry_epoch: int
+    deployment_id: bytes, chain_id: bytes, registry_epoch: int, signed_at_ms: int
 ) -> dict[str, Any]:
     return {
         "kind": "pause_bridge",
-        "signed_at_ms": signed_at_ms,
         "deployment_id": _as_bytes(deployment_id, "deployment_id"),
         "chain_id": _as_bytes(chain_id, "chain_id"),
         "registry_epoch": registry_epoch,
+        "signed_at_ms": signed_at_ms,
     }
 
 
 def vote_pause_bridge_message(
-    signed_at_ms: int, deployment_id: bytes, chain_id: bytes, registry_epoch: int
+    deployment_id: bytes, chain_id: bytes, registry_epoch: int, signed_at_ms: int
 ) -> bytes:
-    """The bytes an operator signs for a :class:`VotePauseBridge`."""
+    """The bytes an operator signs for a :class:`VotePauseBridge`: the
+    signed tail alone."""
     return bridge_message_preimage(
-        _pause_fields(signed_at_ms, deployment_id, chain_id, registry_epoch)
+        _pause_fields(deployment_id, chain_id, registry_epoch, signed_at_ms)
     )
+
+
+def _signing_time(signed_at_ms: "int | None") -> int:
+    """The time a message is signed at: the caller's, else the current Unix
+    time in milliseconds."""
+    return time.time_ns() // 1_000_000 if signed_at_ms is None else signed_at_ms
 
 
 @dataclass
@@ -688,6 +717,7 @@ class _PayoutMessage(Action):
     deployment_id: bytes
     chain_id: bytes
     registry_epoch: int
+    signed_at_ms: int
     signature: bytes
 
     MESSAGE_KIND = ""
@@ -700,6 +730,7 @@ class _PayoutMessage(Action):
             "deployment_id": self.deployment_id,
             "chain_id": self.chain_id,
             "registry_epoch": self.registry_epoch,
+            "signed_at_ms": self.signed_at_ms,
             "signature": self.signature,
         }
 
@@ -713,10 +744,13 @@ class _PayoutMessage(Action):
         deployment_id: bytes,
         chain_id: bytes,
         registry_epoch: int,
+        signed_at_ms: "int | None" = None,
     ) -> Any:
         """Build and sign this message. ``signer`` is a key handle (it signs
         in Rust) or an :class:`ExternalSigner` (its ``sign_raw`` gets the
-        core-built preimage)."""
+        core-built preimage). ``signed_at_ms`` defaults to the current
+        time."""
+        signed_at_ms = _signing_time(signed_at_ms)
         fields = _payout_fields(
             cls.MESSAGE_KIND,
             withdrawal_id,
@@ -725,6 +759,7 @@ class _PayoutMessage(Action):
             deployment_id,
             chain_id,
             registry_epoch,
+            signed_at_ms,
         )
         return cls(
             withdrawal_id=withdrawal_id,
@@ -733,6 +768,7 @@ class _PayoutMessage(Action):
             deployment_id=_as_bytes(deployment_id, "deployment_id"),
             chain_id=_as_bytes(chain_id, "chain_id"),
             registry_epoch=registry_epoch,
+            signed_at_ms=signed_at_ms,
             signature=_sign_bridge_message(signer, fields),
         )
 
@@ -781,6 +817,7 @@ class VoteDeposit(Action):
     deployment_id: bytes
     chain_id: bytes
     registry_epoch: int
+    signed_at_ms: int
     signature: bytes
 
     def fields(self) -> dict[str, Any]:
@@ -792,6 +829,7 @@ class VoteDeposit(Action):
             "deployment_id": self.deployment_id,
             "chain_id": self.chain_id,
             "registry_epoch": self.registry_epoch,
+            "signed_at_ms": self.signed_at_ms,
             "signature": self.signature,
         }
 
@@ -806,10 +844,20 @@ class VoteDeposit(Action):
         deployment_id: bytes,
         chain_id: bytes,
         registry_epoch: int,
+        signed_at_ms: "int | None" = None,
     ) -> "VoteDeposit":
-        """Build and sign one deposit vote."""
+        """Build and sign one deposit vote. ``signed_at_ms`` defaults to the
+        current time."""
+        signed_at_ms = _signing_time(signed_at_ms)
         fields = _deposit_fields(
-            owner, amount_micro_usdc, solana_tx_sig, locator, deployment_id, chain_id, registry_epoch
+            owner,
+            amount_micro_usdc,
+            solana_tx_sig,
+            locator,
+            deployment_id,
+            chain_id,
+            registry_epoch,
+            signed_at_ms,
         )
         return cls(
             owner=_as_bytes(owner, "owner"),
@@ -819,6 +867,7 @@ class VoteDeposit(Action):
             deployment_id=_as_bytes(deployment_id, "deployment_id"),
             chain_id=_as_bytes(chain_id, "chain_id"),
             registry_epoch=registry_epoch,
+            signed_at_ms=signed_at_ms,
             signature=_sign_bridge_message(signer, fields),
         )
 
@@ -827,22 +876,21 @@ class VoteDeposit(Action):
 class VotePauseBridge(Action):
     """**Bridge operator only.** One operator's vote to pause the bridge
     (0x33). The roster threshold pauses it; only the admin quorum's
-    ``UnpauseBridge`` lifts it. ``signed_at_ms`` is when the operator
-    signed: the engine refuses a vote signed before the last unpause."""
+    ``UnpauseBridge`` lifts it. It signs the tail alone."""
 
     ACTION_NAME = "VotePauseBridge"
-    signed_at_ms: int
     deployment_id: bytes
     chain_id: bytes
     registry_epoch: int
+    signed_at_ms: int
     signature: bytes
 
     def fields(self) -> dict[str, Any]:
         return {
-            "signed_at_ms": self.signed_at_ms,
             "deployment_id": self.deployment_id,
             "chain_id": self.chain_id,
             "registry_epoch": self.registry_epoch,
+            "signed_at_ms": self.signed_at_ms,
             "signature": self.signature,
         }
 
@@ -850,18 +898,20 @@ class VotePauseBridge(Action):
     def sign(
         cls,
         signer: Any,
-        signed_at_ms: int,
         deployment_id: bytes,
         chain_id: bytes,
         registry_epoch: int,
+        signed_at_ms: "int | None" = None,
     ) -> "VotePauseBridge":
-        """Build and sign one pause vote."""
-        fields = _pause_fields(signed_at_ms, deployment_id, chain_id, registry_epoch)
+        """Build and sign one pause vote. ``signed_at_ms`` defaults to the
+        current time."""
+        signed_at_ms = _signing_time(signed_at_ms)
+        fields = _pause_fields(deployment_id, chain_id, registry_epoch, signed_at_ms)
         return cls(
-            signed_at_ms=signed_at_ms,
             deployment_id=_as_bytes(deployment_id, "deployment_id"),
             chain_id=_as_bytes(chain_id, "chain_id"),
             registry_epoch=registry_epoch,
+            signed_at_ms=signed_at_ms,
             signature=_sign_bridge_message(signer, fields),
         )
 

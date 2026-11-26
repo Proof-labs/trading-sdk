@@ -28,10 +28,10 @@ def _view(payload) -> httpx.Response:
 
 VOTE_A = {"voter": b"\x11" * 32, "signature": b"\x77" * 64,
           "registry_epoch": 3, "verdict": "paid", "vault": b"\xa2" * 32,
-          "squads_transaction_index": 7}
+          "squads_transaction_index": 7, "signed_at_ms": 1_700_000_000_123}
 VOTE_B = {"voter": b"\x22" * 32, "signature": b"\x88" * 64,
           "registry_epoch": 3, "verdict": "dead", "vault": b"\xa2" * 32,
-          "squads_transaction_index": 7}
+          "squads_transaction_index": 7, "signed_at_ms": 1_700_000_000_124}
 
 
 class TestBridgeStatus:
@@ -135,6 +135,9 @@ class TestPendingWithdrawals:
                         "recorded_at_ms": 1_700_000_000_000,
                     },
                     "votes": [VOTE_A, VOTE_B],
+                    "cleared_payouts": [
+                        {"vault": b"\xa2" * 32, "squads_transaction_index": 6}
+                    ],
                 }
             ],
             "next_cursor": 104,
@@ -163,7 +166,20 @@ class TestPendingWithdrawals:
         assert row["payout"]["recorded_at_ms"] == 1_700_000_000_000
         assert [v["verdict"] for v in row["votes"]] == ["Paid", "Dead"]
         assert row["votes"][1]["signature"] == b"\x88" * 64
+        assert [v["signed_at_ms"] for v in row["votes"]] == [1_700_000_000_123, 1_700_000_000_124]
+        assert row["cleared_payouts"] == [
+            {"vault": b"\xa2" * 32, "squads_transaction_index": 6}
+        ]
         assert page["next_cursor"] == 104
+
+    def test_absent_cleared_payouts_read_as_none_cleared(self):
+        payload = self._page()
+        del payload["rows"][0]["cleared_payouts"]
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return _view(payload)
+
+        assert _client(handler).pending_withdrawals()["rows"][0]["cleared_payouts"] == []
 
     def test_decodes_the_exhausted_page(self):
         def handler(request: httpx.Request) -> httpx.Response:
@@ -212,6 +228,7 @@ class TestPendingDeposits:
                             "votes": [{
                                 "voter": b"\x11" * 32, "registry_epoch": 3,
                                 "owner": b"\x66" * 20, "amount_micro_usdc": 1_000_000,
+                                "signed_at_ms": 1_700_000_000_456,
                                 "signature": b"\x77" * 64,
                             }],
                         }
@@ -228,6 +245,7 @@ class TestPendingDeposits:
         assert row["solana_tx_sig"] == b"\x99" * 64
         assert row["locator"] == {"top_index": 2, "inner_index": 5}
         assert row["votes"][0]["amount_micro_usdc"] == 1_000_000
+        assert row["votes"][0]["signed_at_ms"] == 1_700_000_000_456
         # The last scanned identity: the transfer signature, then the top
         # index (0x0002) and an absent inner index (0xFFFF), big-endian.
         assert page["next_cursor"] == "99" * 64 + "0002ffff"
@@ -291,6 +309,16 @@ class TestAgreedAndParkedDeposits:
         assert page["rows"][0]["cause"] == "OverWindowCap"
         assert page["rows"][0]["deposit"] == AGREED
         assert page["next_cursor"] == "dead"
+
+    def test_decodes_a_deposit_parked_because_the_balance_cannot_hold_it(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return _view({
+                "rows": [{"deposit": AGREED, "cause": "balance_overflow", "parked_height": 52}],
+                "next_cursor": None,
+            })
+
+        page = _client(handler).parked_deposits()
+        assert page["rows"][0]["cause"] == "BalanceOverflow"
 
 
 class TestDepositCursorBounds:

@@ -39,14 +39,19 @@ use crate::types::{
 #[cfg(doc)]
 use crate::bridge::OperatorKey;
 
-/// The binding every bridge-operator message carries: the deployment and
-/// chain it cannot replay across, and the registry epoch whose roster
-/// judges its signature.
+/// The binding every bridge-operator message carries, its signed tail: the
+/// deployment and chain it cannot replay across, the registry epoch whose
+/// roster judges its signature, and the time it was signed at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BridgeBinding {
     pub deployment_id: DeploymentId,
     pub chain_id: [u8; 32],
     pub registry_epoch: RegistryEpoch,
+    /// The Unix time in milliseconds the operator signs at. The engine
+    /// refuses a message signed after the executing block, a vote TTL or
+    /// more before it, or at or before the bridge's last unpause, and a
+    /// stored vote counts for the TTL from this time.
+    pub signed_at_ms: u64,
 }
 
 /// One recorded Squads payout of one withdrawal: what a payout record
@@ -94,8 +99,6 @@ pub enum BridgeMessage {
         binding: BridgeBinding,
     },
     PauseBridge {
-        /// The Unix time in milliseconds the operator signs at.
-        signed_at_ms: u64,
         binding: BridgeBinding,
     },
 }
@@ -118,10 +121,7 @@ impl BridgeMessage {
             Self::Deposit { deposit, binding } => {
                 deposit_vote(deposit, binding, UNSIGNED).vote_message()
             }
-            Self::PauseBridge {
-                signed_at_ms,
-                binding,
-            } => pause_vote(signed_at_ms, binding, UNSIGNED).vote_message(),
+            Self::PauseBridge { binding } => pause_vote(binding, UNSIGNED).vote_message(),
         }
     }
 }
@@ -138,6 +138,7 @@ fn paid_vote(
         deployment_id: binding.deployment_id,
         chain_id: binding.chain_id,
         registry_epoch: binding.registry_epoch,
+        signed_at_ms: binding.signed_at_ms,
         signature,
     }
 }
@@ -154,6 +155,7 @@ fn dead_vote(
         deployment_id: binding.deployment_id,
         chain_id: binding.chain_id,
         registry_epoch: binding.registry_epoch,
+        signed_at_ms: binding.signed_at_ms,
         signature,
     }
 }
@@ -170,6 +172,7 @@ fn payout_record(
         deployment_id: binding.deployment_id,
         chain_id: binding.chain_id,
         registry_epoch: binding.registry_epoch,
+        signed_at_ms: binding.signed_at_ms,
         signature,
     }
 }
@@ -187,20 +190,17 @@ fn deposit_vote(
         deployment_id: binding.deployment_id,
         chain_id: binding.chain_id,
         registry_epoch: binding.registry_epoch,
+        signed_at_ms: binding.signed_at_ms,
         signature,
     }
 }
 
-fn pause_vote(
-    signed_at_ms: u64,
-    binding: BridgeBinding,
-    signature: OperatorSignature,
-) -> VotePauseBridge {
+fn pause_vote(binding: BridgeBinding, signature: OperatorSignature) -> VotePauseBridge {
     VotePauseBridge {
-        signed_at_ms,
         deployment_id: binding.deployment_id,
         chain_id: binding.chain_id,
         registry_epoch: binding.registry_epoch,
+        signed_at_ms: binding.signed_at_ms,
         signature,
     }
 }
@@ -322,7 +322,7 @@ pub fn sign_vote_withdrawal_payout_dead(
 
 /// Sign one operator's vote to credit one observed deposit, over
 /// [`VoteDeposit::vote_message`]. Two operators voting on the same
-/// observation sign identical bytes.
+/// observation at the same time sign identical bytes.
 ///
 /// # Errors
 ///
@@ -340,27 +340,18 @@ pub fn sign_vote_deposit(
 }
 
 /// Sign one operator's vote to pause the bridge, over
-/// [`VotePauseBridge::vote_message`]. `signed_at_ms` is the Unix time in
-/// milliseconds the operator signs at: the engine refuses a vote signed
-/// before the bridge's last unpause or after the executing block.
+/// [`VotePauseBridge::vote_message`]: the signed tail alone, its time
+/// included.
 ///
 /// # Errors
 ///
 /// [`SignerError`] if the signing backend fails.
 pub fn sign_vote_pause_bridge(
     signer: &dyn Signer,
-    signed_at_ms: u64,
     binding: BridgeBinding,
 ) -> Result<VotePauseBridge, SignerError> {
-    let signature = sign(
-        signer,
-        &BridgeMessage::PauseBridge {
-            signed_at_ms,
-            binding,
-        }
-        .preimage(),
-    )?;
-    Ok(pause_vote(signed_at_ms, binding, signature))
+    let signature = sign(signer, &BridgeMessage::PauseBridge { binding }.preimage())?;
+    Ok(pause_vote(binding, signature))
 }
 
 #[cfg(test)]
@@ -375,13 +366,24 @@ mod tests {
     const CHAIN: [u8; 32] = [0xC7; 32];
     const VAULT: [u8; 32] = [0xB2; 32];
     const DOMAIN: &[u8] = b"PROOF_BRIDGE_VOTE_V1";
+    const SIGNED_AT: u64 = 1_700_000_000_123;
 
     fn binding(epoch: u64) -> BridgeBinding {
         BridgeBinding {
             deployment_id: DeploymentId::new(DEPLOYMENT),
             chain_id: CHAIN,
             registry_epoch: RegistryEpoch::new(epoch),
+            signed_at_ms: SIGNED_AT,
         }
+    }
+
+    /// The signed tail every message ends in.
+    fn tail(epoch: u64, signed_at_ms: u64) -> Vec<u8> {
+        let mut tail = DEPLOYMENT.to_vec();
+        tail.extend_from_slice(&CHAIN);
+        tail.extend_from_slice(&epoch.to_be_bytes());
+        tail.extend_from_slice(&signed_at_ms.to_be_bytes());
+        tail
     }
 
     fn payout(withdrawal_id: u64, index: u32) -> PayoutIdentity {
@@ -409,9 +411,7 @@ mod tests {
         expected.extend_from_slice(&withdrawal_id.to_be_bytes());
         expected.extend_from_slice(&VAULT);
         expected.extend_from_slice(&index.to_be_bytes());
-        expected.extend_from_slice(&DEPLOYMENT);
-        expected.extend_from_slice(&CHAIN);
-        expected.extend_from_slice(&epoch.to_be_bytes());
+        expected.extend_from_slice(&tail(epoch, SIGNED_AT));
         expected
     }
 
@@ -450,22 +450,63 @@ mod tests {
     }
 
     #[test]
-    fn the_pause_vote_signs_its_signing_time() {
+    fn the_pause_vote_signs_the_tail_alone() {
         let seed = [0x05u8; 32];
-        let vote = sign_vote_pause_bridge(
-            &LocalSigner::from_bytes(&seed),
-            1_700_000_000_123,
-            binding(2),
-        )
-        .expect("sign the pause vote");
+        let vote = sign_vote_pause_bridge(&LocalSigner::from_bytes(&seed), binding(2))
+            .expect("sign the pause vote");
         let mut expected = DOMAIN.to_vec();
         expected.push(6);
-        expected.extend_from_slice(&1_700_000_000_123u64.to_be_bytes());
-        expected.extend_from_slice(&DEPLOYMENT);
-        expected.extend_from_slice(&CHAIN);
-        expected.extend_from_slice(&2u64.to_be_bytes());
+        expected.extend_from_slice(&tail(2, SIGNED_AT));
         assert_eq!(vote.vote_message(), expected);
         assert!(verifies(seed, &expected, &vote.signature));
+    }
+
+    /// Every kind signs its time: the same item signed at another time is
+    /// another message, so a signature cannot be replayed at a later time.
+    #[test]
+    fn the_signing_time_is_signed_by_every_kind() {
+        let signer = LocalSigner::from_bytes(&[0x0Au8; 32]);
+        let later = BridgeBinding {
+            signed_at_ms: SIGNED_AT + 1,
+            ..binding(1)
+        };
+        let messages = |binding| {
+            [
+                BridgeMessage::WithdrawalPaid {
+                    payout: payout(1, 1),
+                    binding,
+                },
+                BridgeMessage::WithdrawalPayoutDead {
+                    payout: payout(1, 1),
+                    binding,
+                },
+                BridgeMessage::PayoutRecord {
+                    payout: payout(1, 1),
+                    binding,
+                },
+                BridgeMessage::Deposit {
+                    deposit: deposit(None),
+                    binding,
+                },
+                BridgeMessage::PauseBridge { binding },
+            ]
+        };
+        for (now, then) in messages(binding(1)).iter().zip(messages(later).iter()) {
+            let (now, then) = (now.preimage(), then.preimage());
+            assert_ne!(now, then, "the signing time is part of the preimage");
+            assert_eq!(
+                &now[now.len() - 8..],
+                &SIGNED_AT.to_be_bytes(),
+                "the signing time closes the preimage"
+            );
+            assert_eq!(&then[then.len() - 8..], &(SIGNED_AT + 1).to_be_bytes());
+        }
+        let vote = sign_vote_pause_bridge(&signer, later).expect("sign the pause vote");
+        assert_eq!(
+            vote.signed_at_ms,
+            SIGNED_AT + 1,
+            "the action carries the signed time"
+        );
     }
 
     #[test]
@@ -481,7 +522,8 @@ mod tests {
         )
         .expect("sign the deposit vote");
         // domain || kind(0x02) || owner(20) || amount(8 BE) || tx_sig(64) ||
-        // locator(4: top BE, inner BE) || deployment || chain || epoch.
+        // locator(4: top BE, inner BE) || deployment || chain || epoch ||
+        // signed_at_ms.
         let mut expected = DOMAIN.to_vec();
         expected.push(2);
         expected.extend_from_slice(&[0x11; 20]);
@@ -489,9 +531,7 @@ mod tests {
         expected.extend_from_slice(&[0x22; 64]);
         expected.extend_from_slice(&2u16.to_be_bytes());
         expected.extend_from_slice(&5u16.to_be_bytes());
-        expected.extend_from_slice(&DEPLOYMENT);
-        expected.extend_from_slice(&CHAIN);
-        expected.extend_from_slice(&9u64.to_be_bytes());
+        expected.extend_from_slice(&tail(9, SIGNED_AT));
         assert_eq!(vote.vote_message(), expected);
         assert!(verifies(seed, &expected, &vote.signature));
     }
@@ -539,7 +579,14 @@ mod tests {
                 .expect("sign the payout record"),
         ));
         round_trip(crate::types::Action::VotePauseBridge(
-            sign_vote_pause_bridge(&signer, u64::MAX, binding(3)).expect("sign the pause vote"),
+            sign_vote_pause_bridge(
+                &signer,
+                BridgeBinding {
+                    signed_at_ms: u64::MAX,
+                    ..binding(3)
+                },
+            )
+            .expect("sign the pause vote"),
         ));
         round_trip(crate::types::Action::VoteDeposit(
             sign_vote_deposit(

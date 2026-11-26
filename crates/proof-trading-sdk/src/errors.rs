@@ -695,6 +695,32 @@ mod exec_error_meaning_tests {
                 ErrorKind::BridgeVoteInvalid,
             ),
             (
+                ExecError::BridgeVoteInvalid(crate::types::BridgeVoteRefusal::SignedTime(
+                    crate::types::SignedTimeRefusal::BeforeUnpause {
+                        signed_at_ms: 1,
+                        unpaused_at_ms: 2,
+                    },
+                )),
+                ErrorKind::BridgeVoteInvalid,
+            ),
+            (
+                ExecError::BridgePayoutReportInvalid(
+                    crate::types::PayoutRecordRefusal::SignedTime(
+                        crate::types::SignedTimeRefusal::Expired {
+                            signed_at_ms: 1,
+                            block_time_ms: 2,
+                        },
+                    ),
+                ),
+                ErrorKind::BridgePayoutReportInvalid,
+            ),
+            (
+                ExecError::BridgePayoutReportInvalid(
+                    crate::types::PayoutRecordRefusal::ClearedPayoutLimitReached { limit: 16 },
+                ),
+                ErrorKind::BridgePayoutReportInvalid,
+            ),
+            (
                 ExecError::BridgeUnauthorizedOperator,
                 ErrorKind::BridgeUnauthorizedOperator,
             ),

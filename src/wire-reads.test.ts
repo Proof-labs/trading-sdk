@@ -293,6 +293,7 @@ const WITHDRAW_VOTE_1 = {
   verdict: "paid",
   vault: new Uint8Array(32).fill(0xa2),
   squads_transaction_index: 7,
+  signed_at_ms: 1_700_000_000_123n,
   signature: new Uint8Array(64).fill(0x77),
 };
 const WITHDRAW_VOTE_2 = {
@@ -321,6 +322,9 @@ const PENDING_WITHDRAWALS = wire({
         recorded_at_ms: 1_700_000_000_000n,
       },
       votes: [WITHDRAW_VOTE_1, WITHDRAW_VOTE_2],
+      cleared_payouts: [
+        { vault: new Uint8Array(32).fill(0xa2), squads_transaction_index: 6 },
+      ],
     },
   ],
   next_cursor: 104n,
@@ -356,6 +360,7 @@ const PENDING_DEPOSITS = wire({
           registry_epoch: 3n,
           owner: new Uint8Array(20).fill(0x66),
           amount_micro_usdc: 1_000_000n,
+          signed_at_ms: 1_700_000_000_456n,
           signature: new Uint8Array(64).fill(0x77),
         },
       ],
@@ -379,6 +384,10 @@ const AGREED = {
 const AGREED_DEPOSITS = wire({
   rows: [{ sequence: 7n, deposit: AGREED }],
   next_cursor: 7n,
+});
+const PARKED_DEPOSITS_OVERFLOW = wire({
+  rows: [{ deposit: AGREED, cause: "balance_overflow", parked_height: 52n }],
+  next_cursor: null,
 });
 const PARKED_DEPOSITS = wire({
   rows: [
@@ -459,6 +468,7 @@ describe("queryPendingWithdrawals", () => {
               verdict: "Paid",
               vault: new Uint8Array(32).fill(0xa2),
               squadsTransactionIndex: 7,
+              signedAtMs: 1_700_000_000_123n,
             },
             {
               voter: new Uint8Array(32).fill(0x22),
@@ -467,7 +477,11 @@ describe("queryPendingWithdrawals", () => {
               verdict: "Dead",
               vault: new Uint8Array(32).fill(0xa2),
               squadsTransactionIndex: 7,
+              signedAtMs: 1_700_000_000_123n,
             },
+          ],
+          clearedPayouts: [
+            { vault: new Uint8Array(32).fill(0xa2), squadsTransactionIndex: 6 },
           ],
         },
       ],
@@ -480,6 +494,8 @@ describe("queryPendingWithdrawals", () => {
     const page = await client().queryPendingWithdrawals();
     expect(page.rows[0].withdrawal.quarantined).toBe(true);
     expect(page.rows[0].payout).toBeUndefined();
+    // A view without cleared_payouts reads as none cleared.
+    expect(page.rows[0].clearedPayouts).toEqual([]);
   });
 
   it("decodes the exhausted page", async () => {
@@ -505,6 +521,7 @@ describe("queryPendingDeposits", () => {
               registryEpoch: 3n,
               owner: new Uint8Array(20).fill(0x66),
               amountMicroUsdc: 1_000_000n,
+              signedAtMs: 1_700_000_000_456n,
               signature: new Uint8Array(64).fill(0x77),
             },
           ],
@@ -551,6 +568,14 @@ describe("queryAgreedDeposits and queryParkedDeposits", () => {
         { deposit: agreed, cause: "OverPerReceiptMax", parkedHeight: 51n },
       ],
       nextCursor: "dead",
+    });
+  });
+
+  it("decodes a deposit parked because the balance cannot hold it", async () => {
+    serve(PARKED_DEPOSITS_OVERFLOW);
+    expect(await client().queryParkedDeposits()).toEqual({
+      rows: [{ deposit: agreed, cause: "BalanceOverflow", parkedHeight: 52n }],
+      nextCursor: null,
     });
   });
 });

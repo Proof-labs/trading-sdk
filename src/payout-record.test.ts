@@ -14,6 +14,7 @@ const report: RecordWithdrawalPayout = {
   deploymentId: Uint8Array.from({ length: 32 }, (_, i) => i + 1),
   chainId: Uint8Array.from({ length: 32 }, (_, i) => i + 2),
   registryEpoch: (1n << 64n) - 1n,
+  signedAtMs: (1n << 64n) - 1n,
   signature: Uint8Array.from({ length: 64 }, (_, i) => i),
 };
 
