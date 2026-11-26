@@ -20,7 +20,6 @@ a decoded action is currently admissible.
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Optional
@@ -699,12 +698,6 @@ def vote_pause_bridge_message(
     )
 
 
-def _signing_time(signed_at_ms: "int | None") -> int:
-    """The time a message is signed at: the caller's, else the current Unix
-    time in milliseconds."""
-    return time.time_ns() // 1_000_000 if signed_at_ms is None else signed_at_ms
-
-
 @dataclass
 class _PayoutMessage(Action):
     """The fields every payout message carries: the withdrawal, the payout's
@@ -744,13 +737,12 @@ class _PayoutMessage(Action):
         deployment_id: bytes,
         chain_id: bytes,
         registry_epoch: int,
-        signed_at_ms: "int | None" = None,
+        signed_at_ms: int,
     ) -> Any:
         """Build and sign this message. ``signer`` is a key handle (it signs
         in Rust) or an :class:`ExternalSigner` (its ``sign_raw`` gets the
-        core-built preimage). ``signed_at_ms`` defaults to the current
-        time."""
-        signed_at_ms = _signing_time(signed_at_ms)
+        core-built preimage). ``signed_at_ms`` is the latest committed block's
+        time, not the wall clock, which runs ahead of it."""
         fields = _payout_fields(
             cls.MESSAGE_KIND,
             withdrawal_id,
@@ -844,11 +836,10 @@ class VoteDeposit(Action):
         deployment_id: bytes,
         chain_id: bytes,
         registry_epoch: int,
-        signed_at_ms: "int | None" = None,
+        signed_at_ms: int,
     ) -> "VoteDeposit":
-        """Build and sign one deposit vote. ``signed_at_ms`` defaults to the
-        current time."""
-        signed_at_ms = _signing_time(signed_at_ms)
+        """Build and sign one deposit vote. ``signed_at_ms`` is the latest
+        committed block's time, not the wall clock."""
         fields = _deposit_fields(
             owner,
             amount_micro_usdc,
@@ -901,11 +892,10 @@ class VotePauseBridge(Action):
         deployment_id: bytes,
         chain_id: bytes,
         registry_epoch: int,
-        signed_at_ms: "int | None" = None,
+        signed_at_ms: int,
     ) -> "VotePauseBridge":
-        """Build and sign one pause vote. ``signed_at_ms`` defaults to the
-        current time."""
-        signed_at_ms = _signing_time(signed_at_ms)
+        """Build and sign one pause vote. ``signed_at_ms`` is the latest
+        committed block's time, not the wall clock."""
         fields = _pause_fields(deployment_id, chain_id, registry_epoch, signed_at_ms)
         return cls(
             deployment_id=_as_bytes(deployment_id, "deployment_id"),

@@ -41,20 +41,27 @@ export interface BridgeBinding {
   /** The chain id the envelope is signed for (32 bytes). */
   chainId: Uint8Array;
   registryEpoch: bigint;
-  /** The Unix time in milliseconds the operator signs at. The engine
-   *  refuses a message signed after the executing block, a vote lifetime
-   *  (24 hours) or more before it, or at or before the bridge's last
-   *  unpause; a vote counts for its lifetime from here. The signing helpers
-   *  use the current time when it is absent. */
-  signedAtMs?: bigint;
+  /** The Unix time in milliseconds the operator signs at: the latest
+   *  committed block's time, not the wall clock, which runs ahead of block
+   *  time. The engine refuses a message signed after the executing block, a
+   *  vote lifetime (24 hours) or more before it, or at or before the
+   *  bridge's last unpause; a vote counts for its lifetime from here. */
+  signedAtMs: bigint;
 }
 
 /** A binding with its signing time fixed: the one a preimage is built
  *  from. */
-export type SignedBridgeBinding = BridgeBinding & { signedAtMs: bigint };
+export type SignedBridgeBinding = BridgeBinding;
 
+/** The binding, refused when a JavaScript caller leaves out its signing
+ *  time: no default exists, since the wall clock runs ahead of block time. */
 function signedBinding(binding: BridgeBinding): SignedBridgeBinding {
-  return { ...binding, signedAtMs: binding.signedAtMs ?? BigInt(Date.now()) };
+  if (typeof binding.signedAtMs !== "bigint") {
+    throw new TypeError(
+      "signedAtMs is required: pass the latest committed block's time",
+    );
+  }
+  return binding;
 }
 
 /** One recorded Squads payout of one withdrawal. */

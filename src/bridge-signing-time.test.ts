@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
   bridgeMessagePreimage,
   signVotePauseBridge,
@@ -29,9 +29,6 @@ describe("bridge message signing time", () => {
   beforeAll(async () => {
     await ready();
   });
-  afterEach(() => {
-    vi.useRealTimers();
-  });
 
   it("signs the time the caller passes", async () => {
     const signed: Uint8Array[] = [];
@@ -47,16 +44,13 @@ describe("bridge message signing time", () => {
     expect(signedTimeOf(signed[0])).toBe(1_700_000_000_123n);
   });
 
-  it("signs the current time when none is passed", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_800_000_000_456);
-    const signed: Uint8Array[] = [];
-    const vote = await signVotePauseBridge((message) => {
-      signed.push(message);
-      return new Uint8Array(64);
-    }, binding);
-    expect(vote.signedAtMs).toBe(1_800_000_000_456n);
-    expect(signedTimeOf(signed[0])).toBe(1_800_000_000_456n);
+  it("requires a signing time: the wall clock runs ahead of block time", async () => {
+    await expect(
+      signVotePauseBridge(
+        zeroSigner,
+        binding as unknown as Parameters<typeof signVotePauseBridge>[1],
+      ),
+    ).rejects.toThrow("signedAtMs is required");
   });
 
   it("the signing time is part of every preimage", async () => {

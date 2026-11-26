@@ -224,6 +224,7 @@ def test_a_wrong_width_field_is_refused_before_signing(field, value):
         "deployment_id": DEPLOYMENT,
         "chain_id": CHAIN,
         "registry_epoch": 1,
+        "signed_at_ms": SIGNED_AT,
     } | {field: value}
     with pytest.raises(ValueError, match=field):
         VoteWithdrawalPaid.sign(key.signer(), **fields)
@@ -309,7 +310,7 @@ def test_an_external_signature_from_another_key_is_refused():
 def test_a_byte_field_must_be_bytes(value):
     key = _Key(b"\x01")
     with pytest.raises(TypeError, match="vault must be bytes"):
-        VoteWithdrawalPaid.sign(key.signer(), 7, value, 3, DEPLOYMENT, CHAIN, 1)
+        VoteWithdrawalPaid.sign(key.signer(), 7, value, 3, DEPLOYMENT, CHAIN, 1, SIGNED_AT)
     with pytest.raises(TypeError, match="vault must be bytes"):
         vote_withdrawal_paid_message(7, value, 3, DEPLOYMENT, CHAIN, 1, SIGNED_AT)
     assert key.signed == []
@@ -426,12 +427,11 @@ def test_every_kind_signs_its_time():
         assert later[-8:] == (SIGNED_AT + 1).to_bytes(8, "big")
 
 
-def test_sign_uses_the_current_time_when_none_is_passed(monkeypatch):
-    monkeypatch.setattr(actions.time, "time_ns", lambda: 1_800_000_000_456_000_000)
+def test_sign_requires_a_signing_time():
+    """The wall clock runs ahead of block time, so there is no default."""
     key = _Key(b"\x42")
-    pause = VotePauseBridge.sign(key.signer(), DEPLOYMENT, CHAIN, 2)
-    assert pause.signed_at_ms == 1_800_000_000_456
-    assert key.signed[-1] == vote_pause_bridge_message(DEPLOYMENT, CHAIN, 2, 1_800_000_000_456)
-    paid = VoteWithdrawalPaid.sign(key.signer(), 1, VAULT, 1, DEPLOYMENT, CHAIN, 2)
-    assert paid.signed_at_ms == 1_800_000_000_456
-    assert key.signed[-1][-8:] == (1_800_000_000_456).to_bytes(8, "big")
+    with pytest.raises(TypeError):
+        VotePauseBridge.sign(key.signer(), DEPLOYMENT, CHAIN, 2)
+    with pytest.raises(TypeError):
+        VoteWithdrawalPaid.sign(key.signer(), 1, VAULT, 1, DEPLOYMENT, CHAIN, 2)
+    assert key.signed == []

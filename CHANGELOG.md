@@ -25,16 +25,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `registryEpoch` and `signature`. The pause vote's body is now empty: its
   time moved into the tail, so `VotePauseBridge` lists `signedAtMs` after
   `registryEpoch`.
-  - TypeScript: `BridgeBinding.signedAtMs` is optional and the `sign*`
-    helpers use the current time when it is absent;
+  - TypeScript: `BridgeBinding.signedAtMs` is required: pass the latest
+    committed block's time, since the wall clock runs ahead of block time and
+    the engine refuses a message signed after its block;
     `signVotePauseBridge(signer, binding)` drops its separate time argument.
     `bridgeMessagePreimage` takes a `SignedBridgeBinding`.
   - Rust: `BridgeBinding` carries `signed_at_ms`;
     `sign_vote_pause_bridge(signer, binding)` drops its separate argument and
     `BridgeMessage::PauseBridge` holds only the binding.
-  - Python: each `.sign` takes `signed_at_ms` as an optional last argument
-    (the current time when omitted); each `*_message` builder takes it as a
-    required last argument, and `vote_pause_bridge_message` and
+  - Python: each `.sign` and each `*_message` builder takes `signed_at_ms`
+    as a required last argument (the latest committed block's time), and `vote_pause_bridge_message` and
     `VotePauseBridge.sign` take the binding first.
   - The engine refuses a message signed after the executing block, 24 hours
     or more before it, or at or before the bridge's last unpause (codes 146
