@@ -372,3 +372,30 @@ def test_a_payout_config_proposal_follows_the_wire_rule(config, error):
             registry_version=1,
             action={"SetBridgePayoutConfig": config},
         )
+
+
+@pytest.mark.parametrize(
+    "action, error",
+    [
+        ({"SetWithdrawalPolicy": {"fee_micro_usdc": 2, "min_withdrawal_micro_usdc": 1}}, "below fee"),
+        (
+            {"SetDepositReceiptLimit": {"per_receipt_max_micro_usdc": 1, "window_cap_micro_usdc": 1, "window_secs": 0}},
+            "at least 1",
+        ),
+        (
+            {"SetDepositReceiptLimit": {"per_receipt_max_micro_usdc": 2, "window_cap_micro_usdc": 1, "window_secs": 60}},
+            "above window_cap",
+        ),
+    ],
+)
+def test_admin_limits_follow_the_wire_rules(action, error):
+    with pytest.raises(ValueError, match=error):
+        actions.ProposeAdminAction(proposer=b"\x01" * 20, registry_version=1, action=action)
+
+
+def test_a_cap_of_zero_is_off():
+    actions.ProposeAdminAction(
+        proposer=b"\x01" * 20,
+        registry_version=1,
+        action={"SetDepositReceiptLimit": {"per_receipt_max_micro_usdc": 2, "window_cap_micro_usdc": 0, "window_secs": 60}},
+    )

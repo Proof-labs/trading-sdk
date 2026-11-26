@@ -270,6 +270,7 @@ export const ACTION_TAG_BY_KIND: Record<DecodedAdminAction["kind"], number> = {
   PauseBridge: 32,
   SetBridgePayoutConfig: 33,
   SetDepositReceiptLimit: 34,
+  SetWithdrawalPolicy: 37,
 };
 
 /** The typed inner operation a proposal carries, decoded as the wire's

@@ -166,6 +166,7 @@ export {
   type VotePauseBridge,
   type SetBridgePayoutConfig,
   type SetDepositReceiptLimit,
+  type SetWithdrawalPolicy,
   type BridgePayoutConfig,
   type BridgeStatus,
   type OperatorMember,

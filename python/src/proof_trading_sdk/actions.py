@@ -1439,8 +1439,41 @@ def _require_submittable_admin_action(action: AdminActionWire) -> None:
         raise ValueError("retired admin actions cannot be proposed or approved")
     if _names_retired_authority_list(action):
         raise ValueError("an UpdateAuthoritySet naming a retired authority list cannot be proposed or approved")
-    if kind == "SetBridgePayoutConfig" and isinstance(action, dict):
-        _check_bridge_payout_config(action["SetBridgePayoutConfig"])
+    if isinstance(action, dict):
+        check = _ADMIN_ACTION_CHECKS.get(kind)
+        if check is not None:
+            check(action[kind])
+
+
+def _fields_of(kind: str, value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{kind} must be a field map")
+    return value
+
+
+def _check_deposit_receipt_limit(value: Any) -> None:
+    """The wire's rule: the window is at least one second and, with both caps
+    on (non-zero), the per-deposit maximum fits under the window cap."""
+    limit = _fields_of("SetDepositReceiptLimit", value)
+    if limit.get("window_secs", 0) < 1:
+        raise ValueError("SetDepositReceiptLimit window_secs must be at least 1")
+    maximum = limit.get("per_receipt_max_micro_usdc", 0)
+    cap = limit.get("window_cap_micro_usdc", 0)
+    if maximum and cap and maximum > cap:
+        raise ValueError(
+            f"SetDepositReceiptLimit per_receipt_max_micro_usdc {maximum} is above window_cap_micro_usdc {cap}"
+        )
+
+
+def _check_withdrawal_policy(value: Any) -> None:
+    """The wire's rule: the minimum net withdrawal is not below the fee."""
+    policy = _fields_of("SetWithdrawalPolicy", value)
+    fee = policy.get("fee_micro_usdc", 0)
+    minimum = policy.get("min_withdrawal_micro_usdc", 0)
+    if minimum < fee:
+        raise ValueError(
+            f"SetWithdrawalPolicy min_withdrawal_micro_usdc {minimum} is below fee_micro_usdc {fee}"
+        )
 
 
 def _check_bridge_payout_config(config: Any) -> None:
@@ -1457,6 +1490,13 @@ def _check_bridge_payout_config(config: Any) -> None:
             raise ValueError(f"SetBridgePayoutConfig {name} must not be zero")
     if bytes(vault) == bytes(ops):
         raise ValueError("SetBridgePayoutConfig ops_wallet must differ from payout_multisig")
+
+
+_ADMIN_ACTION_CHECKS = {
+    "SetBridgePayoutConfig": _check_bridge_payout_config,
+    "SetDepositReceiptLimit": _check_deposit_receipt_limit,
+    "SetWithdrawalPolicy": _check_withdrawal_policy,
+}
 
 
 @dataclass

@@ -1435,6 +1435,17 @@ export interface SetBridgePayoutConfig {
   opsWallet: Uint8Array;
 }
 
+/** The protocol withdrawal policy (inner tag 37): the flat fee every
+ *  withdrawal pays and the smallest net amount one may withdraw. While unset
+ *  the engine applies a $1 fee and a $1 minimum. */
+export interface SetWithdrawalPolicy {
+  /** Flat fee in micro-USDC, committed in the signed withdrawal
+   *  authorization. */
+  feeMicroUsdc: bigint;
+  /** Minimum net withdrawal in micro-USDC; never below `feeMicroUsdc`. */
+  minWithdrawalMicroUsdc: bigint;
+}
+
 /** The caps on what operator votes may credit through `VoteDeposit`
  *  (inner tag 0x22), a ledger separate from `SetDepositLimit`. A deposit
  *  over a cap stays queued or parked, never credited. */
@@ -1658,6 +1669,7 @@ export type AdminAction =
   | { kind: "UnpauseBridge" }
   | { kind: "SetBridgePayoutConfig"; value: SetBridgePayoutConfig }
   | { kind: "SetDepositReceiptLimit"; value: SetDepositReceiptLimit }
+  | { kind: "SetWithdrawalPolicy"; value: SetWithdrawalPolicy }
   | { kind: "UpdateAuthoritySet"; value: UpdateAuthoritySet }
   | { kind: "ScheduleUpgrade"; value: ScheduleUpgrade }
   | { kind: "CancelUpgrade"; value: CancelUpgrade };

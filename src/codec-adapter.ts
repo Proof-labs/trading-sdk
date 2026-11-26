@@ -56,6 +56,8 @@ import {
   type SetLiquidationConfig,
   type SetOperatorReceiptRegistry,
   type SetBridgePayoutConfig,
+  type SetDepositReceiptLimit,
+  type SetWithdrawalPolicy,
   type SettleEvent,
   type AccountFeeOverrideChange,
   type VoidEvent,
@@ -226,6 +228,12 @@ function validateGovernanceAction(v: { kind: string; value?: unknown }): void {
   if (v.kind === "SetBridgePayoutConfig") {
     validateSetBridgePayoutConfig(v.value as SetBridgePayoutConfig);
   }
+  if (v.kind === "SetDepositReceiptLimit") {
+    validateSetDepositReceiptLimit(v.value as SetDepositReceiptLimit);
+  }
+  if (v.kind === "SetWithdrawalPolicy") {
+    validateSetWithdrawalPolicy(v.value as SetWithdrawalPolicy);
+  }
   if (v.kind === "SetMarginOffsetPolicy") {
     validateSetMarginOffsetPolicy(v.value as SetMarginOffsetPolicy);
   }
@@ -306,6 +314,29 @@ function validateSetOperatorReceiptRegistry(
       );
     }
     seen.add(hex);
+  }
+}
+
+/** The wire's rule: the window is at least one second and, with both caps
+ *  on (non-zero), the per-deposit maximum fits under the window cap. */
+function validateSetDepositReceiptLimit(limit: SetDepositReceiptLimit): void {
+  if (limit.windowSecs < 1) {
+    throw new Error("setDepositReceiptLimit windowSecs must be at least 1");
+  }
+  const { perReceiptMaxMicroUsdc: maximum, windowCapMicroUsdc: cap } = limit;
+  if (maximum !== 0n && cap !== 0n && maximum > cap) {
+    throw new Error(
+      `setDepositReceiptLimit perReceiptMaxMicroUsdc ${maximum} is above windowCapMicroUsdc ${cap}`,
+    );
+  }
+}
+
+/** The wire's rule: the minimum net withdrawal is not below the fee. */
+function validateSetWithdrawalPolicy(policy: SetWithdrawalPolicy): void {
+  if (policy.minWithdrawalMicroUsdc < policy.feeMicroUsdc) {
+    throw new Error(
+      `setWithdrawalPolicy minWithdrawalMicroUsdc ${policy.minWithdrawalMicroUsdc} is below feeMicroUsdc ${policy.feeMicroUsdc}`,
+    );
   }
 }
 

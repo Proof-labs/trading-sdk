@@ -68,8 +68,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **All SDKs:** the admin quorum's bridge controls `PauseBridge` (inner tag
   0x20), `SetBridgePayoutConfig` (0x21: the Squads vault every payout record
   must name, and its rent wallet) and `SetDepositReceiptLimit` (0x22: the caps
-  on vote-credited deposits). TypeScript and Python refuse a payout config
-  with a zero address or whose rent wallet is the vault, as the engine does, and a proposal of an admin action this SDK does not
+  on vote-credited deposits), and `SetWithdrawalPolicy` (37: the flat
+  withdrawal fee and the minimum net withdrawal). TypeScript and Python
+  refuse what the engine refuses: a payout config with a zero address or
+  whose rent wallet is the vault, a receipt-limit window under one second or
+  a per-deposit maximum above the window cap, and a minimum withdrawal below
+  the fee, and a proposal of an admin action this SDK does not
   know now fails to decode instead of reaching the caller.
 - **Errors:** 143 to 151, 153 and 154 are named (`UserImAboveNotional`,
   `BridgePaused`, `WithdrawalPayoutCleared`, `BridgeVoteInvalid`,

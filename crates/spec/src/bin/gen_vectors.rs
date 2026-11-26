@@ -668,6 +668,19 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "window_secs": 86_400u32}}
             }),
         ),
+        // SetWithdrawalPolicy (inner tag 37): the flat withdrawal fee and the
+        // minimum net withdrawal, which is never below the fee.
+        codec_case(
+            "propose_admin_action/set_withdrawal_policy",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": {"SetWithdrawalPolicy": {
+                    "fee_micro_usdc": 1_000_000u64,
+                    "min_withdrawal_micro_usdc": u64::MAX}}
+            }),
+        ),
         // SetLiquidationConfig (inner tag 0x11): the configuration exchange-wire
         // freezes in its own vector. Every newtype is its bare integer and the
         // full-close threshold is a nested positional pair.

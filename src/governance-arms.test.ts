@@ -130,6 +130,31 @@ describe("decode side of the two arms", () => {
     });
   });
 
+  it("renders a withdrawal policy and refuses a minimum below the fee", () => {
+    expect(
+      decodeAdminAction({ SetWithdrawalPolicy: [1_000_000n, 2_000_000n] }),
+    ).toEqual({
+      kind: "SetWithdrawalPolicy",
+      value: { feeMicroUsdc: 1_000_000n, minWithdrawalMicroUsdc: 2_000_000n },
+    });
+    expect(() =>
+      decodeAdminAction({ SetWithdrawalPolicy: [2_000_000n, 1_000_000n] }),
+    ).toThrow(/below feeMicroUsdc/);
+  });
+
+  it("refuses deposit receipt limits the engine would refuse", () => {
+    expect(() =>
+      decodeAdminAction({ SetDepositReceiptLimit: [1n, 1n, 0] }),
+    ).toThrow(/windowSecs must be at least 1/);
+    expect(() =>
+      decodeAdminAction({ SetDepositReceiptLimit: [2n, 1n, 60] }),
+    ).toThrow(/above windowCapMicroUsdc/);
+    // A cap of zero is off, so any maximum fits under it.
+    expect(
+      decodeAdminAction({ SetDepositReceiptLimit: [2n, 0n, 60] }).kind,
+    ).toBe("SetDepositReceiptLimit");
+  });
+
   it("refuses a payout config with a zero address", () => {
     expect(() =>
       decodeAdminAction({

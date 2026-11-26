@@ -989,6 +989,16 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
       },
     };
   }
+  if (v.SetWithdrawalPolicy) {
+    const p = v.SetWithdrawalPolicy as Record<string, unknown>;
+    return {
+      kind: "SetWithdrawalPolicy",
+      value: {
+        feeMicroUsdc: big(p.fee_micro_usdc),
+        minWithdrawalMicroUsdc: big(p.min_withdrawal_micro_usdc),
+      },
+    };
+  }
   if (v.SetDepositReceiptLimit) {
     const d = v.SetDepositReceiptLimit as Record<string, unknown>;
     return {
@@ -1427,7 +1437,7 @@ describe("conformance vectors (TypeScript)", () => {
     // set-deposit-limit, set-market-status, update-market-fees,
     // set-account-fee-override), approve, reject, and the PauseMarket
     // emergency arm.
-    expect(govCases.length).toBe(39);
+    expect(govCases.length).toBe(40);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(
