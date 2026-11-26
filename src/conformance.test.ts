@@ -1637,6 +1637,7 @@ describe("conformance vectors (TypeScript)", () => {
           deploymentId: new Uint8Array(32),
           chainId: new Uint8Array(32),
           registryEpoch: 1n,
+          signedAtMs: 1n,
         },
       ),
     ).rejects.toThrow("vault");
