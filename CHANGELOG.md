@@ -7,77 +7,42 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Rust core:** `market_snapshot::decode_snapshot_view` decodes a complete
+  `GET /v2/markets-snapshot` body, bound to a chain, into proof-wire's
+  `query_v2` view (`market_snapshot::MarketsSnapshotView`). A record that is
+  not a map keyed by field name, or a name that is not a string (a status
+  sent as the integer 0, for example), refuses the whole read.
+
 ### Changed
 
-- **Breaking, all SDKs (needs proof-wire 14):** `RecordWithdrawalPayout` is
-  signed by the recording operator's registry key instead of an envelope
-  signer named as the lease holder: `holder` is gone, and the record carries
-  `deploymentId`, `chainId` and `signature`. Build it with
-  `signRecordWithdrawalPayout` / `RecordWithdrawalPayout.sign`.
-- **Breaking, all SDKs:** `SetOperatorReceiptRegistry` carries only
-  `operatorKeys`, one per operator; TypeScript refuses a key named twice.
-- **Rust and the conformance runners:** proof-wire is pinned by full commit
-  hash to `0f6231a`, the v14.0.0 tag commit on Proof-labs/wire (exchange
-  release 2.29.0, protocol 17.0).
-- **Breaking, all SDKs (needs proof-wire 14):** a liquidation configuration
-  carries `fundLimits` (`fund_limits` in Rust and Python): the most gross
-  notional a pool's insurance fund holds after a takeover, `grossBps` over all
-  its markets and `marketBps` on one, in basis points of the fund's equity.
-  `marketBps` must be above zero and at most `grossBps`.
-  - `SetLiquidationConfig` always encodes seven fields: a configuration
-    without `fundLimits` encodes the initial 10,000 and 5,000, so its bytes
-    and its proposal content hash change. The engine before proof-wire 14
-    refuses the longer array.
-  - The `GET /v1/liquidation-config` read and a proposal's decoded
-    `SetLiquidationConfig` accept the seven-field record a proof-wire 14
-    engine stores (all three SDKs refused it before), and a record written
-    before the field reads with the initial limits.
-  - TypeScript: `LiquidationConfig.fundLimits` is optional on input and always
-    set on a decoded read; `validateLiquidationConfig` refuses limits outside
-    the bound. `LiquidationConfigSet` events carry `fundLimits` when the
-    engine reports `fund_gross_limit_bps` and `fund_market_limit_bps`.
-  - Python: `LiquidationConfig.fund_limits` is a `FundLimits`, a new
-    required dataclass field.
 - **Breaking (Rust, `proof-sdk-rs`):** `PredictionSettled` and `ConditionMet`
   gain `fund_charged`, the part of the settlement loss the pool's insurance
   fund paid for the owner; 0 when the engine did not report it, as on blocks
   before proof-wire 14. A struct literal of either type needs the field.
-- **TypeScript:** `ConditionalVoidSettledEvent` gains `fundCharged`, decoded
-  the same way (`0n` when absent).
-- **Breaking, all SDKs, bridge operators:** every bridge-operator message
-  signs its time. The five messages end in one signed tail, `deploymentId`,
-  `chainId`, `registryEpoch` and `signedAtMs` (`signed_at_ms`, 8 bytes
-  big-endian), and every payload carries `signedAtMs` between
-  `registryEpoch` and `signature`. The pause vote's body is now empty: its
-  time moved into the tail, so `VotePauseBridge` lists `signedAtMs` after
-  `registryEpoch`.
-  - TypeScript: `BridgeBinding.signedAtMs` is required: pass the latest
-    committed block's time, since the wall clock runs ahead of block time and
-    the engine refuses a message signed after its block;
-    `signVotePauseBridge(signer, binding)` drops its separate time argument.
-    `bridgeMessagePreimage` takes a `SignedBridgeBinding`.
-  - Rust: `BridgeBinding` carries `signed_at_ms`;
-    `sign_vote_pause_bridge(signer, binding)` drops its separate argument and
-    `BridgeMessage::PauseBridge` holds only the binding.
-  - Python: each `.sign` and each `*_message` builder takes `signed_at_ms`
-    as a required last argument (the latest committed block's time), and `vote_pause_bridge_message` and
-    `VotePauseBridge.sign` take the binding first.
-  - The engine refuses a message signed after the executing block, 24 hours
-    or more before it, or at or before the bridge's last unpause (codes 146
-    and 148, carrying proof-wire's `SignedTimeRefusal`), and a stored vote
-    stops counting 24 hours after its signing time or once an unpause
-    postdates it.
+- **Breaking (Python):** a transaction the engine refused is returned with its
+  non-zero `code` instead of raising `EngineError`, as in TypeScript and Rust.
+- **Breaking (Rust):** `UnfilledReason` is the SDK's own open enum,
+  `Known(<wire reason>)` or `Other(String)`, so a reason newer than the SDK
+  still reads. `PlacementOutcome` and `OrderPlacement` are no longer `Copy`.
+- **Breaking (Rust):** `Error::OrderResultUnreadable` carries only the
+  receipt; the event that did not parse is in `receipt.events`.
 
-- **Breaking, TypeScript and Python:** the authorities read no longer exposes the retired
-  composite-feeder and scheduled-operations lists. `AuthoritiesSnapshot` carries
-  `relayer`, `oracle`, `custody` and `marketParams` (`market_params` in Python);
-  the engine's six-slot response is still checked in full and the two retired
-  slots are dropped. `AuthorityDomain` no longer offers `CexComposite` or
-  `ScheduledOps`; an `UpdateAuthoritySet` naming either decodes as
-  `RetiredAuthoritySetUpdate` and `isSubmittableAdminAction` rejects it; Python's
-  `is_submittable_admin_action` and the proposal builders refuse it too. The
-  wire format is unchanged, and the Rust crates keep proof-wire's six-field
-  `AuthoritiesSnapshot` until proof-wire changes.
+### Fixed
+
+- Python order results reject malformed or out-of-range integer attributes,
+  a non-string `unfilled` reason and non-string order lists as
+  `OrderResultUnreadable`, preserving the executed transaction's hash for
+  reconciliation.
+
+## [16.0.0] — 2026-11-26
+
+npm only: a MAJOR on proof-wire 14.0.0 (exchange 2.29.0, protocol 17.0).
+Bridge operators sign votes under the vote model, the receipt and payout-lease
+surfaces are gone, and a liquidation configuration carries the insurance
+fund's limits, which the SDK must decode once an engine on protocol 17.0
+stores them. The Rust and Python entries above stay under [Unreleased].
 
 ### Added
 
@@ -179,28 +144,73 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`RelayerAttested`, or no source) from its settlement time; a price event
   still waits for its resolution window to close. No code change: the SDK
   never restricted `SettleEvent` to price events.
-- **Rust core:** `market_snapshot::decode_snapshot_view` decodes a complete
-  `GET /v2/markets-snapshot` body, bound to a chain, into proof-wire's
-  `query_v2` view (`market_snapshot::MarketsSnapshotView`). A record that is
-  not a map keyed by field name, or a name that is not a string (a status
-  sent as the integer 0, for example), refuses the whole read.
 
 ### Changed
 
-- **Breaking (Python):** a transaction the engine refused is returned with its
-  non-zero `code` instead of raising `EngineError`, as in TypeScript and Rust.
-- **Breaking (Rust):** `UnfilledReason` is the SDK's own open enum,
-  `Known(<wire reason>)` or `Other(String)`, so a reason newer than the SDK
-  still reads. `PlacementOutcome` and `OrderPlacement` are no longer `Copy`.
-- **Breaking (Rust):** `Error::OrderResultUnreadable` carries only the
-  receipt; the event that did not parse is in `receipt.events`.
-
-### Fixed
-
-- Python order results reject malformed or out-of-range integer attributes,
-  a non-string `unfilled` reason and non-string order lists as
-  `OrderResultUnreadable`, preserving the executed transaction's hash for
-  reconciliation.
+- **Breaking, all SDKs (needs proof-wire 14):** `RecordWithdrawalPayout` is
+  signed by the recording operator's registry key instead of an envelope
+  signer named as the lease holder: `holder` is gone, and the record carries
+  `deploymentId`, `chainId` and `signature`. Build it with
+  `signRecordWithdrawalPayout` / `RecordWithdrawalPayout.sign`.
+- **Breaking, all SDKs:** `SetOperatorReceiptRegistry` carries only
+  `operatorKeys`, one per operator; TypeScript refuses a key named twice.
+- **Rust and the conformance runners:** proof-wire is pinned by full commit
+  hash to `0f6231a`, the v14.0.0 tag commit on Proof-labs/wire (exchange
+  release 2.29.0, protocol 17.0).
+- **Breaking, all SDKs (needs proof-wire 14):** a liquidation configuration
+  carries `fundLimits` (`fund_limits` in Rust and Python): the most gross
+  notional a pool's insurance fund holds after a takeover, `grossBps` over all
+  its markets and `marketBps` on one, in basis points of the fund's equity.
+  `marketBps` must be above zero and at most `grossBps`.
+  - `SetLiquidationConfig` always encodes seven fields: a configuration
+    without `fundLimits` encodes the initial 10,000 and 5,000, so its bytes
+    and its proposal content hash change. The engine before proof-wire 14
+    refuses the longer array.
+  - The `GET /v1/liquidation-config` read and a proposal's decoded
+    `SetLiquidationConfig` accept the seven-field record a proof-wire 14
+    engine stores (all three SDKs refused it before), and a record written
+    before the field reads with the initial limits.
+  - TypeScript: `LiquidationConfig.fundLimits` is optional on input and always
+    set on a decoded read; `validateLiquidationConfig` refuses limits outside
+    the bound. `LiquidationConfigSet` events carry `fundLimits` when the
+    engine reports `fund_gross_limit_bps` and `fund_market_limit_bps`.
+  - Python: `LiquidationConfig.fund_limits` is a `FundLimits`, a new
+    required dataclass field.
+- **TypeScript:** `ConditionalVoidSettledEvent` gains `fundCharged`, decoded
+  the same way (`0n` when absent).
+- **Breaking, all SDKs, bridge operators:** every bridge-operator message
+  signs its time. The five messages end in one signed tail, `deploymentId`,
+  `chainId`, `registryEpoch` and `signedAtMs` (`signed_at_ms`, 8 bytes
+  big-endian), and every payload carries `signedAtMs` between
+  `registryEpoch` and `signature`. The pause vote's body is now empty: its
+  time moved into the tail, so `VotePauseBridge` lists `signedAtMs` after
+  `registryEpoch`.
+  - TypeScript: `BridgeBinding.signedAtMs` is required: pass the latest
+    committed block's time, since the wall clock runs ahead of block time and
+    the engine refuses a message signed after its block;
+    `signVotePauseBridge(signer, binding)` drops its separate time argument.
+    `bridgeMessagePreimage` takes a `SignedBridgeBinding`.
+  - Rust: `BridgeBinding` carries `signed_at_ms`;
+    `sign_vote_pause_bridge(signer, binding)` drops its separate argument and
+    `BridgeMessage::PauseBridge` holds only the binding.
+  - Python: each `.sign` and each `*_message` builder takes `signed_at_ms`
+    as a required last argument (the latest committed block's time), and `vote_pause_bridge_message` and
+    `VotePauseBridge.sign` take the binding first.
+  - The engine refuses a message signed after the executing block, 24 hours
+    or more before it, or at or before the bridge's last unpause (codes 146
+    and 148, carrying proof-wire's `SignedTimeRefusal`), and a stored vote
+    stops counting 24 hours after its signing time or once an unpause
+    postdates it.
+- **Breaking, TypeScript and Python:** the authorities read no longer exposes the retired
+  composite-feeder and scheduled-operations lists. `AuthoritiesSnapshot` carries
+  `relayer`, `oracle`, `custody` and `marketParams` (`market_params` in Python);
+  the engine's six-slot response is still checked in full and the two retired
+  slots are dropped. `AuthorityDomain` no longer offers `CexComposite` or
+  `ScheduledOps`; an `UpdateAuthoritySet` naming either decodes as
+  `RetiredAuthoritySetUpdate` and `isSubmittableAdminAction` rejects it; Python's
+  `is_submittable_admin_action` and the proposal builders refuse it too. The
+  wire format is unchanged, and the Rust crates keep proof-wire's six-field
+  `AuthoritiesSnapshot` until proof-wire changes.
 
 ### Removed
 
