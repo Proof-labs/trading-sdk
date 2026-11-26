@@ -8,13 +8,17 @@ import type {
   ProposalStatus,
   NodeVersion,
   PendingUpgradePlan,
+  FundLimits,
   LiquidationConfig,
   LiquidationConfigInfo,
   AuthoritiesSnapshot,
   UpgradesInfo,
 } from "./types.js";
 import { adminActionFromWasm } from "./codec-adapter.js";
-import { INITIAL_TAKEOVER_DISCOUNT_BPS } from "./liquidation-config.js";
+import {
+  INITIAL_FUND_LIMITS,
+  INITIAL_TAKEOVER_DISCOUNT_BPS,
+} from "./liquidation-config.js";
 import { getWasm } from "./wasm-loader.js";
 
 const actionEncoder = new Encoder({ useBigInt64: true });
@@ -161,14 +165,15 @@ function toArray(value: unknown, field: string): unknown[] {
 }
 
 /// A `LiquidationConfig` as `[targetRatioBps, [numerator, denominator],
-/// partialPenaltyBps, maxBookOrders, maxCommittedFills, takeoverDiscountBps?]`.
-/// Every newtype is its bare integer; a record without the takeover discount
-/// decodes with the engine's initial value.
+/// partialPenaltyBps, maxBookOrders, maxCommittedFills, takeoverDiscountBps?,
+/// [fundGrossLimitBps, fundMarketLimitBps]?]`. Every newtype is its bare
+/// integer; a record without a trailing field decodes with the engine's
+/// initial value for it.
 function decodeLiquidationConfigTuple(
   value: unknown,
   name: string,
 ): LiquidationConfig {
-  const c = toTupleBetween(value, name, 5, 6);
+  const c = toTupleBetween(value, name, 5, 7);
   const threshold = toTuple(c[1], `${name}.fullCloseThreshold`, 2);
   const field = (part: string) => `${name}.${part}`;
   return {
@@ -184,6 +189,16 @@ function decodeLiquidationConfigTuple(
       c.length > 5
         ? toU32(c[5], field("takeoverDiscountBps"))
         : INITIAL_TAKEOVER_DISCOUNT_BPS,
+    fundLimits:
+      c.length > 6 ? decodeFundLimits(c[6], name) : { ...INITIAL_FUND_LIMITS },
+  };
+}
+
+function decodeFundLimits(value: unknown, name: string): FundLimits {
+  const limits = toTuple(value, `${name}.fundLimits`, 2);
+  return {
+    grossBps: toU32(limits[0], `${name}.fundLimits.grossBps`),
+    marketBps: toU32(limits[1], `${name}.fundLimits.marketBps`),
   };
 }
 

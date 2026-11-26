@@ -28,6 +28,14 @@ class FullCloseThreshold:
 
 
 @dataclass(frozen=True)
+class FundLimits:
+    """A pool insurance fund's gross notional limits, in basis points of its equity."""
+
+    gross_bps: int
+    market_bps: int
+
+
+@dataclass(frozen=True)
 class LiquidationConfig:
     target_ratio_bps: int
     full_close_threshold: FullCloseThreshold
@@ -36,6 +44,7 @@ class LiquidationConfig:
     max_book_orders: int
     max_committed_fills: int
     takeover_discount_bps: int
+    fund_limits: FundLimits
 
 
 @dataclass(frozen=True)
@@ -75,12 +84,17 @@ def decode_authorities_snapshot(value: t.Any) -> AuthoritiesSnapshot:
 
 
 def decode_liquidation_config_info(value: t.Any) -> LiquidationConfigInfo:
-    """Decode the stored sequence/config pair; legacy takeover discount defaults to 50."""
+    """Decode the stored sequence/config pair.
+
+    A config written before a trailing field existed takes its initial value:
+    takeover discount 50, fund limits 10,000 over all markets and 5,000 on one.
+    """
     try:
         sequence, config = _native.decode_liquidation_config(_payload(value))
     except ValueError as err:
         raise CodecError("invalid liquidation configuration") from err
     threshold = FullCloseThreshold(**config["full_close_threshold"])
+    fund_limits = FundLimits(**config["fund_limits"])
     return LiquidationConfigInfo(sequence, LiquidationConfig(
-        **(config | {"full_close_threshold": threshold}),
+        **(config | {"full_close_threshold": threshold, "fund_limits": fund_limits}),
     ))

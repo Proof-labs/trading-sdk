@@ -63,9 +63,31 @@ fn liquidation_uses_wire_default_and_exact_ranges_shapes() {
             .0,
         75
     );
+    let (_, value) = decode_liquidation_config(&encoded(&pair(config.clone()))).unwrap();
+    assert_eq!(
+        (
+            value.fund_limits.gross_bps.0,
+            value.fund_limits.market_bps.0
+        ),
+        (10_000, 5_000)
+    );
+    config.push(Value::Array(vec![8_000.into(), 2_000.into()]));
+    let (_, value) = decode_liquidation_config(&encoded(&pair(config.clone()))).unwrap();
+    assert_eq!(
+        (
+            value.fund_limits.gross_bps.0,
+            value.fund_limits.market_bps.0
+        ),
+        (8_000, 2_000)
+    );
+    config[6] = 0.into();
+    assert!(decode_liquidation_config(&encoded(&pair(config.clone()))).is_err());
+    config[6] = Value::Array(vec![8_000.into()]);
+    assert!(decode_liquidation_config(&encoded(&pair(config.clone()))).is_err());
+    config[6] = Value::Array(vec![8_000.into(), 2_000.into()]);
     config.push(0.into());
     assert!(decode_liquidation_config(&encoded(&pair(config.clone()))).is_err());
-    config.pop();
+    config.truncate(6);
     config[0] = Value::from(u64::from(u32::MAX) + 1);
     assert!(decode_liquidation_config(&encoded(&pair(config))).is_err());
     assert!(decode_liquidation_config(&[0x92, 0xcb, 0, 0, 0, 0, 0, 0, 0, 0, 0x90]).is_err());

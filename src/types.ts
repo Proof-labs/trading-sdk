@@ -1640,6 +1640,19 @@ export interface LiquidationConfig {
   /** Discount the insurance fund takes over an insolvent position at, in
    *  basis points; at most 100. Omitted means the engine's 50. */
   takeoverDiscountBps?: number;
+  /** The most gross notional a pool's insurance fund holds after a
+   *  takeover, in basis points of its equity. Omitted means the engine's
+   *  10_000 over all markets and 5_000 on one. */
+  fundLimits?: FundLimits;
+}
+
+/** A pool insurance fund's gross notional limits, in basis points of its
+ *  equity. `marketBps` is above zero and at most `grossBps`. */
+export interface FundLimits {
+  /** Over all its markets. */
+  grossBps: number;
+  /** On any one market. */
+  marketBps: number;
 }
 
 /**

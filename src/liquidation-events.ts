@@ -220,6 +220,12 @@ function liquidationConfigSet(a: Attributes): LiquidationConfigSetEvent {
     ...(a.has("takeover_discount_bps") && {
       takeoverDiscountBps: a.u32("takeover_discount_bps"),
     }),
+    ...(a.has("fund_gross_limit_bps") && {
+      fundLimits: {
+        grossBps: a.u32("fund_gross_limit_bps"),
+        marketBps: a.u32("fund_market_limit_bps"),
+      },
+    }),
   };
   try {
     validateLiquidationConfig(config);
