@@ -2023,10 +2023,10 @@ export class ExchangeClient {
   async queryAccountV2(addressHex?: string): Promise<AccountView | null> {
     const hex = addressHex ?? this.addressHex;
     if (!hex) return null;
-    if (!/^[0-9a-fA-F]{40}$/.test(hex)) {
+    const owner = hex.replace(/^0x/i, "").toLowerCase();
+    if (!/^[0-9a-f]{40}$/.test(owner)) {
       throw new Error("account owner must be a 40-character hex address");
     }
-    const owner = hex.toLowerCase();
     const json = await this.apiJson(
       `${this.readBaseUrl}/v2/account/${owner}`,
       "account",
