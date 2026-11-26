@@ -1,10 +1,10 @@
 /**
  * An account's holdings at fixed steps, from the gateway's bucketed position
  * read `GET /v1/history/positions/{owner}?interval=…`: for each owner and
- * market, the last snapshot in each step of `[fromMs, toMs)`, plus the exact
- * snapshot where a market went from flat to held (`open`) and back (`close`),
- * so a holding shorter than one step still appears with its start and end.
- * Rows are newest first and paged by an opaque cursor.
+ * market, the last snapshot in each step of `[fromMs, toMs)`, plus each
+ * flat→held (`open`) and held→flat (`close`) change (`transitions=true`), so
+ * a holding shorter than one step still appears. Rows are newest first and
+ * paged by an opaque cursor.
  */
 
 import {
@@ -16,9 +16,16 @@ import {
 /** The most owners one read may name: an account and its sub-accounts. */
 export const HOLDING_STEPS_MAX_OWNERS = 16;
 
+/** The most markets one read may name. */
+export const HOLDING_STEPS_MAX_MARKETS = 200;
+
+/** The largest page, and the default: the gateway caps a response at 1 MiB
+ *  (about 4000 rows). */
+export const HOLDING_STEPS_MAX_LIMIT = 3000;
+
 /** Query parameters. Keep every one fixed while following `cursor`. */
 export interface HoldingStepFilters {
-  /** Market ids to read; omit for every market. */
+  /** Market ids to read; omit for every market. At most 200. */
   markets?: readonly number[];
   /** Inclusive lower bound, Unix epoch milliseconds. */
   fromMs: number;
@@ -27,7 +34,7 @@ export interface HoldingStepFilters {
   /** Step width in milliseconds: whole seconds, at most 365 days. Steps are
    *  epoch-aligned by the indexer. */
   stepMs: number;
-  /** Page size, 1 to 5000. */
+  /** Page size, 1 to 3000; defaults to 3000. */
   limit?: number;
   /** A previous page's non-empty `nextCursor`. */
   cursor?: string;
@@ -41,10 +48,13 @@ export interface HoldingStep {
   /** 20-byte owner address, lowercase hex without `0x`. */
   owner: string;
   market: number;
-  /** `step`: the market's last snapshot in a step. `open`: the first
-   *  snapshot after the market was flat. `close`: the snapshot where it went
-   *  flat (`size` "0", `side` null). A step that is also an open or close is
-   *  one row with the open/close kind. */
+  /** `step`: the market's last snapshot in a step. `close`: the exact
+   *  snapshot where it went flat (`size` "0", `side` null). `open`: the first
+   *  sampled snapshot after the market was flat — the indexer samples every
+   *  250 heights, so it can trail the real open by up to that much. A holding
+   *  that opened and closed between two samples has only its `close`: read a
+   *  `close` with no held row before it as held for a moment before it. A
+   *  step that is also an open or close is one row with the open/close kind. */
   kind: HoldingStepKind;
   /** `null` when flat. */
   side: "buy" | "sell" | null;
@@ -112,7 +122,15 @@ export function holdingStepSearchParams(
   if (filters.fromMs === undefined || filters.toMs === undefined) {
     throw new Error("Invalid history range");
   }
-  const params = historySearchParams(filters);
+  const limit = filters.limit ?? HOLDING_STEPS_MAX_LIMIT;
+  if (
+    !Number.isSafeInteger(limit) ||
+    limit < 1 ||
+    limit > HOLDING_STEPS_MAX_LIMIT
+  ) {
+    throw new Error("Invalid history limit");
+  }
+  const params = historySearchParams({ ...filters, limit });
   const { stepMs } = filters;
   if (!Number.isSafeInteger(stepMs) || stepMs <= 0 || stepMs % 1000 !== 0) {
     throw new Error("Invalid holding step width");
@@ -120,12 +138,17 @@ export function holdingStepSearchParams(
   params.set("interval", historyInterval(`${stepMs / 1000}s`));
   if (filters.markets !== undefined) {
     const markets = [...new Set(filters.markets)].sort((a, b) => a - b);
-    if (markets.length === 0 || !markets.every(validMarket)) {
+    if (
+      markets.length === 0 ||
+      markets.length > HOLDING_STEPS_MAX_MARKETS ||
+      !markets.every(validMarket)
+    ) {
       throw new Error("Invalid holding step markets");
     }
     params.set("markets", markets.join(","));
   }
   if (others.length > 0) params.set("owner", others.join(","));
+  params.set("transitions", "true");
   return params;
 }
 

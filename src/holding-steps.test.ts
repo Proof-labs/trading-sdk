@@ -49,10 +49,10 @@ describe("queryHoldingSteps", () => {
     const calls = stubFetch(recorded);
     const page: HoldingStepPage = await client().queryHoldingSteps(
       [`0x${main.toUpperCase()}`, sub, main],
-      { markets: [100, 3, 3], fromMs, toMs, stepMs, limit: 5000 },
+      { markets: [100, 3, 3], fromMs, toMs, stepMs, limit: 3000 },
     );
     expect(calls).toEqual([
-      `http://gateway/v1/history/positions/${sub}?from=${fromMs}&to=${toMs}&limit=5000&interval=36000s&markets=3%2C100&owner=${main}`,
+      `http://gateway/v1/history/positions/${sub}?from=${fromMs}&to=${toMs}&limit=3000&interval=36000s&markets=3%2C100&owner=${main}&transitions=true`,
     ]);
     expect(page.nextCursor).toBe(recorded.next_cursor);
     expect(page.steps).toHaveLength(8);
@@ -96,7 +96,7 @@ describe("queryHoldingSteps", () => {
     expect(times).toEqual([...times].sort((a, b) => b - a));
   });
 
-  it("passes the cursor and omits owner and markets when not needed", () => {
+  it("defaults limit to 3000, always asks for transitions, omits owner and markets when not needed", () => {
     expect(
       Object.fromEntries(
         holdingStepSearchParams([main], {
@@ -109,8 +109,10 @@ describe("queryHoldingSteps", () => {
     ).toEqual({
       from: String(fromMs),
       to: String(toMs),
+      limit: "3000",
       interval: "3600s",
       cursor: "opaque+/=",
+      transitions: "true",
     });
   });
 
@@ -130,7 +132,8 @@ describe("queryHoldingSteps", () => {
       [[main], { markets: [] }],
       [[main], { markets: [-1] }],
       [[main], { fromMs: toMs }],
-      [[main], { limit: 5001 }],
+      [[main], { limit: 3001 }],
+      [[main], { markets: Array.from({ length: 201 }, (_, i) => i) }],
     ];
     for (const [owners, patch] of bad) {
       await expect(
@@ -157,6 +160,21 @@ describe("decodeHoldingStepPage", () => {
 
   it("accepts a recorded row", () => {
     expect(decode({}).steps[0].kind).toBe("step");
+  });
+
+  it("accepts a close with no open before it (a holding between two samples)", () => {
+    const page = decode({
+      kind: "close",
+      size: "0",
+      side: null,
+      entry_px: null,
+    });
+    expect(page.steps).toHaveLength(1);
+    expect(page.steps[0]).toMatchObject({
+      kind: "close",
+      size: "0",
+      side: null,
+    });
   });
 
   it.each([

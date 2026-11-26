@@ -404,6 +404,8 @@ export {
   type OrderSummaryPage,
 } from "./order-summaries.js";
 export {
+  HOLDING_STEPS_MAX_LIMIT,
+  HOLDING_STEPS_MAX_MARKETS,
   HOLDING_STEPS_MAX_OWNERS,
   decodeHoldingStepPage,
   holdingStepOwners,

@@ -1899,10 +1899,12 @@ export class ExchangeClient {
   /**
    * Holdings of one or more owners (an account and its sub-accounts, at most
    * 16) at fixed steps over `[fromMs, toMs)`: per owner and market the last
-   * snapshot in each `stepMs` step (`kind: "step"`), plus the exact snapshot
-   * of every flat→held (`"open"`) and held→flat (`"close"`) change. Newest
-   * first; pass `nextCursor` back as `cursor` with the same owners and
-   * filters. Reads `GET /v1/history/positions/{owner}?interval=…`.
+   * snapshot in each `stepMs` step (`kind: "step"`), plus every held→flat
+   * change at its exact snapshot (`"close"`) and every flat→held change at
+   * the first sampled snapshot after it (`"open"`, up to 250 heights late).
+   * Newest first, at most 3000 rows a page; pass `nextCursor` back as
+   * `cursor` with the same owners and filters. Reads
+   * `GET /v1/history/positions/{owner}?interval=…&transitions=true`.
    */
   async queryHoldingSteps(
     owners: readonly string[],
