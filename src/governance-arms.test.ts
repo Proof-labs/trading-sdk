@@ -90,6 +90,87 @@ describe("decode side of the two arms", () => {
     });
   });
 
+  it("refuses a roster that names a key twice", () => {
+    expect(() =>
+      decodeAdminAction({
+        SetOperatorReceiptRegistry: [
+          Array(32).fill(0x11),
+          2n,
+          2,
+          [Array(32).fill(0x01), Array(32).fill(0x01)],
+        ],
+      }),
+    ).toThrow(/operatorKeys\[1\] duplicates an earlier key/);
+  });
+
+  it("renders the bridge controls from their wire forms", () => {
+    expect(decodeAdminAction("PauseBridge")).toEqual({ kind: "PauseBridge" });
+    expect(
+      decodeAdminAction({
+        SetBridgePayoutConfig: [Array(32).fill(0xb2), Array(32).fill(0xb3)],
+      }),
+    ).toEqual({
+      kind: "SetBridgePayoutConfig",
+      value: {
+        payoutMultisig: new Uint8Array(32).fill(0xb2),
+        opsWallet: new Uint8Array(32).fill(0xb3),
+      },
+    });
+    expect(
+      decodeAdminAction({
+        SetDepositReceiptLimit: [10_000_000_000n, 100_000_000_000n, 86_400],
+      }),
+    ).toEqual({
+      kind: "SetDepositReceiptLimit",
+      value: {
+        perReceiptMaxMicroUsdc: 10_000_000_000n,
+        windowCapMicroUsdc: 100_000_000_000n,
+        windowSecs: 86_400,
+      },
+    });
+  });
+
+  it("renders a withdrawal policy and refuses a minimum below the fee", () => {
+    expect(
+      decodeAdminAction({ SetWithdrawalPolicy: [1_000_000n, 2_000_000n] }),
+    ).toEqual({
+      kind: "SetWithdrawalPolicy",
+      value: { feeMicroUsdc: 1_000_000n, minWithdrawalMicroUsdc: 2_000_000n },
+    });
+    expect(() =>
+      decodeAdminAction({ SetWithdrawalPolicy: [2_000_000n, 1_000_000n] }),
+    ).toThrow(/below feeMicroUsdc/);
+  });
+
+  it("refuses deposit receipt limits the engine would refuse", () => {
+    expect(() =>
+      decodeAdminAction({ SetDepositReceiptLimit: [1n, 1n, 0] }),
+    ).toThrow(/windowSecs must be at least 1/);
+    expect(() =>
+      decodeAdminAction({ SetDepositReceiptLimit: [2n, 1n, 60] }),
+    ).toThrow(/above windowCapMicroUsdc/);
+    // A cap of zero is off, so any maximum fits under it.
+    expect(
+      decodeAdminAction({ SetDepositReceiptLimit: [2n, 0n, 60] }).kind,
+    ).toBe("SetDepositReceiptLimit");
+  });
+
+  it("refuses a payout config with a zero address", () => {
+    expect(() =>
+      decodeAdminAction({
+        SetBridgePayoutConfig: [Array(32).fill(0), Array(32).fill(0xb3)],
+      }),
+    ).toThrow(/payoutMultisig must not be zero/);
+  });
+
+  it("refuses a payout config whose rent wallet is the vault", () => {
+    expect(() =>
+      decodeAdminAction({
+        SetBridgePayoutConfig: [Array(32).fill(0xb2), Array(32).fill(0xb2)],
+      }),
+    ).toThrow(/opsWallet must differ from payoutMultisig/);
+  });
+
   it("fails closed on a malformed rotation tuple", () => {
     expect(() =>
       decodeAdminAction({

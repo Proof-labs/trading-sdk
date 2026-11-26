@@ -1,7 +1,9 @@
+import { depositCursorHex } from "./codec-adapter.js";
 // Reads whose response type is in proof-wire decode in the Rust core. Each
 // vector is `rmp_serde::to_vec` of the wire type, as the engine serves it.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { encode } from "@msgpack/msgpack";
 import { ExchangeClient } from "./client.js";
 import { decodeSigningMessage, encodePayloadBytes } from "./codec.js";
 import { signingMessage } from "./crypto.js";
@@ -221,6 +223,25 @@ describe("SetOperatorReceiptRegistry operatorKeys", () => {
     ).toThrow(/threshold 2 is outside 1..=1/);
   });
 
+  it("refuses a roster that names a key twice", () => {
+    expect(() =>
+      encodePayloadBytes({
+        type: "ProposeAdminAction",
+        data: {
+          proposer: new Uint8Array(20),
+          registryVersion: 2n,
+          action: {
+            kind: "SetOperatorReceiptRegistry",
+            value: {
+              ...value,
+              operatorKeys: [value.operatorKeys[0], value.operatorKeys[0]],
+            },
+          },
+        },
+      }),
+    ).toThrow(/operatorKeys\[1\] duplicates an earlier key/);
+  });
+
   it("round-trips through decodeSigningMessage", () => {
     const payload = encodePayloadBytes({
       type: "ProposeAdminAction",
@@ -242,5 +263,336 @@ describe("SetOperatorReceiptRegistry operatorKeys", () => {
     expect(decoded.action?.data).toMatchObject({
       action: { kind: "SetOperatorReceiptRegistry", value },
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bridge custody reads (`/v2/bridge/*`), serialized from the current
+// query_v2 view shapes.
+const wire = (value: unknown) =>
+  Buffer.from(encode(value, { useBigInt64: true })).toString("hex");
+const BRIDGE_STATUS = wire("Paused");
+const BRIDGE_STATUS_BACKLOG = wire("WithdrawalBacklog");
+const BRIDGE_PAYOUT_CONFIG = wire({
+  payout_multisig: new Uint8Array(32).fill(0xb2),
+  ops_wallet: new Uint8Array(32).fill(0xb3),
+});
+const BRIDGE_PAYOUT_CONFIG_UNSET = wire(null);
+const BRIDGE_REGISTRY = wire({
+  deployment_id: new Uint8Array(32).fill(0xa1),
+  epoch: 3n,
+  threshold: 2,
+  members: [
+    { key: new Uint8Array(32).fill(0x11) },
+    { key: new Uint8Array(32).fill(0x22) },
+  ],
+});
+const WITHDRAW_VOTE_1 = {
+  voter: new Uint8Array(32).fill(0x11),
+  registry_epoch: 3n,
+  verdict: "paid",
+  vault: new Uint8Array(32).fill(0xa2),
+  squads_transaction_index: 7,
+  signed_at_ms: 1_700_000_000_123n,
+  signature: new Uint8Array(64).fill(0x77),
+};
+const WITHDRAW_VOTE_2 = {
+  ...WITHDRAW_VOTE_1,
+  voter: new Uint8Array(32).fill(0x22),
+  verdict: "dead",
+  signature: new Uint8Array(64).fill(0x88),
+};
+const PENDING_WITHDRAWALS = wire({
+  rows: [
+    {
+      withdrawal: {
+        withdrawal_id: 103n,
+        owner: new Uint8Array(20).fill(0xab),
+        amount: 5_000_000n,
+        solana_destination: new Uint8Array(32).fill(0xcd),
+        status: "pending",
+        request_height: 42n,
+        quarantined: false,
+      },
+      payout: {
+        recorder: new Uint8Array(32).fill(0x11),
+        vault: new Uint8Array(32).fill(0xa2),
+        squads_transaction_index: 7,
+        registry_epoch: 3n,
+        recorded_at_ms: 1_700_000_000_000n,
+      },
+      votes: [WITHDRAW_VOTE_1, WITHDRAW_VOTE_2],
+      cleared_payouts: [
+        { vault: new Uint8Array(32).fill(0xa2), squads_transaction_index: 6 },
+      ],
+    },
+  ],
+  next_cursor: 104n,
+});
+const PENDING_WITHDRAWALS_EXHAUSTED = wire({ rows: [], next_cursor: null });
+// An engine before the quarantine flag omits it; it reads as not quarantined.
+const PENDING_WITHDRAWALS_QUARANTINED = wire({
+  rows: [
+    {
+      withdrawal: {
+        withdrawal_id: 9n,
+        owner: new Uint8Array(20).fill(0xab),
+        amount: 1n,
+        solana_destination: new Uint8Array(32).fill(0xcd),
+        status: "pending",
+        request_height: 1n,
+        quarantined: true,
+      },
+      payout: null,
+      votes: [],
+    },
+  ],
+  next_cursor: null,
+});
+const PENDING_DEPOSITS = wire({
+  rows: [
+    {
+      solana_tx_sig: new Uint8Array(64).fill(0x99),
+      locator: { top_index: 2, inner_index: 5 },
+      votes: [
+        {
+          voter: new Uint8Array(32).fill(0x11),
+          registry_epoch: 3n,
+          owner: new Uint8Array(20).fill(0x66),
+          amount_micro_usdc: 1_000_000n,
+          signed_at_ms: 1_700_000_000_456n,
+          signature: new Uint8Array(64).fill(0x77),
+        },
+      ],
+    },
+  ],
+  next_cursor: {
+    solana_tx_sig: new Uint8Array(64).fill(0x99),
+    locator: { top_index: 2, inner_index: null },
+  },
+});
+const PENDING_DEPOSITS_EXHAUSTED = wire({ rows: [], next_cursor: null });
+const AGREED = {
+  owner: new Uint8Array(20).fill(0x66),
+  amount_micro_usdc: 20_000_000_000n,
+  solana_tx_sig: new Uint8Array(64).fill(0x99),
+  locator: null,
+  registry_epoch: 3n,
+  agreed_height: 50n,
+  agreed_at_ms: 1_700_000_000_000n,
+};
+const AGREED_DEPOSITS = wire({
+  rows: [{ sequence: 7n, deposit: AGREED }],
+  next_cursor: 7n,
+});
+const PARKED_DEPOSITS_OVERFLOW = wire({
+  rows: [{ deposit: AGREED, cause: "balance_overflow", parked_height: 52n }],
+  next_cursor: null,
+});
+const PARKED_DEPOSITS = wire({
+  rows: [
+    { deposit: AGREED, cause: "over_per_receipt_max", parked_height: 51n },
+  ],
+  next_cursor: new Uint8Array([0xde, 0xad]),
+});
+
+describe("queryBridgeStatus", () => {
+  it("decodes the paused bridge", async () => {
+    serve(BRIDGE_STATUS);
+    expect(await client().queryBridgeStatus()).toBe("Paused");
+  });
+
+  it("decodes the backlog alert", async () => {
+    serve(BRIDGE_STATUS_BACKLOG);
+    expect(await client().queryBridgeStatus()).toBe("WithdrawalBacklog");
+  });
+});
+
+describe("queryBridgePayoutConfig", () => {
+  it("decodes the governed vault and rent wallet", async () => {
+    serve(BRIDGE_PAYOUT_CONFIG);
+    expect(await client().queryBridgePayoutConfig()).toEqual({
+      payoutMultisig: new Uint8Array(32).fill(0xb2),
+      opsWallet: new Uint8Array(32).fill(0xb3),
+    });
+  });
+
+  it("reads null while the quorum has not set one", async () => {
+    serve(BRIDGE_PAYOUT_CONFIG_UNSET);
+    expect(await client().queryBridgePayoutConfig()).toBeNull();
+  });
+});
+
+describe("queryBridgeRegistry", () => {
+  it("decodes the roster of operator keys", async () => {
+    serve(BRIDGE_REGISTRY);
+    expect(await client().queryBridgeRegistry()).toEqual({
+      deploymentId: new Uint8Array(32).fill(0xa1),
+      epoch: 3n,
+      threshold: 2,
+      members: [
+        { key: new Uint8Array(32).fill(0x11) },
+        { key: new Uint8Array(32).fill(0x22) },
+      ],
+    });
+  });
+});
+
+describe("queryPendingWithdrawals", () => {
+  it("decodes one page with the recorded payout and both verdicts", async () => {
+    serve(PENDING_WITHDRAWALS);
+    expect(await client().queryPendingWithdrawals()).toEqual({
+      rows: [
+        {
+          withdrawal: {
+            id: 103n,
+            owner: new Uint8Array(20).fill(0xab),
+            amount: 5_000_000n,
+            solanaDestination: new Uint8Array(32).fill(0xcd),
+            status: "Pending",
+            requestHeight: 42n,
+            quarantined: false,
+          },
+          payout: {
+            recorder: new Uint8Array(32).fill(0x11),
+            vault: new Uint8Array(32).fill(0xa2),
+            squadsTransactionIndex: 7,
+            registryEpoch: 3n,
+            recordedAtMs: 1_700_000_000_000n,
+          },
+          votes: [
+            {
+              voter: new Uint8Array(32).fill(0x11),
+              signature: new Uint8Array(64).fill(0x77),
+              registryEpoch: 3n,
+              verdict: "Paid",
+              vault: new Uint8Array(32).fill(0xa2),
+              squadsTransactionIndex: 7,
+              signedAtMs: 1_700_000_000_123n,
+            },
+            {
+              voter: new Uint8Array(32).fill(0x22),
+              signature: new Uint8Array(64).fill(0x88),
+              registryEpoch: 3n,
+              verdict: "Dead",
+              vault: new Uint8Array(32).fill(0xa2),
+              squadsTransactionIndex: 7,
+              signedAtMs: 1_700_000_000_123n,
+            },
+          ],
+          clearedPayouts: [
+            { vault: new Uint8Array(32).fill(0xa2), squadsTransactionIndex: 6 },
+          ],
+        },
+      ],
+      nextCursor: 104n,
+    });
+  });
+
+  it("surfaces a quarantined withdrawal", async () => {
+    serve(PENDING_WITHDRAWALS_QUARANTINED);
+    const page = await client().queryPendingWithdrawals();
+    expect(page.rows[0].withdrawal.quarantined).toBe(true);
+    expect(page.rows[0].payout).toBeUndefined();
+    // A view without cleared_payouts reads as none cleared.
+    expect(page.rows[0].clearedPayouts).toEqual([]);
+  });
+
+  it("decodes the exhausted page", async () => {
+    serve(PENDING_WITHDRAWALS_EXHAUSTED);
+    expect(await client().queryPendingWithdrawals()).toEqual({
+      rows: [],
+      nextCursor: null,
+    });
+  });
+});
+
+describe("queryPendingDeposits", () => {
+  it("decodes one page and returns the cursor in the route's form", async () => {
+    serve(PENDING_DEPOSITS);
+    expect(await client().queryPendingDeposits()).toEqual({
+      rows: [
+        {
+          solanaTxSig: new Uint8Array(64).fill(0x99),
+          locator: { topIndex: 2, innerIndex: 5 },
+          votes: [
+            {
+              voter: new Uint8Array(32).fill(0x11),
+              registryEpoch: 3n,
+              owner: new Uint8Array(20).fill(0x66),
+              amountMicroUsdc: 1_000_000n,
+              signedAtMs: 1_700_000_000_456n,
+              signature: new Uint8Array(64).fill(0x77),
+            },
+          ],
+        },
+      ],
+      // The last scanned identity: the transfer signature, then the top
+      // index (0x0002) and an absent inner index (0xFFFF), big-endian.
+      nextCursor: "99".repeat(64) + "0002ffff",
+    });
+  });
+
+  it("decodes the exhausted page", async () => {
+    serve(PENDING_DEPOSITS_EXHAUSTED);
+    expect(await client().queryPendingDeposits()).toEqual({
+      rows: [],
+      nextCursor: null,
+    });
+  });
+});
+
+describe("queryAgreedDeposits and queryParkedDeposits", () => {
+  const agreed = {
+    owner: new Uint8Array(20).fill(0x66),
+    amountMicroUsdc: 20_000_000_000n,
+    solanaTxSig: new Uint8Array(64).fill(0x99),
+    locator: null,
+    registryEpoch: 3n,
+    agreedHeight: 50n,
+    agreedAtMs: 1_700_000_000_000n,
+  };
+
+  it("decodes the credit queue", async () => {
+    serve(AGREED_DEPOSITS);
+    expect(await client().queryAgreedDeposits()).toEqual({
+      rows: [{ sequence: 7n, deposit: agreed }],
+      nextCursor: 7n,
+    });
+  });
+
+  it("decodes a parked deposit with its cause and a hex cursor", async () => {
+    serve(PARKED_DEPOSITS);
+    expect(await client().queryParkedDeposits()).toEqual({
+      rows: [
+        { deposit: agreed, cause: "OverPerReceiptMax", parkedHeight: 51n },
+      ],
+      nextCursor: "dead",
+    });
+  });
+
+  it("decodes a deposit parked because the balance cannot hold it", async () => {
+    serve(PARKED_DEPOSITS_OVERFLOW);
+    expect(await client().queryParkedDeposits()).toEqual({
+      rows: [{ deposit: agreed, cause: "BalanceOverflow", parkedHeight: 52n }],
+      nextCursor: null,
+    });
+  });
+});
+
+describe("depositCursorHex", () => {
+  it("refuses an index outside u16 instead of wrapping it", () => {
+    const sig = new Uint8Array(64);
+    expect(() =>
+      depositCursorHex(sig, { topIndex: 65536, innerIndex: null }),
+    ).toThrow(/u16/);
+    expect(() =>
+      depositCursorHex(sig, { topIndex: 0, innerIndex: -1 }),
+    ).toThrow(/u16/);
+    expect(
+      depositCursorHex(sig, { topIndex: 2, innerIndex: 5 }).endsWith(
+        "00020005",
+      ),
+    ).toBe(true);
   });
 });

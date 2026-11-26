@@ -104,6 +104,32 @@ class TestGoldenVectors:
             "max_open_interest": 35_000,
         }
 
+    def test_propose_set_account_fee_override_matches_engine_golden(self):
+        # propose_set_account_fee_override.hex is proof-wire's frozen admin
+        # quorum proposal: account 0xDD..DD gets a taker fee of 3 and a maker
+        # fee of 0 basis points, its first override (seq 1).
+        change = {
+            "account": bytes([0xDD] * 20),
+            "taker_fee_bps": 3,
+            "maker_fee_bps": 0,
+            "seq": 1,
+        }
+        act = actions.ProposeAdminAction(
+            proposer=bytes([0xA1] * 20),
+            registry_version=1,
+            action={"SetAccountFeeOverride": change},
+        )
+        action_type, payload = actions.encode_action(act)
+        frozen = _golden("propose_set_account_fee_override.hex")
+        assert _sign(action_type, payload, 500).hex() == frozen
+
+        envelope = pts.decode_tx(bytes.fromhex(frozen))
+        assert (envelope["action_type"], envelope["seq"]) == (action_type, 500)
+        decoded = actions.decode_action(action_type, envelope["payload"])
+        assert decoded["proposer"] == bytes([0xA1] * 20)
+        assert decoded["registry_version"] == 1
+        assert decoded["action"]["SetAccountFeeOverride"] == change
+
     def test_retired_action_bytes_do_not_codec(self):
         # OracleUpdate, MarketOrder, RunLiquidationSweep, RunFundingTick,
         # OracleUpdateComposite, ClosePosition.

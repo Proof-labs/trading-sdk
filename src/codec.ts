@@ -7,6 +7,7 @@ import {
   type DecodedAdminAction,
   type DecodedAction,
   type RetiredAdminAction,
+  type RetiredAuthorityDomain,
 } from "./types.js";
 import { getWasm } from "./wasm-loader.js";
 import {
@@ -93,15 +94,27 @@ const RETIRED_ADMIN_KINDS: Record<RetiredAdminAction["kind"], true> = {
   SetTriggerMarketConfig: true,
 };
 
+const RETIRED_AUTHORITY_DOMAINS: Record<RetiredAuthorityDomain, true> = {
+  CexComposite: true,
+  ScheduledOps: true,
+};
+
 /** Narrow a decoded admin action (for example `AdminProposalContext.action`)
- * to the current submittable `AdminAction`, excluding retired kinds. It does
- * not validate engine admission or the caller's authority. */
+ * to the current submittable `AdminAction`, excluding retired kinds and an
+ * `UpdateAuthoritySet` naming a retired list. It does not validate engine
+ * admission or the caller's authority. */
 export function isSubmittableAdminAction(
   action: DecodedAdminAction,
 ): action is AdminAction {
-  return !Object.prototype.hasOwnProperty.call(
-    RETIRED_ADMIN_KINDS,
-    action.kind,
+  if (Object.prototype.hasOwnProperty.call(RETIRED_ADMIN_KINDS, action.kind)) {
+    return false;
+  }
+  return !(
+    action.kind === "UpdateAuthoritySet" &&
+    Object.prototype.hasOwnProperty.call(
+      RETIRED_AUTHORITY_DOMAINS,
+      action.value.domain,
+    )
   );
 }
 

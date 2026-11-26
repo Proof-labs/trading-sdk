@@ -1,4 +1,4 @@
-"""Payout reports preserve the public builder's raw bytes and integer bounds."""
+"""Payout records preserve the public builder's raw bytes and integer bounds."""
 
 import json
 from pathlib import Path
@@ -22,9 +22,13 @@ def _vector(case: str) -> dict:
 def report(**overrides):
     fields = {
         "withdrawal_id": (1 << 64) - 1,
-        "holder": bytes([5]) * 20,
-        "solana_signature": bytes(range(64)),
-        "last_valid_block_height": (1 << 64) - 1,
+        "vault": bytes(range(32)),
+        "squads_transaction_index": (1 << 32) - 1,
+        "deployment_id": bytes(range(1, 33)),
+        "chain_id": bytes(range(2, 34)),
+        "registry_epoch": (1 << 64) - 1,
+        "signed_at_ms": (1 << 64) - 1,
+        "signature": bytes(range(64)),
     }
     return RecordWithdrawalPayout(**(fields | overrides))
 
@@ -37,23 +41,17 @@ def test_public_builder_matches_shared_u64_bounds_vector():
     assert tag == 0x31
     assert payload.hex() == _vector("record_withdrawal_payout/u64_bounds")["expect"]["payload_hex"]
     decoded = decode_action(tag, payload)
-    assert bytes(decoded["solana_signature"]) == action.solana_signature
-    assert decoded["last_valid_block_height"] == action.last_valid_block_height
+    assert bytes(decoded["vault"]) == action.vault
+    assert decoded["squads_transaction_index"] == action.squads_transaction_index
+    assert decoded["registry_epoch"] == action.registry_epoch
 
 
-@pytest.mark.parametrize("length", [63, 65])
-def test_signature_must_be_raw_64_bytes(length):
-    with pytest.raises(ValueError, match="expected 64 raw Solana signature bytes"):
-        encode_action(report(solana_signature=bytes(length)))
+@pytest.mark.parametrize("length", [31, 33])
+def test_vault_must_be_raw_32_bytes(length):
+    with pytest.raises(ValueError, match="32"):
+        encode_action(report(vault=bytes(length)))
 
 
-def test_expiry_cannot_be_null():
-    with pytest.raises(ValueError, match=r"last_valid_block_height|u64|integer"):
-        encode_action(report(last_valid_block_height=None))
-
-
-def test_expiry_cannot_be_zero():
-    # The wire field is NonZeroU64: an expiry of 0 would make the transfer look
-    # expired at once to peer watchers.
-    with pytest.raises(ValueError, match="nonzero"):
-        encode_action(report(last_valid_block_height=0))
+def test_registry_epoch_cannot_be_null():
+    with pytest.raises(ValueError, match=r"registry_epoch|u64|integer"):
+        encode_action(report(registry_epoch=None))

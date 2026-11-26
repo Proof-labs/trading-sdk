@@ -151,9 +151,7 @@ define_error_kinds! {
     89  => SubAccountTransferZeroAmount     ~ "A sub-account transfer amount must be greater than zero.",
     // 90 was SubAccountsInactive, retired with the engine's sub-account switch
     // (sub-accounts are always on); never reassigned.
-    91  => WithdrawalPayoutLeaseActive      ~ "A live Solana payout lease on this withdrawal is held by a different watcher, so this ClaimWithdrawalPayout is rejected; the rejected claimer must not sign a payout.",
-    128 => WithdrawalPayoutLeaseNotHeld     ~ "The withdrawal's payout lease is not held by the submitter, so the payout-signature report is rejected; acquire the lease with a payout claim first.",
-    129 => WithdrawalPayoutRecordLimitReached ~ "The withdrawal's payout-signature record limit is reached; the rejected payout must not be broadcast.",
+    // 91 and 128 (the payout lease) and 129 are unassigned on the wire.
     // Events and attached conditionals.
     92  => EventAlreadyExists               ~ "CreateEvent for an event id already in the registry.",
     93  => EventNotFound                    ~ "No event exists under this id: nothing can attach to it, resolve it or read it.",
@@ -198,9 +196,21 @@ define_error_kinds! {
     140 => AccountPositionCapReached ~ "The account already holds positions on the maximum number of markets; close one before opening another.",
     141 => SubAccountCapReached ~ "The master already owns the maximum number of sub-accounts; no sub-account was created.",
     142 => WorkCapReached ~ "A chain-wide bound on consensus work is full (resting orders, live positions, markets or sub-accounts); the log names which. Retry once capacity frees.",
-    // 143 (UserImAboveNotional) is not named yet; 144-154 are reserved on
-    // the wire for the bridge vote errors.
+    143 => UserImAboveNotional ~ "User-selected initial margin is above 10000 bps (below 1x leverage); pick a ratio between the market's and 10000, or 0 to clear.",
+    144 => BridgePaused ~ "The bridge is paused by the admin quorum; payout records and bridge votes refuse until UnpauseBridge clears the flag.",
+    145 => WithdrawalPayoutCleared ~ "The payout record names a Squads payout the dead votes already cleared from this withdrawal; record a new payout proposal instead.",
+    146 => BridgeVoteInvalid ~ "A bridge vote failed verification: bad signature, or a vote naming a non-current registry epoch.",
+    147 => BridgeUnauthorizedOperator ~ "The signer is not a bridge operator: no key of the named operator registry signed the payout record.",
+    148 => BridgePayoutReportInvalid ~ "A payout record failed its binding checks: the vault is unset or not the governed payout multisig, the deployment or chain is not this bridge's, or the epoch is after the current one or no longer retained.",
+    149 => WithdrawalQuarantined ~ "The withdrawal held a payout record of the retired lease model at the upgrade and is quarantined; it refuses payout records until operators resolve it.",
+    150 => WithdrawalPayoutSlotOccupied ~ "The withdrawal already has a recorded payout; a new one needs the recorded payout voted dead first.",
+    151 => DepositReceiptLimitExceeded ~ "The vote-credited deposit would pass the SetDepositReceiptLimit per-deposit maximum or rolling-window cap; the agreed deposit is parked or queued instead, and the queue credits it once the window has room.",
+    // 152 is unassigned on the wire.
+    153 => OwnerPendingWithdrawalsFull ~ "The owner already holds the most pending withdrawals one owner may; the request was refused before any debit. Retry once one settles.",
+    154 => PayoutRecordedForAnotherWithdrawal ~ "The Squads payout (vault, transaction index) already settled another withdrawal Paid; one payout settles one withdrawal, so this payout record or Paid vote is refused.",
     155 => MarketSettingsChanged ~ "A quorum UpdateMarketFees names a settings sequence its market is not at, as when the settings changed after the proposal was made. Re-read the market's settings_sequence and propose the change again.",
+    156 => PostOnlyNotResting ~ "A post-only order with IOC or FOK time in force: it may neither take nor rest, so it could never fill.",
+    157 => AuthorityDomainRetired ~ "UpdateAuthoritySet names a retired authority list (composite feeder or scheduled operations). No action reads either list; nothing was written.",
     255 => InternalError                ~ "Catch-all for unexpected runtime failures (panics caught by the FFI boundary, etc.). Treat as a server bug.",
 }
 
@@ -464,7 +474,6 @@ mod exec_error_meaning_tests {
             ExecError::SubAccountTransferInsufficientBalance,
             ExecError::SubAccountIdZero,
             ExecError::SubAccountTransferZeroAmount,
-            ExecError::WithdrawalPayoutLeaseActive,
             ExecError::EventAlreadyExists(crate::types::EventId(0)),
             ExecError::EventNotFound(crate::types::EventId(0)),
             ExecError::UnderlyingAlreadyAttached {
@@ -516,8 +525,6 @@ mod exec_error_meaning_tests {
                 positions: 2,
                 budget: 1,
             },
-            ExecError::WithdrawalPayoutLeaseNotHeld,
-            ExecError::WithdrawalPayoutRecordLimitReached,
             ExecError::MarketReduceOnly { market: 1 },
             ExecError::MarketDelisted { market: 1 },
             ExecError::MarketStatusTransitionRefused {
@@ -530,6 +537,32 @@ mod exec_error_meaning_tests {
                 event_id: crate::types::EventId(0),
             },
             ExecError::MarketHalted { market: 1 },
+            ExecError::BridgePaused,
+            ExecError::WithdrawalPayoutCleared {
+                withdrawal_id: crate::bridge::WithdrawalId::new(1),
+            },
+            ExecError::BridgeVoteInvalid(crate::types::BridgeVoteRefusal::SignerNotOnRoster),
+            ExecError::BridgeUnauthorizedOperator,
+            ExecError::BridgePayoutReportInvalid(
+                crate::types::PayoutRecordRefusal::DeploymentMismatch,
+            ),
+            ExecError::WithdrawalQuarantined {
+                withdrawal_id: crate::bridge::WithdrawalId::new(1),
+            },
+            ExecError::WithdrawalPayoutSlotOccupied,
+            ExecError::DepositReceiptLimitExceeded {
+                attempted: crate::bridge::MicroUsdc::new(2),
+                cap: crate::bridge::MicroUsdc::new(1),
+                window_frees_at_ms: None,
+            },
+            ExecError::OwnerPendingWithdrawalsFull { cap: 1 },
+            ExecError::PayoutRecordedForAnotherWithdrawal {
+                withdrawal_id: crate::bridge::WithdrawalId::new(1),
+            },
+            ExecError::UserImAboveNotional {
+                market: 1,
+                user_im_bps: 10_001,
+            },
             ExecError::OffCurveWithdrawalDestination,
             ExecError::PositionEpochMismatch {
                 market: 1,
@@ -643,6 +676,88 @@ mod exec_error_meaning_tests {
                 },
                 ErrorKind::MarketSettingsChanged,
             ),
+            (
+                ExecError::UserImAboveNotional {
+                    market: 1,
+                    user_im_bps: 10_001,
+                },
+                ErrorKind::UserImAboveNotional,
+            ),
+            (ExecError::BridgePaused, ErrorKind::BridgePaused),
+            (
+                ExecError::WithdrawalPayoutCleared {
+                    withdrawal_id: crate::bridge::WithdrawalId::new(1),
+                },
+                ErrorKind::WithdrawalPayoutCleared,
+            ),
+            (
+                ExecError::BridgeVoteInvalid(crate::types::BridgeVoteRefusal::SignerNotOnRoster),
+                ErrorKind::BridgeVoteInvalid,
+            ),
+            (
+                ExecError::BridgeVoteInvalid(crate::types::BridgeVoteRefusal::SignedTime(
+                    crate::types::SignedTimeRefusal::BeforeUnpause {
+                        signed_at_ms: 1,
+                        unpaused_at_ms: 2,
+                    },
+                )),
+                ErrorKind::BridgeVoteInvalid,
+            ),
+            (
+                ExecError::BridgePayoutReportInvalid(
+                    crate::types::PayoutRecordRefusal::SignedTime(
+                        crate::types::SignedTimeRefusal::Expired {
+                            signed_at_ms: 1,
+                            block_time_ms: 2,
+                        },
+                    ),
+                ),
+                ErrorKind::BridgePayoutReportInvalid,
+            ),
+            (
+                ExecError::BridgePayoutReportInvalid(
+                    crate::types::PayoutRecordRefusal::ClearedPayoutLimitReached { limit: 16 },
+                ),
+                ErrorKind::BridgePayoutReportInvalid,
+            ),
+            (
+                ExecError::BridgeUnauthorizedOperator,
+                ErrorKind::BridgeUnauthorizedOperator,
+            ),
+            (
+                ExecError::BridgePayoutReportInvalid(
+                    crate::types::PayoutRecordRefusal::DeploymentMismatch,
+                ),
+                ErrorKind::BridgePayoutReportInvalid,
+            ),
+            (
+                ExecError::WithdrawalQuarantined {
+                    withdrawal_id: crate::bridge::WithdrawalId::new(1),
+                },
+                ErrorKind::WithdrawalQuarantined,
+            ),
+            (
+                ExecError::WithdrawalPayoutSlotOccupied,
+                ErrorKind::WithdrawalPayoutSlotOccupied,
+            ),
+            (
+                ExecError::DepositReceiptLimitExceeded {
+                    attempted: crate::bridge::MicroUsdc::new(2),
+                    cap: crate::bridge::MicroUsdc::new(1),
+                    window_frees_at_ms: None,
+                },
+                ErrorKind::DepositReceiptLimitExceeded,
+            ),
+            (
+                ExecError::OwnerPendingWithdrawalsFull { cap: 1 },
+                ErrorKind::OwnerPendingWithdrawalsFull,
+            ),
+            (
+                ExecError::PayoutRecordedForAnotherWithdrawal {
+                    withdrawal_id: crate::bridge::WithdrawalId::new(1),
+                },
+                ErrorKind::PayoutRecordedForAnotherWithdrawal,
+            ),
         ];
         for (e, kind) in pairs {
             assert_eq!(ErrorKind::from_code(e.code()), Some(kind));
@@ -655,7 +770,9 @@ mod exec_error_meaning_tests {
         assert_eq!(ErrorKind::ReduceOnlyRefused.code(), 35);
         assert_eq!(ErrorKind::WorkCapReached.code(), 142);
         assert_eq!(ErrorKind::MarketSettingsChanged.code(), 155);
-        assert_eq!(ErrorKind::from_code(143), None);
+        for retired in [91, 128, 129, 152] {
+            assert_eq!(ErrorKind::from_code(retired), None);
+        }
     }
 
     /// Every code returned by `code()` must have a non-empty `meaning()`.
@@ -689,11 +806,9 @@ mod exec_error_meaning_tests {
     /// the holes the wire itself carries: 24, 25 and 31 (the retired
     /// impact-market family), 30, 36 and 41 (retired with OracleUpdate and
     /// RunFundingTick), 78-81 (reserved for oracle errors), 90 (the retired
-    /// sub-account switch), 101 (unassigned), 112 (the retired PLP
-    /// configuration), 117-122 and 126-127 (claimed elsewhere, unassigned on the
-    /// wire). Above 142 it names 155 (`MarketSettingsChanged`) and 255: the
-    /// wire's 143 (`UserImAboveNotional`) is not named yet, and 144-154 are
-    /// reserved for the bridge vote errors.
+    /// sub-account switch), 91 and 128 (the retired payout lease), 101
+    /// (unassigned), 112 (the retired PLP configuration), 117-122, 126-127,
+    /// 129 and 152 (unassigned on the wire).
     /// Catches the case where a code is reserved by the mirrored engine error
     /// enum but no SDK classification maps to it.
     #[test]
@@ -701,9 +816,9 @@ mod exec_error_meaning_tests {
         let mut codes: Vec<u32> = ERROR_KINDS.iter().map(|kind| kind.code()).collect();
         codes.sort();
         codes.dedup();
-        let expected: Vec<u32> = (1u32..=142)
-            .filter(|c| !matches!(c, 24 | 25 | 30 | 31 | 36 | 41 | 78..=81 | 90 | 101 | 112 | 117..=122 | 126..=127))
-            .chain([155, 255])
+        let expected: Vec<u32> = (1u32..=157)
+            .filter(|c| !matches!(c, 24 | 25 | 30 | 31 | 36 | 41 | 78..=81 | 90 | 91 | 101 | 112 | 117..=122 | 126..=129 | 152))
+            .chain(std::iter::once(255))
             .collect();
         assert_eq!(
             codes, expected,

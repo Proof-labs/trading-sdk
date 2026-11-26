@@ -91,9 +91,19 @@ def test_typed_builders_recheck_mutated_actions_before_encoding(tag, fields, pay
     ({'UnpauseBridge': {}, 'SetTriggerMarketConfig': {}}, False),
     ({1: {}}, False),
     (None, False),
+    ({'UpdateAuthoritySet': {'domain': 'MarketParams', 'add': [], 'remove': []}}, True),
+    ({'UpdateAuthoritySet': {'domain': 'CexComposite', 'add': [], 'remove': []}}, False),
+    ({'UpdateAuthoritySet': {'domain': 'ScheduledOps', 'add': [], 'remove': []}}, False),
 ])
 def test_public_admin_guard(action, expected):
     assert sdk.is_submittable_admin_action(action) is expected
+
+
+@pytest.mark.parametrize('domain', ['CexComposite', 'ScheduledOps'])
+def test_retired_authority_list_cannot_be_proposed(domain):
+    action = {'UpdateAuthoritySet': {'domain': domain, 'add': [bytes([0xB2] * 20)], 'remove': []}}
+    with pytest.raises(ValueError, match='retired authority list'):
+        actions._require_submittable_admin_action(action)
 
 
 @pytest.mark.parametrize('tag,fields,payload', retired_cases())

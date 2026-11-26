@@ -260,12 +260,17 @@ export const ACTION_TAG_BY_KIND: Record<DecodedAdminAction["kind"], number> = {
   SettleEvent: 30,
   SetMarketStatus: 31,
   UpdateMarketFees: 35,
+  SetAccountFeeOverride: 36,
   ScheduleUpgrade: 14,
   CancelUpgrade: 15,
   SetWithdrawalLimit: 19,
   SetDepositLimit: 28,
   SetLiquidationConfig: 17,
   SetOperatorReceiptRegistry: 20,
+  PauseBridge: 32,
+  SetBridgePayoutConfig: 33,
+  SetDepositReceiptLimit: 34,
+  SetWithdrawalPolicy: 37,
 };
 
 /** The typed inner operation a proposal carries, decoded as the wire's
@@ -278,12 +283,18 @@ export function decodeAdminAction(
 ): DecodedAdminAction {
   try {
     const wasm = getWasm();
-    return adminActionFromWasm(
+    const action = adminActionFromWasm(
       wasm.decode_read(
         wasm.ReadKind.AdminAction,
         actionEncoder.encode(integral(value)),
       ),
     );
+    // The core decodes every variant the pinned wire knows; one this SDK has
+    // no row for would otherwise reach a caller as an unknown `kind`.
+    if (!Object.hasOwn(ACTION_TAG_BY_KIND, action.kind)) {
+      throw new Error(`unknown admin action: ${action.kind}`);
+    }
+    return action;
   } catch (e) {
     throw new Error(
       `governance decode: ${field}: ${e instanceof Error ? e.message : String(e)}`,
@@ -412,27 +423,32 @@ export function decodeAdminSignerRegistry(
   };
 }
 
+// The engine's six slots in wire order; `null` marks a retired list, which is
+// decoded (so a malformed slot still fails) and then dropped.
 const AUTHORITIES_FIELDS = [
   "relayer",
   "oracle",
-  "cexComposite",
+  null,
   "custody",
   "marketParams",
-  "scheduledOps",
+  null,
 ] as const;
 
 /**
  * Decode the engine's six-field `AuthoritiesSnapshot`. Fails closed on any
  * other shape: a partially decoded set would present a missing authority as
- * an empty one.
+ * an empty one. The retired composite-feeder and scheduled-operations slots
+ * are validated and dropped.
  */
 export function decodeAuthoritiesSnapshot(raw: unknown): AuthoritiesSnapshot {
   const fields = toTuple(raw, "authorities", AUTHORITIES_FIELDS.length);
   const out = {} as AuthoritiesSnapshot;
   AUTHORITIES_FIELDS.forEach((name, i) => {
-    out[name] = toArray(fields[i], `authorities.${name}`).map((a, j) =>
-      toBytes(a, `authorities.${name}[${j}]`, ADDRESS_LEN),
+    const label = name ?? `retired[${i}]`;
+    const addresses = toArray(fields[i], `authorities.${label}`).map((a, j) =>
+      toBytes(a, `authorities.${label}[${j}]`, ADDRESS_LEN),
     );
+    if (name !== null) out[name] = addresses;
   });
   return out;
 }
