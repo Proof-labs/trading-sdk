@@ -899,7 +899,9 @@ async fn account_v2_reads_the_v2_route_and_preserves_valuation() {
     let raw: Vec<u8> = include_str!("../../../conformance/account-v2.hex")
         .trim()
         .as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             u8::from_str_radix(std::str::from_utf8(pair).expect("fixture hex is ASCII"), 16)
                 .expect("fixture hex is valid")
@@ -932,7 +934,9 @@ async fn account_v2_refuses_missing_or_invalid_height() {
     let raw = include_str!("../../../conformance/account-v2.hex").trim();
     let bytes: Vec<u8> = raw
         .as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             u8::from_str_radix(std::str::from_utf8(pair).expect("ASCII hex"), 16)
                 .expect("valid fixture hex")
