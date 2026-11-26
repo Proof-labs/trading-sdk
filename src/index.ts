@@ -403,6 +403,16 @@ export {
   type OrderSummaryFilters,
   type OrderSummaryPage,
 } from "./order-summaries.js";
+export {
+  HOLDING_STEPS_MAX_OWNERS,
+  decodeHoldingStepPage,
+  holdingStepOwners,
+  holdingStepSearchParams,
+  type HoldingStep,
+  type HoldingStepFilters,
+  type HoldingStepKind,
+  type HoldingStepPage,
+} from "./holding-steps.js";
 
 export {
   BINARY_PRICE_MAX,

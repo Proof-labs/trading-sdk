@@ -68,6 +68,13 @@ import {
   type OrderSummaryPage,
 } from "./order-summaries.js";
 import {
+  decodeHoldingStepPage,
+  holdingStepOwners,
+  holdingStepSearchParams,
+  type HoldingStepFilters,
+  type HoldingStepPage,
+} from "./holding-steps.js";
+import {
   accountInfoFromWasm,
   openOrdersFromWasm,
   eventInfoFromWasm,
@@ -1887,6 +1894,27 @@ export class ExchangeClient {
       "account",
     );
     return decodeOrderSummaryPage(json);
+  }
+
+  /**
+   * Holdings of one or more owners (an account and its sub-accounts, at most
+   * 16) at fixed steps over `[fromMs, toMs)`: per owner and market the last
+   * snapshot in each `stepMs` step (`kind: "step"`), plus the exact snapshot
+   * of every flat→held (`"open"`) and held→flat (`"close"`) change. Newest
+   * first; pass `nextCursor` back as `cursor` with the same owners and
+   * filters. Reads `GET /v1/history/positions/{owner}?interval=…`.
+   */
+  async queryHoldingSteps(
+    owners: readonly string[],
+    filters: HoldingStepFilters,
+  ): Promise<HoldingStepPage> {
+    const [first] = holdingStepOwners(owners);
+    const qs = holdingStepSearchParams(owners, filters).toString();
+    const json = await this.apiJson(
+      `${this.gatewayUrl}/v1/history/positions/${first}?${qs}`,
+      "account",
+    );
+    return decodeHoldingStepPage(json, owners, filters.markets);
   }
 
   /** Shared market-level deferred/resumed trigger transitions. These are not

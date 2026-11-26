@@ -55,6 +55,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **TypeScript:** `ExchangeClient.queryHoldingSteps(owners, filters)` reads
+  an account's holdings at fixed steps from the bucketed position read
+  (`GET /v1/history/positions/{owner}?interval=…`) in one request: up to 16
+  owners, optional `markets`, `fromMs`/`toMs`, `stepMs`, `limit` and
+  `cursor`. Each `HoldingStep` carries owner, market, side (or `null`),
+  size, entry price, block height and time, and `kind` — `"step"` for a
+  market's last snapshot in a step, `"open"`/`"close"` at the exact snapshot
+  of a flat↔held change. `holdingStepSearchParams`, `decodeHoldingStepPage`
+  and `HOLDING_STEPS_MAX_OWNERS` are exported. Needs the indexer and gateway
+  support for multiple owners, `markets` and `kind`
+  (Proof-labs/indexer#472, Proof-labs/api-gateway#375).
 - **All SDKs, bridge operators (needs proof-wire 14):** sign the five
   bridge-operator messages with the operator's registry key. The core builds
   every preimage from the wire contract, so Rust, TypeScript and Python sign

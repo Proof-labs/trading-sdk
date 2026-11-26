@@ -1,0 +1,109 @@
+{
+  "next_cursor": "eyJ0IjoiMjAyNi0xMS0yNVQwMTo1OTozNi4yNjI1MDNaIn0",
+  "positions": [
+    {
+      "balance_usdc": 0,
+      "block_height": 14658800,
+      "block_time": "2026-11-25T21:59:49.260503Z",
+      "entry_px": "20287.000000",
+      "equity_usdc": 0,
+      "margin_ratio_bps": null,
+      "market": 100,
+      "owner": "83a7ff68818e979e31e3fbb31ac62f3b3cebe3ef",
+      "side": "buy",
+      "size": "243378",
+      "kind": "step"
+    },
+    {
+      "balance_usdc": 0,
+      "block_height": 14658800,
+      "block_time": "2026-11-25T21:59:49.260503Z",
+      "entry_px": "70350470.000000",
+      "equity_usdc": 0,
+      "margin_ratio_bps": null,
+      "market": 3,
+      "owner": "83a7ff68818e979e31e3fbb31ac62f3b3cebe3ef",
+      "side": "buy",
+      "size": "2169",
+      "kind": "step"
+    },
+    {
+      "balance_usdc": 0,
+      "block_height": 14558500,
+      "block_time": "2026-11-25T11:59:36.51702Z",
+      "entry_px": "20351.000000",
+      "equity_usdc": 0,
+      "margin_ratio_bps": null,
+      "market": 100,
+      "owner": "83a7ff68818e979e31e3fbb31ac62f3b3cebe3ef",
+      "side": "buy",
+      "size": "198951",
+      "kind": "step"
+    },
+    {
+      "balance_usdc": 0,
+      "block_height": 14558500,
+      "block_time": "2026-11-25T11:59:36.51702Z",
+      "entry_px": "74770000.000000",
+      "equity_usdc": 0,
+      "margin_ratio_bps": null,
+      "market": 3,
+      "owner": "83a7ff68818e979e31e3fbb31ac62f3b3cebe3ef",
+      "side": "buy",
+      "size": "10",
+      "kind": "step"
+    },
+    {
+      "balance_usdc": 0,
+      "equity_usdc": 0,
+      "margin_ratio_bps": null,
+      "owner": "5ea4c0d1f1b2e3a4b5c6d7e8f9a0b1c2d3e4f5a6",
+      "market": 3,
+      "block_height": 14520031,
+      "block_time": "2026-11-25T06:40:51.903114Z",
+      "side": null,
+      "size": "0",
+      "entry_px": null,
+      "kind": "close"
+    },
+    {
+      "balance_usdc": 0,
+      "equity_usdc": 0,
+      "margin_ratio_bps": null,
+      "owner": "5ea4c0d1f1b2e3a4b5c6d7e8f9a0b1c2d3e4f5a6",
+      "market": 3,
+      "block_height": 14499117,
+      "block_time": "2026-11-25T04:12:07.118402Z",
+      "side": "sell",
+      "size": "40",
+      "entry_px": "74810000.000000",
+      "kind": "open"
+    },
+    {
+      "balance_usdc": 0,
+      "block_height": 14458600,
+      "block_time": "2026-11-25T01:59:36.262503Z",
+      "entry_px": "20322.000000",
+      "equity_usdc": 0,
+      "margin_ratio_bps": null,
+      "market": 100,
+      "owner": "83a7ff68818e979e31e3fbb31ac62f3b3cebe3ef",
+      "side": "buy",
+      "size": "89801",
+      "kind": "step"
+    },
+    {
+      "balance_usdc": 0,
+      "block_height": 14458600,
+      "block_time": "2026-11-25T01:59:36.262503Z",
+      "entry_px": "74770000.000000",
+      "equity_usdc": 0,
+      "margin_ratio_bps": null,
+      "market": 3,
+      "owner": "83a7ff68818e979e31e3fbb31ac62f3b3cebe3ef",
+      "side": "buy",
+      "size": "10",
+      "kind": "step"
+    }
+  ]
+}
