@@ -22,7 +22,7 @@ describe("decodeExecError", () => {
     expect(decodeExecError(255)?.name).toBe("InternalError");
   });
 
-  it("names the proof-wire codes 35, 102-116, 123-125 and 128-142", () => {
+  it("names the proof-wire codes 35, 102-116, 123-125 and 130-157", () => {
     for (const [code, name] of [
       [102, "InsuranceFundingReplayed"],
       [103, "InsuranceWithdrawalReplayed"],
@@ -41,8 +41,6 @@ describe("decodeExecError", () => {
       [123, "DepositLimitExceeded"],
       [124, "EventPoolMismatch"],
       [125, "ConditionalLotOffUnderlyingGrid"],
-      [128, "WithdrawalPayoutLeaseNotHeld"],
-      [129, "WithdrawalPayoutRecordLimitReached"],
       [130, "MarketReduceOnly"],
       [131, "MarketDelisted"],
       [132, "MarketStatusTransitionRefused"],
@@ -57,10 +55,30 @@ describe("decodeExecError", () => {
       [140, "AccountPositionCapReached"],
       [141, "SubAccountCapReached"],
       [142, "WorkCapReached"],
+      [143, "UserImAboveNotional"],
+      [144, "BridgePaused"],
+      [145, "WithdrawalPayoutCleared"],
+      [146, "BridgeVoteInvalid"],
+      [147, "BridgeUnauthorizedOperator"],
+      [148, "BridgePayoutReportInvalid"],
+      [149, "WithdrawalQuarantined"],
+      [150, "WithdrawalPayoutSlotOccupied"],
+      [151, "DepositReceiptLimitExceeded"],
+      [153, "OwnerPendingWithdrawalsFull"],
+      [154, "PayoutRecordedForAnotherWithdrawal"],
+      [155, "MarketSettingsChanged"],
+      [156, "PostOnlyNotResting"],
+      [157, "AuthorityDomainRetired"],
     ] as const) {
       expect(decodeExecError(code)?.name).toBe(name);
       expect(execErrorName(code)).toBe(name);
       expect(ExecErrorCode[name]).toBe(code);
+    }
+  });
+
+  it("leaves the codes the wire unassigned unnamed (91, 128, 129, 152)", () => {
+    for (const code of [91, 128, 129, 152]) {
+      expect(decodeExecError(code)).toBeNull();
     }
   });
 

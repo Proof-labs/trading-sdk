@@ -25,6 +25,14 @@ import {
 import { bytesToHex, pubkeyToOwner, ownerToHex } from "./crypto.js";
 import { ExecErrorCode, execErrorName } from "./errors.js";
 import { BinaryPriceError, binaryPositionView, yesOrder } from "./binary.js";
+import {
+  bridgeMessagePreimage,
+  signRecordWithdrawalPayout,
+  signVoteDeposit,
+  signVotePauseBridge,
+  signVoteWithdrawalPaid,
+  signVoteWithdrawalPayoutDead,
+} from "./bridge.js";
 import { decodeLiquidationEvent } from "./liquidation-events.js";
 import { decodeOrdersEvent, type OrdersEvent } from "./order-lists.js";
 import { decodeMarginOffsetEvent } from "./margin-offsets.js";
@@ -436,22 +444,29 @@ function toAction(
           amount: big(input.amount),
         },
       };
-    case ActionType.ClaimWithdrawalPayout:
-      return {
-        type: "ClaimWithdrawalPayout",
-        data: {
-          withdrawalId: big(input.withdrawal_id),
-          holder: bytes(input.holder),
-        },
-      };
     case ActionType.RecordWithdrawalPayout:
       return {
         type: "RecordWithdrawalPayout",
         data: {
           withdrawalId: big(input.withdrawal_id),
-          holder: bytes(input.holder),
-          solanaSignature: bytes(input.solana_signature),
-          lastValidBlockHeight: big(input.last_valid_block_height),
+          vault: bytes(input.vault),
+          squadsTransactionIndex: input.squads_transaction_index as number,
+          deploymentId: bytes(input.deployment_id),
+          chainId: bytes(input.chain_id),
+          registryEpoch: big(input.registry_epoch),
+          signedAtMs: big(input.signed_at_ms),
+          signature: bytes(input.signature),
+        },
+      };
+    case ActionType.VotePauseBridge:
+      return {
+        type: "VotePauseBridge",
+        data: {
+          deploymentId: bytes(input.deployment_id),
+          chainId: bytes(input.chain_id),
+          registryEpoch: big(input.registry_epoch),
+          signedAtMs: big(input.signed_at_ms),
+          signature: bytes(input.signature),
         },
       };
     case ActionType.ResolveEvent:
@@ -538,28 +553,56 @@ function toAction(
           action: toEmergencyAction(input.action as Record<string, unknown>),
         },
       };
-    case ActionType.ConfirmWithdrawalReceipt:
+    case ActionType.VoteWithdrawalPaid:
       return {
-        type: "ConfirmWithdrawalReceipt",
+        type: "VoteWithdrawalPaid",
         data: {
-          receipt: toBridgeReceipt(input.receipt as Record<string, unknown>),
-          proof: toOperatorProof(input.proof as Record<string, unknown>),
+          withdrawalId: big(input.withdrawal_id),
+          vault: bytes(input.vault),
+          squadsTransactionIndex: input.squads_transaction_index as number,
+          deploymentId: bytes(input.deployment_id),
+          chainId: bytes(input.chain_id),
+          registryEpoch: big(input.registry_epoch),
+          signedAtMs: big(input.signed_at_ms),
+          signature: bytes(input.signature),
         },
       };
-    case ActionType.FailWithdrawalReceipt:
+    case ActionType.VoteWithdrawalPayoutDead:
       return {
-        type: "FailWithdrawalReceipt",
+        type: "VoteWithdrawalPayoutDead",
         data: {
-          receipt: toBridgeReceipt(input.receipt as Record<string, unknown>),
-          proof: toOperatorProof(input.proof as Record<string, unknown>),
+          withdrawalId: big(input.withdrawal_id),
+          vault: bytes(input.vault),
+          squadsTransactionIndex: input.squads_transaction_index as number,
+          deploymentId: bytes(input.deployment_id),
+          chainId: bytes(input.chain_id),
+          registryEpoch: big(input.registry_epoch),
+          signedAtMs: big(input.signed_at_ms),
+          signature: bytes(input.signature),
         },
       };
-    case ActionType.AuthorizeWithdrawal:
+    case ActionType.VoteDeposit:
       return {
-        type: "AuthorizeWithdrawal",
+        type: "VoteDeposit",
         data: {
-          authorization: bytes(input.authorization),
-          proof: toOperatorProof(input.proof as Record<string, unknown>),
+          owner: bytes(input.owner),
+          amountMicroUsdc: big(input.amount_micro_usdc),
+          solanaTxSig: bytes(input.solana_tx_sig),
+          locator:
+            input.locator == null
+              ? null
+              : {
+                  topIndex: (input.locator as Record<string, unknown>)
+                    .top_index as number,
+                  innerIndex:
+                    ((input.locator as Record<string, unknown>).inner_index as
+                      number | undefined) ?? null,
+                },
+          deploymentId: bytes(input.deployment_id),
+          chainId: bytes(input.chain_id),
+          registryEpoch: big(input.registry_epoch),
+          signedAtMs: big(input.signed_at_ms),
+          signature: bytes(input.signature),
         },
       };
     case ActionType.SetPositionTriggers: {
@@ -601,40 +644,6 @@ function toAction(
   }
 }
 
-/** Reconstruct a TS `BridgeWithdrawalReceipt` from the vector's snake_case map. */
-function toBridgeReceipt(
-  r: Record<string, unknown>,
-): import("./types.js").BridgeWithdrawalReceipt {
-  return {
-    deploymentId: bytes(r.deployment_id),
-    authorizationDigest: bytes(r.authorization_digest),
-    withdrawalId: big(r.withdrawal_id),
-    terminalState: r.terminal_state as number,
-    vaultTier: r.vault_tier as number,
-    proofOwner: bytes(r.proof_owner),
-    destinationOwner: bytes(r.destination_owner),
-    destinationTokenAcct: bytes(r.destination_token_acct),
-    amountMicroUsdc: big(r.amount_micro_usdc),
-    feeMicroUsdc: big(r.fee_micro_usdc),
-    authorizationSignerEpoch: big(r.authorization_signer_epoch),
-    solanaTxSignature: bytes(r.solana_tx_signature),
-    finalizedSlot: big(r.finalized_slot),
-    finalizedBlockhash: bytes(r.finalized_blockhash),
-    receiptQuorumKind: r.receipt_quorum_kind as number,
-    receiptAuthorityEpoch: big(r.receipt_authority_epoch),
-  };
-}
-
-/** Reconstruct a TS `OperatorReceiptProof` from the vector's snake_case map. */
-function toOperatorProof(
-  p: Record<string, unknown>,
-): import("./types.js").OperatorReceiptProof {
-  return {
-    signerBitmap: bytes(p.signer_bitmap),
-    signatures: (p.signatures as unknown[]).map((s) => bytes(s)),
-  };
-}
-
 /** Reconstruct a TS `CreateMarket` value from the vector's serde map form —
  *  shared by the `AdminAction` arm and `Batch` items. */
 function toCreateMarketValue(
@@ -673,6 +682,7 @@ function toAttachConditionalValue(
     makerFeeBps: input.maker_fee_bps as number,
     signer: bytes(input.signer),
     maxOpenInterest: big(input.max_open_interest),
+    impactNotional: big(input.impact_notional ?? 0),
   };
 }
 
@@ -793,6 +803,7 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
   // A unit variant (no fields) is serde's bare variant-name string, not a map.
   if (typeof input === "string") {
     if (input === "UnpauseBridge") return { kind: "UnpauseBridge" };
+    if (input === "PauseBridge") return { kind: "PauseBridge" };
     throw new Error(`toAdminAction: unknown unit variant ${input}`);
   }
   const v = input as Record<string, unknown>;
@@ -969,6 +980,37 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
       value: {
         eventId: e.event_id as number,
         outcome: Outcome[e.outcome as keyof typeof Outcome],
+      },
+    };
+  }
+  if (v.SetBridgePayoutConfig) {
+    const c = v.SetBridgePayoutConfig as Record<string, unknown>;
+    return {
+      kind: "SetBridgePayoutConfig",
+      value: {
+        payoutMultisig: bytes(c.payout_multisig),
+        opsWallet: bytes(c.ops_wallet),
+      },
+    };
+  }
+  if (v.SetWithdrawalPolicy) {
+    const p = v.SetWithdrawalPolicy as Record<string, unknown>;
+    return {
+      kind: "SetWithdrawalPolicy",
+      value: {
+        feeMicroUsdc: big(p.fee_micro_usdc),
+        minWithdrawalMicroUsdc: big(p.min_withdrawal_micro_usdc),
+      },
+    };
+  }
+  if (v.SetDepositReceiptLimit) {
+    const d = v.SetDepositReceiptLimit as Record<string, unknown>;
+    return {
+      kind: "SetDepositReceiptLimit",
+      value: {
+        perReceiptMaxMicroUsdc: big(d.per_receipt_max_micro_usdc),
+        windowCapMicroUsdc: big(d.window_cap_micro_usdc),
+        windowSecs: d.window_secs as number,
       },
     };
   }
@@ -1399,7 +1441,7 @@ describe("conformance vectors (TypeScript)", () => {
     // set-deposit-limit, set-market-status, update-market-fees,
     // set-account-fee-override), approve, reject, and the PauseMarket
     // emergency arm.
-    expect(govCases.length).toBe(36);
+    expect(govCases.length).toBe(40);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(
@@ -1453,6 +1495,153 @@ describe("conformance vectors (TypeScript)", () => {
       if (decoded.type !== "CreateMarket") throw new Error("type narrowing");
       expect(decoded.data.maxOpenInterest).toBe(0n);
     }
+  });
+
+  it("bridge message preimages match the engine-generated shared vectors", async () => {
+    const rows = readFileSync(join(VECTORS, "vote-preimages.ndjson"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(rows.length).toBeGreaterThan(0);
+    const hex = (field: unknown) =>
+      new Uint8Array(Buffer.from(field as string, "hex"));
+    // Ids, epochs and amounts are decimal strings, so u64::MAX survives.
+    const decimal = (field: unknown) => BigInt(field as string);
+    for (const row of rows) {
+      const binding = {
+        deploymentId: hex(row.deployment_id),
+        chainId: hex(row.chain_id),
+        registryEpoch: decimal(row.registry_epoch),
+        signedAtMs: decimal(row.signed_at_ms),
+      };
+      const payout = () => ({
+        withdrawalId: decimal(row.withdrawal_id),
+        vault: hex(row.vault),
+        squadsTransactionIndex: row.squads_transaction_index as number,
+      });
+      const signed: Uint8Array[] = [];
+      // The public helpers sign exactly the preimage the vector pins, and an
+      // asynchronous signer (an ExternalSigner's signRaw) works unchanged.
+      const signer = async (message: Uint8Array) => {
+        signed.push(message);
+        return new Uint8Array(64);
+      };
+      switch (row.kind) {
+        case "withdrawal_paid":
+          await signVoteWithdrawalPaid(signer, payout(), binding);
+          break;
+        case "withdrawal_payout_dead":
+          await signVoteWithdrawalPayoutDead(signer, payout(), binding);
+          break;
+        case "payout_record":
+          await signRecordWithdrawalPayout(signer, payout(), binding);
+          break;
+        case "deposit": {
+          const locator = row.locator as {
+            top_index: number;
+            inner_index: number | null;
+          } | null;
+          await signVoteDeposit(
+            signer,
+            {
+              owner: hex(row.owner),
+              amountMicroUsdc: decimal(row.amount_micro_usdc),
+              solanaTxSig: hex(row.solana_tx_sig),
+              locator:
+                locator == null
+                  ? null
+                  : {
+                      topIndex: locator.top_index,
+                      innerIndex: locator.inner_index,
+                    },
+            },
+            binding,
+          );
+          break;
+        }
+        case "pause_bridge":
+          await signVotePauseBridge(signer, binding);
+          break;
+        default:
+          throw new Error(`unknown bridge message kind ${String(row.kind)}`);
+      }
+      expect(bytesToHex(signed[0]), String(row.case)).toBe(row.preimage_hex);
+    }
+  });
+
+  it("a bridge message signer must return 64 bytes", async () => {
+    const binding = {
+      deploymentId: new Uint8Array(32),
+      chainId: new Uint8Array(32),
+      registryEpoch: 1n,
+      signedAtMs: 1n,
+    };
+    await expect(
+      signVotePauseBridge(async () => new Uint8Array(63), binding),
+    ).rejects.toThrow("64 signature bytes");
+  });
+
+  it("a bridge message takes only bytes, known fields and a signable locator", () => {
+    const base = {
+      kind: "withdrawalPaid" as const,
+      withdrawalId: 7n,
+      vault: new Uint8Array(32),
+      squadsTransactionIndex: 3,
+      deploymentId: new Uint8Array(32),
+      chainId: new Uint8Array(32),
+      registryEpoch: 1n,
+      signedAtMs: 1n,
+    };
+    expect(() =>
+      bridgeMessagePreimage({
+        ...base,
+        vault: "a".repeat(32) as unknown as Uint8Array,
+      }),
+    ).toThrow();
+    expect(() =>
+      bridgeMessagePreimage({
+        ...base,
+        locator: null,
+      } as unknown as typeof base),
+    ).toThrow(/locator/);
+    expect(() =>
+      bridgeMessagePreimage({
+        kind: "deposit",
+        owner: new Uint8Array(20),
+        amountMicroUsdc: 1n,
+        solanaTxSig: new Uint8Array(64),
+        locator: { topIndex: 0, innerIndex: 65535 },
+        deploymentId: new Uint8Array(32),
+        chainId: new Uint8Array(32),
+        registryEpoch: 1n,
+        signedAtMs: 1n,
+      }),
+    ).toThrow(/sentinel/);
+  });
+
+  it("a bridge message refuses a wrong-width field before signing", async () => {
+    let called = false;
+    const signer = (message: Uint8Array) => {
+      called = true;
+      return message;
+    };
+    await expect(
+      signVoteWithdrawalPaid(
+        signer,
+        {
+          withdrawalId: 1n,
+          vault: new Uint8Array(33),
+          squadsTransactionIndex: 0,
+        },
+        {
+          deploymentId: new Uint8Array(32),
+          chainId: new Uint8Array(32),
+          registryEpoch: 1n,
+          signedAtMs: 1n,
+        },
+      ),
+    ).rejects.toThrow("vault");
+    expect(called).toBe(false);
   });
 });
 

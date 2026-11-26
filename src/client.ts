@@ -72,6 +72,13 @@ import {
   openOrdersFromWasm,
   eventInfoFromWasm,
   marketConfigFromWasm,
+  bridgeStatusFromWasm,
+  bridgePayoutConfigFromWasm,
+  agreedDepositsFromWasm,
+  parkedDepositsFromWasm,
+  bridgeRegistryFromWasm,
+  pendingWithdrawalsFromWasm,
+  pendingDepositsFromWasm,
   toWasmFields,
 } from "./codec-adapter.js";
 import {
@@ -148,9 +155,13 @@ import type {
   NodeVersion,
   UpgradesInfo,
   LiquidationConfigInfo,
-  AuthorizeWithdrawal,
-  ConfirmWithdrawalReceipt,
-  FailWithdrawalReceipt,
+  BridgeStatus,
+  BridgePayoutConfig,
+  OperatorRegistry,
+  ParkedDepositPage,
+  QueuedDepositPage,
+  PendingWithdrawalPage,
+  PendingDepositPage,
 } from "./types.js";
 import {
   decodeAdminSignerRegistryInfo,
@@ -1470,41 +1481,6 @@ export class ExchangeClient {
   }
 
   /**
-   * Submit the operator-quorum authorization for a pending withdrawal
-   * (action 0x24). Permissionless: the quorum proof inside is the authority,
-   * not the envelope signer. The canonical authorization bytes come from
-   * `encodeWithdrawalAuthorization` and the proof from operators signing
-   * those bytes — see the `bridge` module.
-   */
-  async authorizeWithdrawal(params: AuthorizeWithdrawal): Promise<TxResult> {
-    return this.submitTx({ type: "AuthorizeWithdrawal", data: params });
-  }
-
-  /**
-   * Settle a paid withdrawal through its finalized operator-quorum receipt
-   * (action 0x22). Permissionless: the quorum proof inside is the authority,
-   * not the envelope signer. The canonical message the proof signs comes
-   * from `encodeBridgeReceipt`.
-   */
-  async confirmWithdrawalReceipt(
-    params: ConfirmWithdrawalReceipt,
-  ): Promise<TxResult> {
-    return this.submitTx({ type: "ConfirmWithdrawalReceipt", data: params });
-  }
-
-  /**
-   * Refund a cancelled withdrawal through its finalized operator-quorum
-   * receipt (action 0x23). Permissionless: the quorum proof inside is the
-   * authority, not the envelope signer. Positive cancellation proof only —
-   * a timeout or RPC error is never failure evidence.
-   */
-  async failWithdrawalReceipt(
-    params: FailWithdrawalReceipt,
-  ): Promise<TxResult> {
-    return this.submitTx({ type: "FailWithdrawalReceipt", data: params });
-  }
-
-  /**
    * Cancel all resting orders for the loaded signer. Pass a `market` to
    * scope the cancel to one market; omit it to cancel across all markets.
    */
@@ -2099,6 +2075,125 @@ export class ExchangeClient {
       status: raw[4] as WithdrawalStatus,
       requestHeight: BigInt(raw[5] as number | bigint),
     };
+  }
+
+  // -------------------------------------------------------------------------
+  // Bridge custody reads (`/v2/bridge/*`). Responses decode in the WASM core
+  // (`query_v2` views); these methods only page the route and rename
+  // fields. Bridge operators submit their signed messages with `submitTx`
+  // (`VoteWithdrawalPaid`, `RecordWithdrawalPayout`, `VoteDeposit`,
+  // `VotePauseBridge`, `VoteWithdrawalPayoutDead`), built by the `sign*`
+  // helpers in `bridge.ts`.
+  // -------------------------------------------------------------------------
+
+  /** GET one `/v2/bridge/*` read and decode it in the core as `kind`.
+   *  `params` become the query string (a cursor and a page limit). */
+  private async readBridge(
+    path: string,
+    kind: keyof WasmCore["ReadKind"],
+    params?: { cursor?: bigint | string; limit?: number },
+  ): Promise<unknown> {
+    const query = new URLSearchParams();
+    if (params?.cursor != null) query.set("cursor", String(params.cursor));
+    if (params?.limit != null) query.set("limit", String(params.limit));
+    const qs = query.toString();
+    const route = `${path}${qs ? `?${qs}` : ""}`;
+    const json = await this.apiJson(`${this.readBaseUrl}${route}`);
+    return this.decodeRead(kind, fromBase64(requireEncodedData(json, route)));
+  }
+
+  /** The bridge's state: `Active`, `Paused`, or `WithdrawalBacklog` (active,
+   *  with the pending withdrawal count at or above the alert level). */
+  async queryBridgeStatus(): Promise<BridgeStatus> {
+    return bridgeStatusFromWasm(
+      await this.readBridge("/v2/bridge/status", "BridgeStatus"),
+    );
+  }
+
+  /** The governed Squads payout vault and its rent wallet, or `null` while
+   *  the admin quorum has not set them. Every payout record must name this
+   *  vault. */
+  async queryBridgePayoutConfig(): Promise<BridgePayoutConfig | null> {
+    return bridgePayoutConfigFromWasm(
+      await this.readBridge("/v2/bridge/payout-config", "BridgePayoutConfig"),
+    );
+  }
+
+  /** The operator receipt registry: the roster every vote and payout record
+   *  verifies against. Omit `epoch` for the current one. */
+  async queryBridgeRegistry(epoch?: bigint): Promise<OperatorRegistry> {
+    const path =
+      epoch === undefined
+        ? "/v2/bridge/registry"
+        : `/v2/bridge/registry/${epoch}`;
+    return bridgeRegistryFromWasm(
+      await this.readBridge(path, "BridgeRegistry"),
+    );
+  }
+
+  /** One page of pending withdrawals with their recorded payouts and votes
+   *  so far. `cursor` is the previous page's `nextCursor` (the last scanned
+   *  withdrawal id); `limit` is forwarded, and the node refuses one above
+   *  its page cap. */
+  async queryPendingWithdrawals(opts?: {
+    cursor?: bigint;
+    limit?: number;
+  }): Promise<PendingWithdrawalPage> {
+    return pendingWithdrawalsFromWasm(
+      await this.readBridge(
+        "/v2/bridge/pending-withdrawals",
+        "PendingWithdrawals",
+        opts,
+      ),
+    );
+  }
+
+  /** One page of pending deposits with their votes. `cursor` is the
+   *  previous page's `nextCursor`, already in the route's form (the hex of
+   *  the last scanned transfer identity); pass it back verbatim. */
+  async queryPendingDeposits(opts?: {
+    cursor?: string;
+    limit?: number;
+  }): Promise<PendingDepositPage> {
+    return pendingDepositsFromWasm(
+      await this.readBridge(
+        "/v2/bridge/pending-deposits",
+        "PendingDeposits",
+        opts,
+      ),
+    );
+  }
+
+  /** One page of the agreed-deposit credit queue, oldest first: deposits
+   *  the operator threshold agreed on whose credit waits for a deposit cap's
+   *  window or an unpause. `cursor` is the previous page's `nextCursor`. */
+  async queryAgreedDeposits(opts?: {
+    cursor?: bigint;
+    limit?: number;
+  }): Promise<QueuedDepositPage> {
+    return agreedDepositsFromWasm(
+      await this.readBridge(
+        "/v2/bridge/agreed-deposits",
+        "AgreedDeposits",
+        opts,
+      ),
+    );
+  }
+
+  /** One page of parked deposits: agreed deposits over the per-deposit
+   *  maximum or the window cap, which no window can admit. `cursor` is the
+   *  previous page's `nextCursor`; pass it back verbatim. */
+  async queryParkedDeposits(opts?: {
+    cursor?: string;
+    limit?: number;
+  }): Promise<ParkedDepositPage> {
+    return parkedDepositsFromWasm(
+      await this.readBridge(
+        "/v2/bridge/parked-deposits",
+        "ParkedDeposits",
+        opts,
+      ),
+    );
   }
 
   /** Raw finalized ledger facts, independent of oracle valuation. Not authorization. */

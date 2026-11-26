@@ -22,12 +22,25 @@ import {
   type ActionTypeValue,
   type AdminAction,
   type EmergencyAction,
+  type AgreedDeposit,
+  type BridgePayoutConfig,
+  type ParkCause,
+  type ParkedDepositPage,
+  type QueuedDepositPage,
+  type BridgeStatus,
+  type DepositLocator,
   type EventInfo,
   type EventOracleSource,
   type EventStatus,
   type MarketConfig,
   type MarketKind,
   type MarketsSnapshot,
+  type OperatorRegistry,
+  type PendingDeposit,
+  type PendingDepositPage,
+  type PendingWithdrawal,
+  type PendingWithdrawalPage,
+  type PayoutVerdict,
   type PositionInfo,
   type PriceComparison,
   type RetiredTriggerMarketConfig,
@@ -42,9 +55,15 @@ import {
   type ScheduleUpgrade,
   type SetLiquidationConfig,
   type SetOperatorReceiptRegistry,
+  type SetBridgePayoutConfig,
+  type SetDepositReceiptLimit,
+  type SetWithdrawalPolicy,
   type SettleEvent,
   type AccountFeeOverrideChange,
   type VoidEvent,
+  type WithdrawalPayoutReport,
+  type WithdrawalPayoutVote,
+  type WithdrawalRecord,
 } from "./types.js";
 import {
   validateFundInsuranceFund,
@@ -150,7 +169,10 @@ const MARK_SOURCE_MODE_NAMES: Record<number, string> = {
  * explicitly because a fieldless struct variant (`Variant {}`) is NOT one
  * of these — it keeps the map form.
  */
-const GOVERNANCE_UNIT_VARIANTS = new Set<string>(["UnpauseBridge"]);
+const GOVERNANCE_UNIT_VARIANTS = new Set<string>([
+  "UnpauseBridge",
+  "PauseBridge",
+]);
 
 /**
  * Encode a governance `AdminAction` / `EmergencyAction` for
@@ -202,6 +224,15 @@ function validateGovernanceAction(v: { kind: string; value?: unknown }): void {
   }
   if (v.kind === "SetOperatorReceiptRegistry") {
     validateSetOperatorReceiptRegistry(v.value as SetOperatorReceiptRegistry);
+  }
+  if (v.kind === "SetBridgePayoutConfig") {
+    validateSetBridgePayoutConfig(v.value as SetBridgePayoutConfig);
+  }
+  if (v.kind === "SetDepositReceiptLimit") {
+    validateSetDepositReceiptLimit(v.value as SetDepositReceiptLimit);
+  }
+  if (v.kind === "SetWithdrawalPolicy") {
+    validateSetWithdrawalPolicy(v.value as SetWithdrawalPolicy);
   }
   if (v.kind === "SetMarginOffsetPolicy") {
     validateSetMarginOffsetPolicy(v.value as SetMarginOffsetPolicy);
@@ -258,7 +289,8 @@ function validateVoidEvent(action: VoidEvent): void {
   }
 }
 
-/** The quorum must be reachable: `1..=operatorKeys.length`. */
+/** The quorum must be reachable and the roster duplicate-free: threshold in
+ *  `1..=operatorKeys.length`, every key 32 bytes and named once. */
 function validateSetOperatorReceiptRegistry(
   registry: SetOperatorReceiptRegistry,
 ): void {
@@ -266,6 +298,65 @@ function validateSetOperatorReceiptRegistry(
   if (registry.threshold < 1 || registry.threshold > n) {
     throw new Error(
       `setOperatorReceiptRegistry threshold ${registry.threshold} is outside 1..=${n}`,
+    );
+  }
+  const seen = new Set<string>();
+  for (const [index, key] of registry.operatorKeys.entries()) {
+    if (key.length !== 32) {
+      throw new Error(
+        `setOperatorReceiptRegistry operatorKeys[${index}] must be 32 bytes`,
+      );
+    }
+    const hex = bytesToHex(key);
+    if (seen.has(hex)) {
+      throw new Error(
+        `setOperatorReceiptRegistry operatorKeys[${index}] duplicates an earlier key`,
+      );
+    }
+    seen.add(hex);
+  }
+}
+
+/** The wire's rule: the window is at least one second and, with both caps
+ *  on (non-zero), the per-deposit maximum fits under the window cap. */
+function validateSetDepositReceiptLimit(limit: SetDepositReceiptLimit): void {
+  if (limit.windowSecs < 1) {
+    throw new Error("setDepositReceiptLimit windowSecs must be at least 1");
+  }
+  const { perReceiptMaxMicroUsdc: maximum, windowCapMicroUsdc: cap } = limit;
+  if (maximum !== 0n && cap !== 0n && maximum > cap) {
+    throw new Error(
+      `setDepositReceiptLimit perReceiptMaxMicroUsdc ${maximum} is above windowCapMicroUsdc ${cap}`,
+    );
+  }
+}
+
+/** The wire's rule: the minimum net withdrawal is not below the fee. */
+function validateSetWithdrawalPolicy(policy: SetWithdrawalPolicy): void {
+  if (policy.minWithdrawalMicroUsdc < policy.feeMicroUsdc) {
+    throw new Error(
+      `setWithdrawalPolicy minWithdrawalMicroUsdc ${policy.minWithdrawalMicroUsdc} is below feeMicroUsdc ${policy.feeMicroUsdc}`,
+    );
+  }
+}
+
+/** The wire's rule: both addresses are 32 non-zero bytes and differ, so the
+ *  vault check stays on and the rent wallet is never the payout path. */
+function validateSetBridgePayoutConfig(config: SetBridgePayoutConfig): void {
+  for (const [name, address] of [
+    ["payoutMultisig", config.payoutMultisig],
+    ["opsWallet", config.opsWallet],
+  ] as const) {
+    if (address.length !== 32) {
+      throw new Error(`setBridgePayoutConfig ${name} must be 32 bytes`);
+    }
+    if (!address.some((byte) => byte !== 0)) {
+      throw new Error(`setBridgePayoutConfig ${name} must not be zero`);
+    }
+  }
+  if (bytesToHex(config.payoutMultisig) === bytesToHex(config.opsWallet)) {
+    throw new Error(
+      "setBridgePayoutConfig opsWallet must differ from payoutMultisig",
     );
   }
 }
@@ -532,22 +623,23 @@ const BYTE_FIELDS = new Set([
   "signer",
   "solanaDestination",
   "solanaTxSig",
+  "vault",
   // Governance signer/commitment fields (20- or 32-byte).
   "proposer",
   "approver",
   "rejecter",
   "contentHash",
+  // Bridge-operator message byte fields: every vote, payout record and
+  // pause vote binds `deploymentId` and `chainId` and carries its operator's
+  // 64-byte `signature`.
+  "deploymentId",
+  "chainId",
+  "signature",
+  // SetBridgePayoutConfig's two 32-byte Solana addresses.
+  "payoutMultisig",
+  "opsWallet",
   // AccountFeeOverrideChange's 20-byte account.
   "account",
-  // Receipt-proof bitmap (raw `Vec<u8>` on the wire → number[] on decode).
-  // The receipt's own byte fields decode as `Uint8Array` (newtype
-  // serialize_bytes) and hit the early `instanceof Uint8Array` return, so only
-  // the bare-Vec bitmap needs naming here; `signatures` (a Vec of byte arrays)
-  // has its own special case below.
-  "signerBitmap",
-  // AuthorizeWithdrawal's 221-byte `WithdrawalAuthorizationV1` bytes — the
-  // same bare-Vec class as the bitmap.
-  "authorization",
   "evidenceDigest",
   "bundle",
 ]);
@@ -634,9 +726,10 @@ function fromWasmValue(camelKey: string, value: unknown): unknown {
     return governanceActionFromWasm(value);
   }
   // `newMembers` (UpdateAdminSignerRegistry), `add`/`remove`
-  // (UpdateAuthoritySet) and `operatorKeys` (SetOperatorReceiptRegistry) are
-  // each a list of fixed-width byte strings; convert every element to a
-  // Uint8Array, unlike the single-value BYTE_FIELDS above.
+  // (UpdateAuthoritySet) and `operatorKeys` (SetOperatorReceiptRegistry)
+  // are each a list of fixed-width byte
+  // strings; convert every element to a Uint8Array, unlike the
+  // single-value BYTE_FIELDS above.
   if (
     (camelKey === "newMembers" ||
       camelKey === "add" ||
@@ -977,6 +1070,252 @@ export function marketsSnapshotFromWasm(v: unknown): MarketsSnapshot {
     }));
   }
   return snapshot;
+}
+
+// ---------------------------------------------------------------------------
+// Bridge custody reads (`/v2/bridge/*`): the Rust core has decoded the
+// `query_v2` views; these only rename fields and lift `Option`s.
+// ---------------------------------------------------------------------------
+
+/** The `/v2/bridge/status` view. */
+export function bridgeStatusFromWasm(v: unknown): BridgeStatus {
+  if (v === "Active" || v === "Paused" || v === "WithdrawalBacklog") return v;
+  throw new Error(`unknown bridge status: ${String(v)}`);
+}
+
+/** The `/v2/bridge/payout-config` view; `null` while the quorum has not set
+ *  one. */
+export function bridgePayoutConfigFromWasm(
+  v: unknown,
+): BridgePayoutConfig | null {
+  if (v == null) return null;
+  const c = v as WasmRecord;
+  return {
+    payoutMultisig: bytesOf(c.payout_multisig),
+    opsWallet: bytesOf(c.ops_wallet),
+  };
+}
+
+/** The `/v2/bridge/registry[/{epoch}]` roster. */
+export function bridgeRegistryFromWasm(v: unknown): OperatorRegistry {
+  const s = v as WasmRecord;
+  return {
+    deploymentId: bytesOf(s.deployment_id),
+    epoch: s.epoch as bigint,
+    threshold: s.threshold as number,
+    members: (s.members as WasmRecord[]).map((m) => ({ key: bytesOf(m.key) })),
+  };
+}
+
+/** The view spells the verdict in snake_case; map it onto the TS union,
+ *  loudly. */
+function payoutVerdictFromWasm(v: unknown): PayoutVerdict {
+  switch (v) {
+    case "paid":
+      return "Paid";
+    case "dead":
+      return "Dead";
+    case "unknown":
+      return "Unknown";
+    default:
+      throw new Error(`unknown payout verdict: ${JSON.stringify(v)}`);
+  }
+}
+
+function payoutVoteFromWasm(v: WasmRecord): WithdrawalPayoutVote {
+  return {
+    voter: bytesOf(v.voter),
+    registryEpoch: v.registry_epoch as bigint,
+    verdict: payoutVerdictFromWasm(v.verdict),
+    vault: bytesOf(v.vault),
+    squadsTransactionIndex: v.squads_transaction_index as number,
+    signedAtMs: v.signed_at_ms as bigint,
+    signature: bytesOf(v.signature),
+  };
+}
+
+/** The v2 views spell the withdrawal status in snake_case (`"pending"`),
+ *  unlike the v1 record's title-case serde default; map it onto the shared
+ *  TS union, loudly. */
+function withdrawalStatusFromWasm(v: unknown): WithdrawalRecord["status"] {
+  switch (v) {
+    case "pending":
+      return "Pending";
+    case "completed":
+      return "Completed";
+    case "failed":
+      return "Failed";
+    case "unknown":
+      return "Unknown";
+    default:
+      throw new Error(`unknown withdrawal status: ${JSON.stringify(v)}`);
+  }
+}
+
+function withdrawalFromWasm(w: WasmRecord): WithdrawalRecord {
+  return {
+    id: w.withdrawal_id as bigint,
+    owner: bytesOf(w.owner),
+    amount: w.amount as bigint,
+    solanaDestination: bytesOf(w.solana_destination),
+    status: withdrawalStatusFromWasm(w.status),
+    requestHeight: w.request_height as bigint,
+    quarantined: w.quarantined as boolean,
+  };
+}
+
+function payoutReportFromWasm(r: WasmRecord): WithdrawalPayoutReport {
+  return {
+    recorder: bytesOf(r.recorder),
+    vault: bytesOf(r.vault),
+    squadsTransactionIndex: r.squads_transaction_index as number,
+    registryEpoch: r.registry_epoch as bigint,
+    recordedAtMs: r.recorded_at_ms as bigint,
+  };
+}
+
+function pendingWithdrawalFromWasm(w: WasmRecord): PendingWithdrawal {
+  const row: PendingWithdrawal = {
+    withdrawal: withdrawalFromWasm(w.withdrawal as WasmRecord),
+    votes: (w.votes as WasmRecord[]).map(payoutVoteFromWasm),
+    clearedPayouts: ((w.cleared_payouts as WasmRecord[] | undefined) ?? []).map(
+      (c) => ({
+        vault: bytesOf(c.vault),
+        squadsTransactionIndex: c.squads_transaction_index as number,
+      }),
+    ),
+  };
+  if (w.payout != null) {
+    row.payout = payoutReportFromWasm(w.payout as WasmRecord);
+  }
+  return row;
+}
+
+/** One `/v2/bridge/pending-withdrawals` page; `next_cursor` is the last
+ *  scanned withdrawal id (absent once exhausted). */
+export function pendingWithdrawalsFromWasm(v: unknown): PendingWithdrawalPage {
+  const p = v as WasmRecord;
+  return {
+    rows: (p.rows as WasmRecord[]).map(pendingWithdrawalFromWasm),
+    nextCursor: (p.next_cursor as bigint | undefined) ?? null,
+  };
+}
+
+function locatorFromWasm(v: unknown): DepositLocator {
+  const l = v as WasmRecord;
+  return {
+    topIndex: l.top_index as number,
+    innerIndex: (l.inner_index as number | undefined) ?? null,
+  };
+}
+
+/** The route's pending-deposits cursor: the hex of the transfer identity,
+ *  `solana_tx_sig(64) || top_index(2 BE) || inner_index(2 BE)`, with
+ *  `0xFFFF` for an absent inner index. */
+export function depositCursorHex(
+  solanaTxSig: Uint8Array,
+  locator: DepositLocator,
+): string {
+  if (solanaTxSig.length !== 64) {
+    throw new Error("deposit cursor: solanaTxSig must be 64 bytes");
+  }
+  const u16 = (v: number) => Number.isInteger(v) && v >= 0 && v <= 0xffff;
+  if (
+    !u16(locator.topIndex) ||
+    (locator.innerIndex != null && !u16(locator.innerIndex))
+  ) {
+    throw new Error("deposit cursor: locator indexes must be u16");
+  }
+  const suffix = new Uint8Array(4);
+  const view = new DataView(suffix.buffer);
+  view.setUint16(0, locator.topIndex);
+  view.setUint16(2, locator.innerIndex ?? 0xffff);
+  return bytesToHex(solanaTxSig) + bytesToHex(suffix);
+}
+
+function pendingDepositFromWasm(d: WasmRecord): PendingDeposit {
+  return {
+    solanaTxSig: bytesOf(d.solana_tx_sig),
+    locator: d.locator == null ? null : locatorFromWasm(d.locator),
+    votes: (d.votes as WasmRecord[]).map((raw) => ({
+      voter: bytesOf(raw.voter),
+      registryEpoch: raw.registry_epoch as bigint,
+      owner: bytesOf(raw.owner),
+      amountMicroUsdc: raw.amount_micro_usdc as bigint,
+      signedAtMs: raw.signed_at_ms as bigint,
+      signature: bytesOf(raw.signature),
+    })),
+  };
+}
+
+/** One `/v2/bridge/pending-deposits` page. The view's `next_cursor` is the
+ *  last scanned transfer identity; it is returned in the route's cursor
+ *  form, so a caller passes it back verbatim. */
+export function pendingDepositsFromWasm(v: unknown): PendingDepositPage {
+  const p = v as WasmRecord;
+  const next = p.next_cursor as WasmRecord | undefined;
+  return {
+    rows: (p.rows as WasmRecord[]).map(pendingDepositFromWasm),
+    nextCursor:
+      next == null
+        ? null
+        : depositCursorHex(
+            bytesOf(next.solana_tx_sig),
+            locatorFromWasm(next.locator),
+          ),
+  };
+}
+function agreedDepositFromWasm(d: WasmRecord): AgreedDeposit {
+  return {
+    owner: bytesOf(d.owner),
+    amountMicroUsdc: d.amount_micro_usdc as bigint,
+    solanaTxSig: bytesOf(d.solana_tx_sig),
+    locator: d.locator == null ? null : locatorFromWasm(d.locator),
+    registryEpoch: d.registry_epoch as bigint,
+    agreedHeight: d.agreed_height as bigint,
+    agreedAtMs: d.agreed_at_ms as bigint,
+  };
+}
+
+/** One `/v2/bridge/agreed-deposits` page; `next_cursor` is the last scanned
+ *  queue sequence. */
+export function agreedDepositsFromWasm(v: unknown): QueuedDepositPage {
+  const p = v as WasmRecord;
+  return {
+    rows: (p.rows as WasmRecord[]).map((r) => ({
+      sequence: r.sequence as bigint,
+      deposit: agreedDepositFromWasm(r.deposit as WasmRecord),
+    })),
+    nextCursor: (p.next_cursor as bigint | undefined) ?? null,
+  };
+}
+
+const PARK_CAUSES: ReadonlyMap<unknown, ParkCause> = new Map([
+  ["over_per_receipt_max", "OverPerReceiptMax"],
+  ["over_window_cap", "OverWindowCap"],
+  ["balance_overflow", "BalanceOverflow"],
+  ["unknown", "Unknown"],
+]);
+
+/** One `/v2/bridge/parked-deposits` page; `next_cursor` is the raw store key
+ *  of the last scanned row, returned as the route's hex cursor. */
+export function parkedDepositsFromWasm(v: unknown): ParkedDepositPage {
+  const p = v as WasmRecord;
+  return {
+    rows: (p.rows as WasmRecord[]).map((r) => {
+      const cause = PARK_CAUSES.get(r.cause);
+      if (cause === undefined) {
+        throw new Error(`unknown park cause: ${JSON.stringify(r.cause)}`);
+      }
+      return {
+        deposit: agreedDepositFromWasm(r.deposit as WasmRecord),
+        cause,
+        parkedHeight: r.parked_height as bigint,
+      };
+    }),
+    nextCursor:
+      p.next_cursor == null ? null : bytesToHex(bytesOf(p.next_cursor)),
+  };
 }
 
 /** The engine's names, keyed by the version 2 view's spelling of them. */

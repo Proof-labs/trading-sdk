@@ -222,7 +222,7 @@ class TestErrors:
         assert pts.EngineError(67, "").name == "EmergencyRateLimited"
 
     def test_off_curve_withdrawal_destination_code_135(self):
-        # proof-wire 12.0.0: a withdrawal to an off-curve Solana destination.
+        # A withdrawal to an off-curve Solana destination.
         assert pts.get_error_name(135) == "OffCurveWithdrawalDestination"
         assert pts.EngineError(135, "").name == "OffCurveWithdrawalDestination"
 
@@ -241,7 +241,26 @@ class TestErrors:
         ]:
             assert pts.get_error_name(code) == name
             assert pts.EngineError(code, "").name == name
-        assert pts.get_error_name(143) is None
+
+    def test_bridge_vote_codes_143_157(self):
+        # The bridge refusals; 91, 128, 129 and 152 are unassigned.
+        for code, name in [
+            (143, "UserImAboveNotional"),
+            (144, "BridgePaused"),
+            (145, "WithdrawalPayoutCleared"),
+            (146, "BridgeVoteInvalid"),
+            (147, "BridgeUnauthorizedOperator"),
+            (148, "BridgePayoutReportInvalid"),
+            (149, "WithdrawalQuarantined"),
+            (150, "WithdrawalPayoutSlotOccupied"),
+            (151, "DepositReceiptLimitExceeded"),
+            (153, "OwnerPendingWithdrawalsFull"),
+            (154, "PayoutRecordedForAnotherWithdrawal"),
+        ]:
+            assert pts.get_error_name(code) == name
+            assert pts.EngineError(code, "").name == name
+        for code in (91, 128, 129, 152):
+            assert pts.get_error_name(code) is None
 
     def test_transitional_code_50_uses_delivertx_log(self):
         oi = "open interest limit exceeded on market 7: would be 4, cap 3"

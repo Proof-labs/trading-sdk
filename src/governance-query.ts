@@ -267,6 +267,10 @@ export const ACTION_TAG_BY_KIND: Record<DecodedAdminAction["kind"], number> = {
   SetDepositLimit: 28,
   SetLiquidationConfig: 17,
   SetOperatorReceiptRegistry: 20,
+  PauseBridge: 32,
+  SetBridgePayoutConfig: 33,
+  SetDepositReceiptLimit: 34,
+  SetWithdrawalPolicy: 37,
 };
 
 /** The typed inner operation a proposal carries, decoded as the wire's
@@ -279,12 +283,18 @@ export function decodeAdminAction(
 ): DecodedAdminAction {
   try {
     const wasm = getWasm();
-    return adminActionFromWasm(
+    const action = adminActionFromWasm(
       wasm.decode_read(
         wasm.ReadKind.AdminAction,
         actionEncoder.encode(integral(value)),
       ),
     );
+    // The core decodes every variant the pinned wire knows; one this SDK has
+    // no row for would otherwise reach a caller as an unknown `kind`.
+    if (!Object.hasOwn(ACTION_TAG_BY_KIND, action.kind)) {
+      throw new Error(`unknown admin action: ${action.kind}`);
+    }
+    return action;
   } catch (e) {
     throw new Error(
       `governance decode: ${field}: ${e instanceof Error ? e.message : String(e)}`,

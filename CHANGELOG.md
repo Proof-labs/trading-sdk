@@ -9,6 +9,39 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking, all SDKs (needs proof-wire 14):** `RecordWithdrawalPayout` is
+  signed by the recording operator's registry key instead of an envelope
+  signer named as the lease holder: `holder` is gone, and the record carries
+  `deploymentId`, `chainId` and `signature`. Build it with
+  `signRecordWithdrawalPayout` / `RecordWithdrawalPayout.sign`.
+- **Breaking, all SDKs:** `SetOperatorReceiptRegistry` carries only
+  `operatorKeys`, one per operator; TypeScript refuses a key named twice.
+- **Rust and the conformance runners:** proof-wire is pinned to the wire 14
+  pre-merge mirror of exchange #1450 by full commit hash.
+- **Breaking, all SDKs, bridge operators:** every bridge-operator message
+  signs its time. The five messages end in one signed tail, `deploymentId`,
+  `chainId`, `registryEpoch` and `signedAtMs` (`signed_at_ms`, 8 bytes
+  big-endian), and every payload carries `signedAtMs` between
+  `registryEpoch` and `signature`. The pause vote's body is now empty: its
+  time moved into the tail, so `VotePauseBridge` lists `signedAtMs` after
+  `registryEpoch`.
+  - TypeScript: `BridgeBinding.signedAtMs` is required: pass the latest
+    committed block's time, since the wall clock runs ahead of block time and
+    the engine refuses a message signed after its block;
+    `signVotePauseBridge(signer, binding)` drops its separate time argument.
+    `bridgeMessagePreimage` takes a `SignedBridgeBinding`.
+  - Rust: `BridgeBinding` carries `signed_at_ms`;
+    `sign_vote_pause_bridge(signer, binding)` drops its separate argument and
+    `BridgeMessage::PauseBridge` holds only the binding.
+  - Python: each `.sign` and each `*_message` builder takes `signed_at_ms`
+    as a required last argument (the latest committed block's time), and `vote_pause_bridge_message` and
+    `VotePauseBridge.sign` take the binding first.
+  - The engine refuses a message signed after the executing block, 24 hours
+    or more before it, or at or before the bridge's last unpause (codes 146
+    and 148, carrying proof-wire's `SignedTimeRefusal`), and a stored vote
+    stops counting 24 hours after its signing time or once an unpause
+    postdates it.
+
 - **Breaking, TypeScript and Python:** the authorities read no longer exposes the retired
   composite-feeder and scheduled-operations lists. `AuthoritiesSnapshot` carries
   `relayer`, `oracle`, `custody` and `marketParams` (`market_params` in Python);
@@ -22,6 +55,66 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **All SDKs, bridge operators (needs proof-wire 14):** sign the five
+  bridge-operator messages with the operator's registry key. The core builds
+  every preimage from the wire contract, so Rust, TypeScript and Python sign
+  the engine's bytes; the shared `conformance/vote-preimages.ndjson` pins them,
+  including an absent locator, a top-level-only locator and the largest ids.
+  - `VoteWithdrawalPaid` (0x30), `RecordWithdrawalPayout` (0x31),
+    `VoteDeposit` (0x32), `VotePauseBridge` (0x33) and
+    `VoteWithdrawalPayoutDead` (0x34).
+  - TypeScript: `signVoteWithdrawalPaid`, `signRecordWithdrawalPayout`,
+    `signVoteWithdrawalPayoutDead`, `signVoteDeposit`, `signVotePauseBridge`
+    and `bridgeMessagePreimage`. The signer may be asynchronous, so an
+    `ExternalSigner.signRaw` works unchanged, and must return 64 bytes.
+  - Rust: `bridge_votes::sign_*` and `BridgeMessage::preimage`, typed with
+    proof-wire's bridge newtypes.
+  - Python: `VoteWithdrawalPaid.sign`, `RecordWithdrawalPayout.sign`,
+    `VoteWithdrawalPayoutDead.sign`, `VoteDeposit.sign`,
+    `VotePauseBridge.sign` and `bridge_message_preimage`. A key handle signs
+    in Rust with `SigningHandle.sign_bridge_message`; an `ExternalSigner`
+    signs the core-built preimage; its signature must be 64 bytes and verify
+    against its `public_key`. Byte fields must be `bytes`.
+  - Every binding refuses, before signing: a field of the wrong width, a
+    byte field given as text or a number, a field the message does not
+    have, and an inner index of 65535 (the wire's absent-index sentinel).
+- **All SDKs:** the pending-withdrawals read lists each row's
+  `clearedPayouts` (`cleared_payouts` in Python): the payouts, by vault and
+  Squads transaction index, that a Dead threshold cleared and a Paid vote may
+  still name; a view without the field reads as none cleared. The pending
+  withdrawal and deposit votes carry the `signedAtMs` their signature
+  covers, and a parked deposit's cause can be `BalanceOverflow` (the owner's
+  balance cannot hold it). The engine refuses a payout record past the most
+  cleared payouts one withdrawal may hold as 148
+  (`ClearedPayoutLimitReached`), and reports a Dead vote refused because
+  another operator voted the payout Paid as a `bridge_vote_conflict` with
+  reason `payout_voted_paid`.
+- **All SDKs:** the bridge reads `/v2/bridge/status`, `/v2/bridge/payout-config`,
+  `/v2/bridge/registry[/{epoch}]`, `/v2/bridge/pending-withdrawals`,
+  `/v2/bridge/pending-deposits`, `/v2/bridge/agreed-deposits` and
+  `/v2/bridge/parked-deposits` (TypeScript `queryBridge*` / `queryPending*` /
+  `queryAgreedDeposits` / `queryParkedDeposits`, Python `bridge_*` /
+  `pending_*` / `agreed_deposits` / `parked_deposits`). A `nextCursor` is
+  already in the route's cursor form; pass it back verbatim. A status,
+  verdict or park cause this SDK does not name reads as `Unknown` in both
+  languages. These routes are served by the node; until api-gateway routes
+  them, read them direct-node (`useGateway: false`).
+- **All SDKs:** the admin quorum's bridge controls `PauseBridge` (inner tag
+  0x20), `SetBridgePayoutConfig` (0x21: the Squads vault every payout record
+  must name, and its rent wallet) and `SetDepositReceiptLimit` (0x22: the caps
+  on vote-credited deposits), and `SetWithdrawalPolicy` (37: the flat
+  withdrawal fee and the minimum net withdrawal). TypeScript and Python
+  refuse what the engine refuses: a payout config with a zero address or
+  whose rent wallet is the vault, a receipt-limit window under one second or
+  a per-deposit maximum above the window cap, and a minimum withdrawal below
+  the fee, and a proposal of an admin action this SDK does not
+  know now fails to decode instead of reaching the caller.
+- **Errors:** 143 to 151, 153 and 154 are named (`UserImAboveNotional`,
+  `BridgePaused`, `WithdrawalPayoutCleared`, `BridgeVoteInvalid`,
+  `BridgeUnauthorizedOperator`, `BridgePayoutReportInvalid`,
+  `WithdrawalQuarantined`, `WithdrawalPayoutSlotOccupied`,
+  `DepositReceiptLimitExceeded`, `OwnerPendingWithdrawalsFull`,
+  `PayoutRecordedForAnotherWithdrawal`).
 - **All SDKs:** the admin quorum's `SetAccountFeeOverride` (inner tag 36),
   which sets one account's taker and maker fee, the fee tier a market maker
   trades at. A `ProposeAdminAction` carries `AccountFeeOverrideChange`
@@ -82,6 +175,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a non-string `unfilled` reason and non-string order lists as
   `OrderResultUnreadable`, preserving the executed transaction's hash for
   reconciliation.
+
+### Removed
+
+- **Breaking, all SDKs:** the receipt and payout-lease surfaces, retired by the
+  vote model. Operators sign votes and payout records instead (see Added).
+  - Actions: `AuthorizeWithdrawal` (0x24), `ConfirmWithdrawalReceipt` (0x22),
+    `FailWithdrawalReceipt` (0x23) and `ClaimWithdrawalPayout` (0x2E), with
+    `OperatorReceiptProof` and `BridgeWithdrawalReceipt`.
+  - TypeScript: `authorizeWithdrawal`, `confirmWithdrawalReceipt`,
+    `failWithdrawalReceipt`, `encodeBridgeReceipt`, `signOperatorReceipt`,
+    `BRIDGE_RECEIPT_LEN`, `TERMINAL_PAID`, `TERMINAL_CANCELLED` and
+    `QUORUM_OPERATOR_M_OF_N`. Python: the same actions and their builders.
+  - Errors 91 (`WithdrawalPayoutLeaseActive`), 128
+    (`WithdrawalPayoutLeaseNotHeld`) and 129
+    (`WithdrawalPayoutRecordLimitReached`): the wire no longer assigns them.
+    73 and 74 stay named while the wire maps them.
 
 ## [15.0.0] — 2026-11-24
 
