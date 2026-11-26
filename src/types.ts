@@ -3286,6 +3286,21 @@ export interface PositionSummary {
   /** Conditional thin-book restriction; market reduce-only/halted status is separate.
    * Null for other kinds or older responses. */
   bookRestricted: boolean | null;
+  /** Why this leg is valued at its last accepted price instead of a live one; null when live. */
+  stale: SettlementReferenceUnavailable | null;
+}
+
+/** Why a position has no live settlement reference. */
+export type SettlementReferenceUnavailable =
+  "stale" | "guard_unset" | "no_verdict" | "no_mark" | "thin_book" | "unknown";
+
+/** A position the engine could not price at all, left out of the account totals. */
+export interface UnpricedPosition {
+  market: number;
+  side: "buy" | "sell" | "unknown";
+  entryPrice: bigint;
+  size: bigint;
+  reason: SettlementReferenceUnavailable;
 }
 
 /** Map-encoded v2 valuation. Amounts are exact micro-USDC; this is not a state witness. */
@@ -3301,6 +3316,10 @@ export interface AccountView {
   volume30dMicroUsdc: bigint;
   cashoutEquity: bigint;
   positions: PositionSummary[];
+  /** Positions left out of the totals because no price exists for them. */
+  unpriced: UnpricedPosition[];
+  /** False when `unpriced` is non-empty, so equity and margins are partial. */
+  totalsComplete: boolean;
 }
 
 /** Account valuation and the block height of that same response. */

@@ -83,6 +83,43 @@ describe("account v2 valuation", () => {
     expect(transport.mock.calls[0][1]?.method ?? "GET").toBe("GET");
     expect(transport.mock.calls[0][1]?.body).toBeUndefined();
   });
+  it("tells a stale leg and an unpriced position apart from live ones", async () => {
+    const live = (await clientFor().client.queryAccountV2(owner))?.account;
+    expect(live).toMatchObject({
+      positions: [{ stale: null }],
+      unpriced: [],
+      totalsComplete: true,
+    });
+    const value = raw();
+    value.positions[0].stale = "stale";
+    value.unpriced = [
+      {
+        market: 101,
+        side: "sell",
+        entry_price: 40n,
+        size: 2n,
+        reason: "no_mark",
+      },
+      { market: 102, side: "buy", entry_price: 1n, size: 1n, reason: "later" },
+    ];
+    value.totals_complete = false;
+    expect(
+      (await clientFor(packed(value)).client.queryAccountV2(owner))?.account,
+    ).toMatchObject({
+      positions: [{ stale: "stale" }],
+      unpriced: [
+        {
+          market: 101,
+          side: "sell",
+          entryPrice: 40n,
+          size: 2n,
+          reason: "no_mark",
+        },
+        { market: 102, reason: "unknown" },
+      ],
+      totalsComplete: false,
+    });
+  });
   it("keeps missing data null and preserves zero, false and full-width integers", async () => {
     const value = raw();
     delete value.positions[0].valuation_price;

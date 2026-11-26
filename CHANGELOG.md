@@ -189,6 +189,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   map-encoded `query_v2::Account`. Each position carries `valuation_price`, the
   exact micro-USDC valuation reference, and `book_restricted`, a boolean for
   conditionals only; both read as null when an older node omits them. A
+  position's `stale` names why it is valued at its last accepted price (null
+  when live); `unpriced` lists positions with no price, left out of the
+  totals, and `totals_complete` is false while any exist. A
   positional v1 account is refused. Returns `{ height, account }` with the same
   response's height; missing or malformed heights fail. Existing account methods
   are unchanged.

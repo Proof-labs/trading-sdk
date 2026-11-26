@@ -27,6 +27,29 @@ fn engine_vector_preserves_exact_valuation_fields() {
 }
 
 #[test]
+fn a_stale_leg_and_an_unpriced_position_are_kept_apart_from_live_ones() {
+    use proof_wire::query_v2::SettlementReferenceUnavailable as Reason;
+    let live = decode_account_view(&fixture()).expect("engine v2 vector must decode");
+    assert_eq!(live.positions[0].stale, None);
+    assert!(live.unpriced.is_empty());
+    assert!(live.totals_complete);
+    let mut raw = value();
+    raw["positions"][0]["stale"] = json!("stale");
+    raw["unpriced"] = json!([
+        {"market": 101, "side": "sell", "entry_price": 40, "size": 2, "reason": "no_mark"},
+        {"market": 102, "side": "buy", "entry_price": 1, "size": 1, "reason": "later"},
+    ]);
+    raw["totals_complete"] = json!(false);
+    let view = decode(&raw).expect("stale and unpriced map must decode");
+    assert_eq!(view.positions[0].stale, Some(Reason::Stale));
+    assert_eq!(view.unpriced.len(), 2);
+    assert_eq!(view.unpriced[0].reason, Reason::NoMark);
+    assert_eq!(view.unpriced[0].entry_price, 40);
+    assert_eq!(view.unpriced[1].reason, Reason::Unknown);
+    assert!(!view.totals_complete);
+}
+
+#[test]
 fn older_maps_unknown_fields_and_nullable_values_remain_distinct() {
     let mut raw = value();
     let p = raw["positions"][0]

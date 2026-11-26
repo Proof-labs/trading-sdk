@@ -280,6 +280,8 @@ export {
   type AccountView,
   type AccountSnapshot,
   type PositionSummary,
+  type UnpricedPosition,
+  type SettlementReferenceUnavailable,
   type PositionInfo,
   type MarketConfig,
   type MarketListing,

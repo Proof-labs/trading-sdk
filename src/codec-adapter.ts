@@ -20,6 +20,7 @@ import {
   type AccountInfo,
   type AccountView,
   type PositionSummary,
+  type UnpricedPosition,
   type OpenOrder,
   type ActionTypeValue,
   type AdminAction,
@@ -1048,7 +1049,16 @@ export function accountViewFromWasm(value: unknown): AccountView {
       adlScore: p.adl_score as bigint,
       valuationPrice: (p.valuation_price ?? null) as bigint | null,
       bookRestricted: (p.book_restricted ?? null) as boolean | null,
+      stale: (p.stale ?? null) as PositionSummary["stale"],
     })),
+    unpriced: (a.unpriced as WasmRecord[]).map((u): UnpricedPosition => ({
+      market: u.market as number,
+      side: u.side as UnpricedPosition["side"],
+      entryPrice: u.entry_price as bigint,
+      size: u.size as bigint,
+      reason: u.reason as UnpricedPosition["reason"],
+    })),
+    totalsComplete: a.totals_complete as boolean,
   };
 }
 
