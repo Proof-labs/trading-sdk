@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Any, Optional
 
 class SigningHandle:
     """Opaque signing key. Exposes the public key, derived owner, and a
@@ -20,6 +20,10 @@ class SigningHandle:
         action_payload: bytes,
         seq: int,
     ) -> bytes: ...
+    def sign_bridge_message(self, fields: dict[str, Any]) -> bytes:
+        """Sign one bridge-operator message, built and length-checked in Rust
+        from ``fields`` (tagged by ``kind``). Never signs arbitrary bytes."""
+        ...
     def __repr__(self) -> str: ...
 
 def generate_keypair(seed: Optional[bytes] = None) -> dict[str, bytes]:
@@ -120,6 +124,12 @@ def verify_signature(
     ...
 
 def chain_id_from_string(chain_id: str) -> bytes:
+    ...
+
+def bridge_message_preimage(fields: dict[str, Any]) -> bytes:
+    """The canonical bytes a bridge operator signs for one message, tagged by
+    ``kind``: ``withdrawal_paid``, ``withdrawal_payout_dead``,
+    ``payout_record``, ``deposit`` or ``pause_bridge``."""
     ...
 
 def admin_proposal_content_hash(

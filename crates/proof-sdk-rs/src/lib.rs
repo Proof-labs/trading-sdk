@@ -6,9 +6,9 @@
 //!
 //! - [`ExchangeClient`]: timestamp-nonce allocation, signing through any
 //!   [`Signer`], one-shot submission, receipt waiting, and helpers for
-//!   orders (place, cancel, amend, cancel-replace, market, close, No on a
-//!   binary book), position triggers, agents, sub-accounts, withdrawals and
-//!   baskets.
+//!   orders (place and cancel, one or a list of up to 100, amend,
+//!   cancel-replace, market, close, No on a binary book), position triggers,
+//!   agents, sub-accounts, withdrawals and baskets.
 //! - [`actions`]: the same actions as plain values, for callers that sign and
 //!   send them themselves.
 //! - [`InfoClient`]: typed reads for markets, events, the order book, an
@@ -71,12 +71,14 @@ pub use address::Address;
 pub use error::{Error, Result};
 pub use event::{
     CancelReason, ConditionMet, ConditionNotMet, ConversionFallbackReason, Deposited, Event,
-    EventResolved, Fill, FundingSettled, MarketOrderProcessed, OrderAmended, OrderCancelled,
-    OrderPlaced, OrderRejected, PositionClosed, PositionTriggersInvalidated, PositionUpdated,
-    PredictionSettled, TriggerInvalidation,
+    EventResolved, Fill, FundingSettled, MarketOrderProcessed, OrderAmended, OrderCancellation,
+    OrderCancelled, OrderPlaced, OrderPlacement, OrderRejected, OrdersCancelled, OrdersPlaced,
+    PlacementOutcome, PositionClosed, PositionTriggersInvalidated, PositionUpdated,
+    PredictionSettled, TriggerInvalidation, UnfilledReason,
 };
 pub use exchange::{
-    EngineError, ExchangeClient, Receipt, RefusalReason, SignedTx, Submitted, TxStatus,
+    CloseOutcome, EngineError, ExchangeClient, Receipt, RefusalReason, SignedTx, Submitted,
+    TxStatus,
 };
 pub use history::{
     AccountEventsQuery, BboCandle, Candle, CandlePage, CandleQuery, CandleResolution, CandleUnit,
@@ -106,11 +108,15 @@ pub use proof_trading_sdk::gateway::{TxAttribute, TxEvent, TxHash};
 pub use proof_trading_sdk::query::{AccountInfo, AccountView, PositionBrief, PositionSummary};
 pub use proof_trading_sdk::query_v2;
 pub use proof_trading_sdk::types::{
-    Action, AtomicBasketLeg, CancelReplaceOrder, ClientTriggerGroupId, ClientTriggerId, EventId,
-    EventInfo, FundingRate, MarketConfig, MarketId, MarketOrder, Order, OrderId, Outcome,
-    PlaceOrder, Position, PositionEpoch, Side, TimeInForce, TriggerLimb, TriggerSlippageBps,
-    WithdrawalStatus,
+    Action, AtomicBasketLeg, CancelClientOrders, CancelOrders, CancelReplaceOrder, CancelTarget,
+    ClientTriggerGroupId, ClientTriggerId, EventId, EventInfo, FundingRate, MarketConfig, MarketId,
+    Order, OrderEntry, OrderId, OrderKind, Outcome, PlaceOrder, PlaceOrders, Position,
+    PositionEpoch, Side, TimeInForce, TriggerLimb, TriggerSlippageBps, WithdrawalStatus,
 };
+
+/// Most orders one batch (`PlaceOrders`, `CancelOrders`,
+/// `CancelClientOrders`) carries; the wire refuses 0 or more than this.
+pub const MAX_ORDERS_PER_BATCH: usize = proof_trading_sdk::types::MAX_LIST_ENTRIES;
 pub use proof_trading_sdk::ErrorKind;
 pub use proof_trading_sdk::{LocalSigner, Signer, SignerError};
 

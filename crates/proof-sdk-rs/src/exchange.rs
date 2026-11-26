@@ -9,8 +9,8 @@ use proof_trading_sdk::gateway::{
     RetryAfter, SubmissionOutcome, TxHash,
 };
 use proof_trading_sdk::types::{
-    Action, AtomicBasketLeg, MarketConfig, MarketId, OrderId, PlaceOrder, PositionEpoch, Side,
-    TriggerLimb,
+    Action, AtomicBasketLeg, MarketConfig, MarketId, OrderEntry, OrderId, PlaceOrder,
+    PositionEpoch, Side, TriggerLimb,
 };
 use proof_trading_sdk::{crypto, sign_action, SignActionError, Signer};
 use proof_trading_sdk::{decode_exec_error_kind, DecodedExecErrorKind, ErrorKind};
@@ -18,7 +18,7 @@ use proof_trading_sdk::{decode_exec_error_kind, DecodedExecErrorKind, ErrorKind}
 use crate::actions;
 use crate::address::Address;
 use crate::error::{Error, Result};
-use crate::event::Event;
+use crate::event::{CancelReason, Event, OrderCancellation, OrderPlacement};
 use crate::info::{ClientConfig, InfoClient};
 use crate::nonce::NonceAllocator;
 
@@ -111,11 +111,10 @@ pub struct Receipt {
     pub error: Option<EngineError>,
     /// The engine's log, unchanged.
     pub log: String,
-    /// What the transaction did, in emission order: [`Event::OrderPlaced`],
-    /// [`Event::Fill`], [`Event::OrderCancelled`], ... One transaction can
-    /// emit several of each (a basket, a cancel-replace). An order that fully
-    /// fills on arrival emits fills and no `OrderPlaced`; an IOC remainder or
-    /// a refused post-only emits neither.
+    /// What the transaction did, in emission order: [`Event::OrdersPlaced`],
+    /// [`Event::Fill`], [`Event::OrdersCancelled`], ... One transaction can
+    /// emit several fills and position updates. `OrdersPlaced` reports every
+    /// order of a placement, rested, executed or rejected.
     pub events: Vec<Event>,
 }
 
@@ -124,6 +123,89 @@ impl Receipt {
     pub fn is_success(&self) -> bool {
         self.error.is_none()
     }
+
+    /// The kind of the first order event that did not parse, if any.
+    #[must_use]
+    pub fn malformed_order_event(&self) -> Option<&str> {
+        self.events.iter().find_map(|e| match e {
+            Event::Malformed(raw)
+                if raw.kind == "orders_placed" || raw.kind == "orders_cancelled" =>
+            {
+                Some(raw.kind.as_str())
+            }
+            _ => None,
+        })
+    }
+
+    /// What each order of a `PlaceOrders` did, in the order sent; empty when
+    /// the transaction placed none. Reads a transaction you submitted; for
+    /// another transaction, match [`OrdersPlaced::owner`](crate::OrdersPlaced::owner) in `events`.
+    #[must_use]
+    pub fn placements(&self) -> &[OrderPlacement] {
+        self.events
+            .iter()
+            .find_map(|e| match e {
+                Event::OrdersPlaced(p) => Some(p.orders.as_slice()),
+                _ => None,
+            })
+            .unwrap_or(&[])
+    }
+
+    /// What each entry of a `CancelOrders` or `CancelClientOrders` did, in
+    /// the order sent; empty when the transaction requested no cancel. Reads a
+    /// transaction you submitted; for another transaction, match
+    /// [`OrdersCancelled::owner`](crate::OrdersCancelled::owner) in `events`.
+    #[must_use]
+    pub fn cancellations(&self) -> &[OrderCancellation] {
+        self.events
+            .iter()
+            .find_map(|e| match e {
+                Event::OrdersCancelled(c) if c.reason == CancelReason::UserRequested => {
+                    Some(c.orders.as_slice())
+                }
+                _ => None,
+            })
+            .unwrap_or(&[])
+    }
+}
+
+/// Check an executed code-0 receipt's order events. A rejected order is
+/// reported in [`Receipt::placements`] / [`Receipt::cancellations`] and never
+/// fails the transaction; an order event that does not parse is
+/// [`Error::OrderResultUnreadable`]: the transaction executed, so it is never
+/// read as success or re-signed.
+fn read_order_lists(receipt: Receipt) -> Result<Receipt> {
+    if receipt.error.is_none() && receipt.malformed_order_event().is_some() {
+        return Err(Error::OrderResultUnreadable {
+            receipt: Box::new(receipt),
+        });
+    }
+    Ok(receipt)
+}
+
+/// The reduce-only market entry flattening a position held on `side` for
+/// `size`.
+fn close_entry(market: MarketId, side: Side, size: u64) -> OrderEntry {
+    let side = match side {
+        Side::Buy => Side::Sell,
+        Side::Sell => Side::Buy,
+    };
+    OrderEntry {
+        reduce_only: true,
+        ..actions::market_entry(market, side, size, None)
+    }
+}
+
+/// What [`ExchangeClient::close_position`] did.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[must_use]
+pub enum CloseOutcome {
+    /// The close was sent. [`Submitted::placements`] holds its outcome, which
+    /// can be rejected (code 12 when unaffordable, 35 when the position went flat
+    /// first).
+    Sent(Submitted),
+    /// The account held no position on the market, so nothing was sent.
+    NothingToClose,
 }
 
 impl From<CommittedReceipt> for Receipt {
@@ -238,6 +320,23 @@ impl Submitted {
             _ => None,
         }
     }
+
+    /// Each order's outcome, in the order sent; `None` without an executed
+    /// verdict (pending, or refused as a whole).
+    #[must_use]
+    pub fn placements(&self) -> Option<&[OrderPlacement]> {
+        self.receipt()
+            .filter(|r| r.is_success())
+            .map(Receipt::placements)
+    }
+
+    /// Each cancel's outcome, in order; `None` without an executed verdict.
+    #[must_use]
+    pub fn cancellations(&self) -> Option<&[OrderCancellation]> {
+        self.receipt()
+            .filter(|r| r.is_success())
+            .map(Receipt::cancellations)
+    }
 }
 
 /// An unreadable `Retry-After` must never mean "retry now".
@@ -283,7 +382,9 @@ fn status(outcome: SubmissionOutcome<PreAdmissionRefusal>) -> TxStatus {
 /// - [`Error::Unconfirmed`] from [`Self::send`] (or any helper) means no
 ///   verdict came back and the transaction may still execute. It carries the
 ///   [`SignedTx`]: reconcile its hash with [`Self::wait_for_receipt`], or
-///   resend the same bytes; never sign the action again. Any other `Err`
+///   resend the same bytes; never sign the action again.
+/// - [`Error::OrderResultUnreadable`] means it executed but its order results
+///   did not read: reconcile its hash, never sign it again. Any other `Err`
 ///   means nothing executed.
 /// - `Ok` carries a [`TxStatus`] that says which.
 ///
@@ -484,7 +585,9 @@ impl ExchangeClient {
     /// no verdict came back (transport failure, 5xx, unreadable answer): look
     /// `tx.hash` up with [`Self::wait_for_receipt`], or resend the same `tx`
     /// (same nonce, so it executes at most once). Signing the action again
-    /// creates a second transaction. Other errors mean it was not sent.
+    /// creates a second transaction. [`Error::OrderResultUnreadable`] means it
+    /// executed but its order results did not read: reconcile, never re-sign.
+    /// Other errors mean it was not sent.
     pub async fn send(&self, tx: &SignedTx) -> Result<Submitted> {
         let s = self
             .inner
@@ -502,10 +605,15 @@ impl ExchangeClient {
                     e.into()
                 }
             })?;
+        let wait = retry_after(s.retry_after);
+        let status = match status(s.outcome) {
+            TxStatus::Committed(receipt) => TxStatus::Committed(read_order_lists(receipt)?),
+            other => other,
+        };
         Ok(Submitted {
             tx: tx.clone(),
-            status: status(s.outcome),
-            retry_after: retry_after(s.retry_after),
+            status,
+            retry_after: wait,
         })
     }
 
@@ -527,14 +635,17 @@ impl ExchangeClient {
     /// [`Error::NonceWindow`], [`Error::Encode`] or [`Error::Signer`] before
     /// anything is sent, then whatever [`Self::send`] returns.
     /// [`Error::ReceiptTimeout`] if a pending result does not commit in time,
-    /// or [`Error::Unconfirmed`] carrying the transaction if the wait failed
-    /// otherwise.
+    /// [`Error::OrderResultUnreadable`] if it committed but its order results did
+    /// not read, or [`Error::Unconfirmed`] carrying the transaction if the wait
+    /// failed otherwise.
     pub async fn submit_and_wait(&self, action: &Action, timeout: Duration) -> Result<Submitted> {
         let mut submitted = self.submit(action).await?;
         if submitted.is_pending() {
             let receipt = match self.wait_for_receipt(submitted.tx.hash, timeout).await {
                 Ok(receipt) => receipt,
-                Err(e @ Error::ReceiptTimeout { .. }) => return Err(e),
+                Err(e @ (Error::ReceiptTimeout { .. } | Error::OrderResultUnreadable { .. })) => {
+                    return Err(e)
+                }
                 Err(e) => {
                     return Err(Error::Unconfirmed {
                         tx: submitted.tx,
@@ -556,13 +667,14 @@ impl ExchangeClient {
     /// [`Error::ReceiptTimeout`] at the deadline, including one that passes
     /// mid-request. A 404, a 5xx or a transport
     /// failure is retried until then; any other failure is returned at once.
+    /// An order event that does not parse is [`Error::OrderResultUnreadable`].
     pub async fn wait_for_receipt(&self, hash: TxHash, timeout: Duration) -> Result<Receipt> {
         let deadline = tokio::time::Instant::now() + timeout;
         let mut delay = RECEIPT_POLL_START;
         loop {
             let poll = self.inner.info.gateway().committed_receipt(hash);
             match tokio::time::timeout_at(deadline, poll).await {
-                Ok(Ok(receipt)) => return Ok(receipt.into()),
+                Ok(Ok(receipt)) => return read_order_lists(receipt.into()),
                 // Not found yet, not indexed yet, or transient: keep polling.
                 Ok(Err(e)) if still_pending(e.kind) => {}
                 Ok(Err(e)) => return Err(e.into()),
@@ -592,17 +704,64 @@ impl ExchangeClient {
         actions::limit_order(self.address(), market, side, price, quantity)
     }
 
-    /// Place a limit order (`PlaceOrder`).
+    /// Place one order for this account, limit ([`Self::limit_order`],
+    /// [`actions::order_entry`]) or market ([`actions::market_entry`]): a
+    /// batch of one, read as [`Self::place_orders`].
     ///
     /// # Errors
     ///
     /// As [`Self::submit`].
-    pub async fn place_order(&self, order: PlaceOrder) -> Result<Submitted> {
-        self.submit(&Action::PlaceOrder(order)).await
+    pub async fn place_order(&self, order: impl Into<OrderEntry>) -> Result<Submitted> {
+        self.submit(&actions::place_entry(self.address(), order.into()))
+            .await
+    }
+
+    /// Place 1 to 100 limit or market orders under one signature, each placed
+    /// or refused on its own ([`actions::place_orders`]). The transaction
+    /// succeeds; [`Receipt::placements`] says what each order did.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidInput`] for no orders or more than 100, else as
+    /// [`Self::submit`].
+    pub async fn place_orders(&self, orders: Vec<OrderEntry>) -> Result<Submitted> {
+        self.submit(&actions::place_orders(self.address(), orders)?)
+            .await
+    }
+
+    /// Cancel 1 to 100 orders by exchange order id, each on its own
+    /// ([`actions::cancel_orders`]); [`Receipt::cancellations`] says what
+    /// each did.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidInput`] for no ids or more than 100, else as
+    /// [`Self::submit`].
+    pub async fn cancel_orders(&self, order_ids: Vec<OrderId>) -> Result<Submitted> {
+        self.submit(&actions::cancel_orders(self.address(), order_ids)?)
+            .await
+    }
+
+    /// Cancel 1 to 100 orders by client order id, each on its own
+    /// ([`actions::cancel_client_orders`]); [`Receipt::cancellations`] says
+    /// what each did.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidInput`] for no ids or more than 100, else as
+    /// [`Self::submit`].
+    pub async fn cancel_client_orders(&self, client_order_ids: Vec<u64>) -> Result<Submitted> {
+        self.submit(&actions::cancel_client_orders(
+            self.address(),
+            client_order_ids,
+        )?)
+        .await
     }
 
     /// Immediate-or-cancel at the best available prices
-    /// ([`actions::market_order`]).
+    /// ([`actions::market_order`]), a batch of one read as
+    /// [`Self::place_orders`]. For a worst price, pass
+    /// [`actions::market_entry`] to [`Self::place_order`].
     ///
     /// # Errors
     ///
@@ -613,8 +772,13 @@ impl ExchangeClient {
         side: Side,
         quantity: u64,
     ) -> Result<Submitted> {
-        let order = actions::market_order(self.address(), market, side, quantity);
-        self.submit(&Action::MarketOrder(order)).await
+        self.submit(&actions::market_order(
+            self.address(),
+            market,
+            side,
+            quantity,
+        ))
+        .await
     }
 
     /// Cancel by exchange order id ([`actions::cancel_order`]).
@@ -705,15 +869,30 @@ impl ExchangeClient {
         .await
     }
 
-    /// Flatten this account's position on `market`
-    /// ([`actions::close_position`]).
+    /// Flatten this account's position on `market`: reads the position, then
+    /// sends a reduce-only market entry on the other side for its size
+    /// ([`actions::market_entry`]). A flat account sends nothing and returns
+    /// [`CloseOutcome::NothingToClose`]. A refused close is its entry in
+    /// [`Receipt::placements`], code 35 when the position went flat before the
+    /// close ran. The size and `NothingToClose` come from the account read,
+    /// which can trail a fill made just before; the close never sends more
+    /// than the position read.
     ///
     /// # Errors
     ///
-    /// As [`Self::submit`].
-    pub async fn close_position(&self, market: MarketId) -> Result<Submitted> {
-        self.submit(&actions::close_position(self.address(), market))
-            .await
+    /// A failed account read (as [`InfoClient::account`]), then as
+    /// [`Self::submit`].
+    pub async fn close_position(&self, market: MarketId) -> Result<CloseOutcome> {
+        let account = self.info().account(self.address()).await?;
+        let Some(held) = account
+            .positions
+            .iter()
+            .find(|p| p.market == market && p.size > 0)
+        else {
+            return Ok(CloseOutcome::NothingToClose);
+        };
+        let entry = close_entry(market, held.side, held.size);
+        self.place_order(entry).await.map(CloseOutcome::Sent)
     }
 }
 
@@ -878,6 +1057,8 @@ impl ExchangeClient {
     }
 
     /// Fill every leg in full or none ([`actions::atomic_basket_order`]).
+    /// [`Receipt::placements`] says what each leg did, in order; a failed
+    /// basket is the receipt's error with every leg rejected.
     ///
     /// # Errors
     ///
@@ -898,8 +1079,9 @@ impl ExchangeClient {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, clippy::panic)]
     use super::*;
+    use crate::event::PlacementOutcome;
     use proof_trading_sdk::{codec, LocalSigner};
 
     fn client() -> ExchangeClient {
@@ -940,10 +1122,181 @@ mod tests {
     fn debug_never_prints_signed_bytes() {
         let c = client();
         let tx = c
-            .sign(&Action::PlaceOrder(c.limit_order(1, Side::Buy, 1, 1)))
+            .sign(&actions::place_order(c.limit_order(1, Side::Buy, 1, 1)))
             .unwrap();
         let shown = format!("{tx:?}");
         assert!(shown.contains("hash") && !shown.contains("bytes"));
+    }
+
+    fn receipt(events: Vec<Event>) -> Receipt {
+        Receipt {
+            hash: TxHash::of_signed_bytes(&[1]),
+            height: 9,
+            error: None,
+            log: String::new(),
+            events,
+        }
+    }
+
+    fn committed(events: Vec<Event>) -> Submitted {
+        let c = client();
+        Submitted {
+            tx: c
+                .sign(&actions::cancel_all_orders(c.address(), None))
+                .unwrap(),
+            status: TxStatus::Committed(receipt(events)),
+            retry_after: None,
+        }
+    }
+
+    fn read(events: Vec<Event>) -> Result<Receipt> {
+        read_order_lists(receipt(events))
+    }
+
+    fn placed(outcomes: &[PlacementOutcome]) -> Event {
+        Event::OrdersPlaced(crate::event::OrdersPlaced {
+            owner: Address([1; 20]),
+            orders: outcomes
+                .iter()
+                .map(|outcome| OrderPlacement {
+                    market: 1,
+                    client_order_id: None,
+                    outcome: outcome.clone(),
+                })
+                .collect(),
+        })
+    }
+
+    fn cancelled(reason: CancelReason, orders: Vec<OrderCancellation>) -> Event {
+        Event::OrdersCancelled(crate::event::OrdersCancelled {
+            owner: Address([1; 20]),
+            reason,
+            orders,
+        })
+    }
+
+    fn refused_cancel(error: EngineError) -> OrderCancellation {
+        OrderCancellation::Refused {
+            target: proof_trading_sdk::types::CancelTarget::OrderId(5),
+            error,
+        }
+    }
+
+    fn executed(order_id: OrderId) -> PlacementOutcome {
+        PlacementOutcome::Executed {
+            order_id,
+            requested_quantity: 5,
+            filled_quantity: 5,
+            unfilled: None,
+        }
+    }
+
+    /// The receipt an unreadable result carries, or a panic naming what came back.
+    fn unreadable_receipt(read: Result<Receipt>) -> Receipt {
+        match read {
+            Err(Error::OrderResultUnreadable { receipt, .. }) => *receipt,
+            other => panic!("expected OrderResultUnreadable, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_rejected_entry_never_fails_the_list() {
+        let no_liquidity = PlacementOutcome::Executed {
+            order_id: 4,
+            requested_quantity: 5,
+            filled_quantity: 0,
+            unfilled: Some(crate::UnfilledReason::Known(
+                proof_trading_sdk::types::UnfilledReason::NoLiquidity,
+            )),
+        };
+        let margin = PlacementOutcome::Rejected(EngineError::new(12, None));
+        // Nothing filled is still an executed order, not an error.
+        let list = read(vec![placed(&[no_liquidity, margin.clone()])]).unwrap();
+        assert!(list.is_success());
+        assert_eq!(list.placements()[1].outcome, margin);
+
+        let not_found = refused_cancel(EngineError::new(2, None));
+        let cancel = cancelled(CancelReason::UserRequested, vec![not_found]);
+        let cancel = read(vec![cancel]).unwrap();
+        assert!(cancel.is_success());
+        assert_eq!(cancel.cancellations(), [not_found]);
+    }
+
+    #[test]
+    fn a_close_is_a_reduce_only_market_entry_on_the_other_side() {
+        for (held, side) in [(Side::Buy, Side::Sell), (Side::Sell, Side::Buy)] {
+            let e = close_entry(2, held, 7);
+            assert_eq!(
+                (e.market, e.side, e.quantity, e.reduce_only),
+                (2, side, 7, true)
+            );
+            assert_eq!(
+                e.kind,
+                proof_trading_sdk::types::OrderKind::Market { worst_price: None }
+            );
+        }
+    }
+
+    #[test]
+    fn basket_legs_read_from_orders_placed() {
+        let legs = committed(vec![placed(&[executed(3), executed(4)])]);
+        let receipt = legs.receipt().unwrap();
+        assert!(receipt.is_success());
+        assert_eq!(
+            receipt
+                .placements()
+                .iter()
+                .map(|p| p.outcome.clone())
+                .collect::<Vec<_>>(),
+            [executed(3), executed(4)]
+        );
+
+        // A failed basket fails the transaction and reports each leg with it.
+        let slipped = EngineError::new(50, None);
+        let mut failed = committed(vec![placed(&[
+            PlacementOutcome::Rejected(slipped),
+            PlacementOutcome::Rejected(slipped),
+        ])]);
+        if let TxStatus::Committed(r) = &mut failed.status {
+            r.error = Some(slipped);
+        }
+        assert_eq!(failed.error(), Some(slipped));
+        assert_eq!(failed.receipt().unwrap().placements().len(), 2);
+    }
+
+    #[test]
+    fn submitted_gives_each_outcome_only_with_an_executed_verdict() {
+        let margin = EngineError::new(12, None);
+        let one = committed(vec![placed(&[PlacementOutcome::Rejected(margin)])]);
+        assert_eq!(
+            one.placements().map(|p| p[0].outcome.clone()),
+            Some(PlacementOutcome::Rejected(margin))
+        );
+        assert_eq!(one.cancellations(), Some(&[][..]));
+
+        let mut refused = committed(Vec::new());
+        if let TxStatus::Committed(r) = &mut refused.status {
+            r.error = Some(EngineError::new(21, None));
+        }
+        assert!(refused.placements().is_none(), "refused as a whole");
+        let pending = Submitted {
+            status: TxStatus::Pending,
+            ..committed(Vec::new())
+        };
+        assert!(pending.placements().is_none(), "no verdict yet");
+    }
+
+    #[test]
+    fn an_order_event_that_does_not_parse_is_never_success() {
+        let malformed = Event::Malformed(proof_trading_sdk::gateway::TxEvent {
+            kind: "orders_placed".into(),
+            attributes: Vec::new(),
+        });
+        let err = read(vec![malformed]).unwrap_err();
+        let shown = err.to_string();
+        assert!(shown.contains("executed at height 9") && shown.contains("do not sign it again"));
+        let receipt = unreadable_receipt(Err(err));
+        assert_eq!((receipt.height, receipt.error), (9, None));
     }
 
     #[test]

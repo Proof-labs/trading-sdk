@@ -6,8 +6,9 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use proof_sdk_rs::{
-    Action, Address, ClientConfig, EngineError, Error, ErrorKind, Event, ExchangeClient,
-    LocalSigner, RefusalReason, Side, TxHash, TxStatus,
+    actions, Action, Address, ClientConfig, EngineError, Error, ErrorKind, Event, ExchangeClient,
+    LocalSigner, OrderCancellation, OrderPlacement, PlacementOutcome, RefusalReason, Side, TxHash,
+    TxStatus,
 };
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -75,19 +76,15 @@ fn cancel_all(c: &ExchangeClient) -> Action {
 async fn place_order_posts_the_signed_bytes_and_reads_the_committed_events() {
     let c = client("http://127.0.0.1:1");
     let order = c.limit_order(1, Side::Buy, 66_000_000_000, 2);
-    let tx = c.sign(&Action::PlaceOrder(order)).unwrap();
+    let tx = c.sign(&actions::place_order(order)).unwrap();
     let owner = c.address().to_string();
     let (url, log) = fixture(vec![(
         200,
-        // As devnet answers a resting order.
+        // As the engine answers a resting order.
         json!({"status":"ok","txHash":tx.hash.to_string(),"code":0,"height":42,"log":"",
-               "events":[{"type":"order_placed","attributes":[
-                   {"index":false,"key":"order_id","value":"33514"},{"key":"market","value":"1"},
-                   {"key":"owner","value":owner},
-                   {"key":"side","value":"buy"},{"key":"price","value":"66000000000"},
-                   {"key":"quantity","value":"2"},{"key":"client_order_id","value":"0"},
-                   {"key":"post_only","value":"false"},{"key":"reduce_only","value":"false"},
-                   {"key":"time_in_force","value":"gtc"}]},
+               "events":[{"type":"orders_placed","attributes":[
+                   {"index":false,"key":"owner","value":owner},
+                   {"key":"orders","value":r#"[{"outcome":"resting","market":"1","client_order_id":"","order_id":"33514","side":"buy","price":"66000000000","quantity":"2","time_in_force":"gtc","post_only":"false","reduce_only":"false"}]"#}]},
                    {"type":"fees_collected","attributes":null}]}),
     )])
     .await;
@@ -96,13 +93,24 @@ async fn place_order_posts_the_signed_bytes_and_reads_the_committed_events() {
     assert!(submitted.is_success());
     assert_eq!(submitted.error(), None);
     let receipt = submitted.receipt().unwrap();
-    let Event::OrderPlaced(o) = &receipt.events[0] else {
+    let Event::OrdersPlaced(p) = &receipt.events[0] else {
         panic!("{:?}", receipt.events)
     };
-    assert_eq!(
-        (o.owner, o.order_id, o.price, o.client_order_id),
-        (c.address(), 33514, 66_000_000_000, None)
-    );
+    assert_eq!(p.owner, c.address());
+    assert_eq!(receipt.placements(), p.orders.as_slice());
+    let [OrderPlacement {
+        client_order_id: None,
+        outcome:
+            PlacementOutcome::Resting {
+                order_id: 33514,
+                price: 66_000_000_000,
+                ..
+            },
+        ..
+    }] = receipt.placements()
+    else {
+        panic!("{:?}", receipt.placements())
+    };
     assert!(matches!(&receipt.events[1], Event::Other(raw) if raw.kind == "fees_collected"));
 
     let (target, body) = log.lock().unwrap()[0].clone();
@@ -198,11 +206,10 @@ async fn a_pending_submission_reconciles_through_its_receipt() {
         (
             200,
             json!({"result":{"hash":hash.to_string(),"height":"7","tx_result":{"code":0,"log":"",
-                "events":[{"type":"order_cancelled","attributes":[{"key":"order_id","value":"5"},
-                    {"key":"market","value":"1"},{"key":"owner","value":c.address().to_string()},
-                    {"key":"reason","value":"user_requested"},{"key":"client_order_id","value":""},
-                    {"key":"original_quantity","value":"2"},{"key":"remaining_quantity","value":"2"},
-                    {"key":"filled_quantity","value":"0"}]}]}}}),
+                "events":[{"type":"orders_cancelled","attributes":[
+                    {"key":"owner","value":c.address().to_string()},
+                    {"key":"reason","value":"user_requested"},
+                    {"key":"orders","value":r#"[{"outcome":"cancelled","order_id":"5","market":"1","client_order_id":"","original_quantity":"2","remaining_quantity":"2","filled_quantity":"0"}]"#}]}]}}}),
         ),
     ])
     .await;
@@ -215,9 +222,70 @@ async fn a_pending_submission_reconciles_through_its_receipt() {
         .unwrap();
     assert!(receipt.is_success());
     assert_eq!(receipt.height, 7);
-    assert!(matches!(&receipt.events[0], Event::OrderCancelled(c) if c.order_id == 5));
+    assert!(matches!(
+        receipt.cancellations(),
+        [OrderCancellation::Cancelled { order_id: 5, .. }]
+    ));
     let targets: Vec<String> = log.lock().unwrap().iter().map(|r| r.0.clone()).collect();
     assert_eq!(targets[1], format!("GET /v1/tx/{hash}"));
+}
+
+/// A single order is a list of one: reconciled by hash later, its refused
+/// entry is reported in its placement and the transaction stays a success.
+#[tokio::test]
+async fn a_pending_single_reconciles_to_its_refused_entry() {
+    let c = client("http://127.0.0.1:1");
+    let order = c.limit_order(1, Side::Buy, 66_000_000_000, 2);
+    let tx = c.sign(&actions::place_order(order)).unwrap();
+    let hash = tx.hash;
+    let (url, _) = fixture(vec![
+        (200, json!({"status":"pending","txHash":hash.to_string()})),
+        (
+            200,
+            json!({"result":{"hash":hash.to_string(),"height":"7","tx_result":{"code":0,"log":"",
+                "events":[{"type":"orders_placed","attributes":[
+                    {"key":"owner","value":c.address().to_string()},
+                    {"key":"orders","value":r#"[{"outcome":"rejected","market":"1","client_order_id":"","code":"12"}]"#}]}]}}}),
+        ),
+    ])
+    .await;
+    let c2 = client(&url);
+    assert!(c2.send(&tx).await.unwrap().is_pending());
+    let receipt = c2
+        .wait_for_receipt(hash, Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert!(receipt.is_success(), "a refused entry never fails the list");
+    assert_eq!(
+        receipt.placements()[0].outcome,
+        PlacementOutcome::Rejected(EngineError::Known(ErrorKind::InsufficientMargin))
+    );
+}
+
+/// An executed transaction whose order list does not parse is neither
+/// success nor a plain error: it names the executed transaction to reconcile.
+#[tokio::test]
+async fn an_executed_order_list_that_does_not_parse_is_unreadable() {
+    let c = client("http://127.0.0.1:1");
+    let tx = c.sign(&actions::cancel_order(c.address(), 5)).unwrap();
+    let (url, _) = fixture(vec![(
+        200,
+        json!({"status":"ok","txHash":tx.hash.to_string(),"code":0,"height":42,"log":"",
+               "events":[{"type":"orders_cancelled","attributes":[
+                   {"key":"owner","value":c.address().to_string()},
+                   {"key":"reason","value":"user_requested"},
+                   {"key":"orders","value":"{}"}]}]}),
+    )])
+    .await;
+    match client(&url).send(&tx).await {
+        Err(Error::OrderResultUnreadable { receipt, .. }) => {
+            assert_eq!(
+                (receipt.hash, receipt.height, receipt.error),
+                (tx.hash, 42, None)
+            );
+        }
+        other => panic!("expected OrderResultUnreadable, got {other:?}"),
+    }
 }
 
 /// A submit with no verdict hands back the exact transaction, through the

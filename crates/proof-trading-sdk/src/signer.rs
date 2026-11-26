@@ -152,12 +152,14 @@ mod tests {
     fn sign_action_matches_the_in_memory_codec() {
         let seed = [0x42u8; 32];
         let chain_id = crypto::chain_id_from_string("exchange-devnet-1");
-        let action = crate::types::Action::PlaceOrder(crate::types::PlaceOrder {
-            market: 1,
-            price: 5,
-            quantity: 1,
-            ..Default::default()
-        });
+        let action = crate::types::Action::PlaceOrders(crate::types::PlaceOrders::one(
+            crate::types::PlaceOrder {
+                market: 1,
+                price: 5,
+                quantity: 1,
+                ..Default::default()
+            },
+        ));
         let via_signer =
             sign_action(&LocalSigner::from_bytes(&seed), &chain_id, &action, 9).unwrap();
         let via_codec = crate::codec::sign_and_encode_with_chain(

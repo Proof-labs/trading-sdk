@@ -80,12 +80,12 @@ class TestNoSecretLeak:
 class TestSignAndEncode:
     def test_envelope_verifies(self):
         handle = _load_handle(_SEED)
-        payload = pts.encode_action(
+        action_type, payload = pts.encode_action(
             pts.actions.MarketOrder(
                 market=1, owner=handle.owner, side=pts.Side.Buy, quantity=5
             )
-        )[1]
-        env = handle.sign_and_encode(_CID, 0x04, payload, 42)
+        )
+        env = handle.sign_and_encode(_CID, action_type, payload, 42)
 
         decoded = pts.decode_tx(env)
         assert decoded["pubkey"] == handle.public_key
@@ -94,7 +94,7 @@ class TestSignAndEncode:
             _CID,
             handle.public_key,
             decoded["signature"],
-            0x04,
+            action_type,
             42,
             payload,
         )

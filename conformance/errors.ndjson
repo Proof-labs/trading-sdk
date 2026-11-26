@@ -77,9 +77,6 @@
 {"case":"manifest/87","code":87,"log":null,"expect":{"name":"SubAccountTransferInsufficientBalance"}}
 {"case":"manifest/88","code":88,"log":null,"expect":{"name":"SubAccountIdZero"}}
 {"case":"manifest/89","code":89,"log":null,"expect":{"name":"SubAccountTransferZeroAmount"}}
-{"case":"manifest/91","code":91,"log":null,"expect":{"name":"WithdrawalPayoutLeaseActive"}}
-{"case":"manifest/128","code":128,"log":null,"expect":{"name":"WithdrawalPayoutLeaseNotHeld"}}
-{"case":"manifest/129","code":129,"log":null,"expect":{"name":"WithdrawalPayoutRecordLimitReached"}}
 {"case":"manifest/92","code":92,"log":null,"expect":{"name":"EventAlreadyExists"}}
 {"case":"manifest/93","code":93,"log":null,"expect":{"name":"EventNotFound"}}
 {"case":"manifest/94","code":94,"log":null,"expect":{"name":"UnderlyingAlreadyAttached"}}
@@ -119,7 +116,20 @@
 {"case":"manifest/140","code":140,"log":null,"expect":{"name":"AccountPositionCapReached"}}
 {"case":"manifest/141","code":141,"log":null,"expect":{"name":"SubAccountCapReached"}}
 {"case":"manifest/142","code":142,"log":null,"expect":{"name":"WorkCapReached"}}
+{"case":"manifest/143","code":143,"log":null,"expect":{"name":"UserImAboveNotional"}}
+{"case":"manifest/144","code":144,"log":null,"expect":{"name":"BridgePaused"}}
+{"case":"manifest/145","code":145,"log":null,"expect":{"name":"WithdrawalPayoutCleared"}}
+{"case":"manifest/146","code":146,"log":null,"expect":{"name":"BridgeVoteInvalid"}}
+{"case":"manifest/147","code":147,"log":null,"expect":{"name":"BridgeUnauthorizedOperator"}}
+{"case":"manifest/148","code":148,"log":null,"expect":{"name":"BridgePayoutReportInvalid"}}
+{"case":"manifest/149","code":149,"log":null,"expect":{"name":"WithdrawalQuarantined"}}
+{"case":"manifest/150","code":150,"log":null,"expect":{"name":"WithdrawalPayoutSlotOccupied"}}
+{"case":"manifest/151","code":151,"log":null,"expect":{"name":"DepositReceiptLimitExceeded"}}
+{"case":"manifest/153","code":153,"log":null,"expect":{"name":"OwnerPendingWithdrawalsFull"}}
+{"case":"manifest/154","code":154,"log":null,"expect":{"name":"PayoutRecordedForAnotherWithdrawal"}}
 {"case":"manifest/155","code":155,"log":null,"expect":{"name":"MarketSettingsChanged"}}
+{"case":"manifest/156","code":156,"log":null,"expect":{"name":"PostOnlyNotResting"}}
+{"case":"manifest/157","code":157,"log":null,"expect":{"name":"AuthorityDomainRetired"}}
 {"case":"manifest/255","code":255,"log":null,"expect":{"name":"InternalError"}}
 {"case":"code50/oi_log","code":50,"log":"open interest limit exceeded on market 7: would be 4, cap 3","expect":{"name":"OpenInterestLimitExceeded"}}
 {"case":"code50/slippage_log","code":50,"log":"atomic basket aggregate slippage 51 bps exceeds budget 50 bps","expect":{"name":"SlippageExceeded"}}

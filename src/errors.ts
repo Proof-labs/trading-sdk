@@ -148,9 +148,7 @@ export enum ExecErrorCode {
   SubAccountTransferZeroAmount = 89,
   // 90 was SubAccountsInactive, retired with the engine's sub-account switch
   // (sub-accounts are always on); never reassigned.
-  WithdrawalPayoutLeaseActive = 91,
-  WithdrawalPayoutLeaseNotHeld = 128,
-  WithdrawalPayoutRecordLimitReached = 129,
+  // 91 and 128 (the retired payout lease) and 129 are unassigned on the wire.
   EventAlreadyExists = 92,
   EventNotFound = 93,
   UnderlyingAlreadyAttached = 94,
@@ -201,9 +199,34 @@ export enum ExecErrorCode {
   AccountPositionCapReached = 140,
   SubAccountCapReached = 141,
   WorkCapReached = 142,
-  // 143 (UserImAboveNotional) is not named yet; 144-154 are reserved on
-  // the wire for the bridge vote errors.
+  UserImAboveNotional = 143,
+  /** The bridge is paused: payout records and bridge votes are refused
+   *  until the admin multisig's UnpauseBridge clears the pause. */
+  BridgePaused = 144,
+  /** The payout record names a Squads payout that a threshold of dead votes
+   *  already cleared from this withdrawal. */
+  WithdrawalPayoutCleared = 145,
+  /** A bridge vote failed verification: the signature did not verify against
+   *  the named registry roster, or the vote names a non-current epoch. */
+  BridgeVoteInvalid = 146,
+  /** The payout record's signature verifies against no key of the roster it
+   *  names. */
+  BridgeUnauthorizedOperator = 147,
+  /** A payout record failed its binding checks: the vault is not the
+   *  governed payout multisig, the deployment or chain is not this bridge's,
+   *  or the epoch is after the current one or no longer retained. */
+  BridgePayoutReportInvalid = 148,
+  /** The withdrawal held a payout record of the retired lease model at the
+   *  upgrade, so it refuses payout records. */
+  WithdrawalQuarantined = 149,
+  WithdrawalPayoutSlotOccupied = 150,
+  DepositReceiptLimitExceeded = 151,
+  // 152 is unassigned on the wire.
+  OwnerPendingWithdrawalsFull = 153,
+  PayoutRecordedForAnotherWithdrawal = 154,
   MarketSettingsChanged = 155,
+  PostOnlyNotResting = 156,
+  AuthorityDomainRetired = 157,
   InternalError = 255,
 }
 
@@ -529,21 +552,6 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "SubAccountTransferZeroAmount",
     description: "sub-account transfer amount must be greater than zero",
   },
-  91: {
-    name: "WithdrawalPayoutLeaseActive",
-    description:
-      "a live payout lease on this withdrawal is held by a different watcher",
-  },
-  128: {
-    name: "WithdrawalPayoutLeaseNotHeld",
-    description:
-      "the withdrawal's payout lease is not held by the submitter, so the payout-signature report is rejected",
-  },
-  129: {
-    name: "WithdrawalPayoutRecordLimitReached",
-    description:
-      "the withdrawal's payout-signature record limit is reached; the rejected payout must not be broadcast",
-  },
   92: { name: "EventAlreadyExists", description: "event id already exists" },
   93: { name: "EventNotFound", description: "no event under this id" },
   94: {
@@ -725,10 +733,75 @@ const TABLE: Record<number, ExecErrorInfo> = {
     description:
       "A chain-wide bound on consensus work is full (resting orders, live positions, markets or sub-accounts); the log names which. Retry once capacity frees.",
   },
+  143: {
+    name: "UserImAboveNotional",
+    description:
+      "User-selected initial margin is above 10000 bps (below 1x leverage); pick a ratio between the market's and 10000, or 0 to clear.",
+  },
+  144: {
+    name: "BridgePaused",
+    description:
+      "The bridge is paused by the admin quorum; payout records and bridge votes refuse until UnpauseBridge clears the flag.",
+  },
+  145: {
+    name: "WithdrawalPayoutCleared",
+    description:
+      "The payout record names a Squads payout the dead votes already cleared from this withdrawal; record a new payout proposal instead.",
+  },
+  146: {
+    name: "BridgeVoteInvalid",
+    description:
+      "A bridge vote failed verification: bad signature, or a vote naming a non-current registry epoch.",
+  },
+  147: {
+    name: "BridgeUnauthorizedOperator",
+    description:
+      "The signer is not a bridge operator: no key of the named operator registry signed the payout record.",
+  },
+  148: {
+    name: "BridgePayoutReportInvalid",
+    description:
+      "A payout record failed its binding checks: the vault is unset or not the governed payout multisig, the deployment or chain is not this bridge's, or the epoch is after the current one or no longer retained.",
+  },
+  149: {
+    name: "WithdrawalQuarantined",
+    description:
+      "The withdrawal held a payout record of the retired lease model at the upgrade and is quarantined; it refuses payout records until operators resolve it.",
+  },
+  150: {
+    name: "WithdrawalPayoutSlotOccupied",
+    description:
+      "The withdrawal already has a recorded payout; a new one needs the recorded payout voted dead first.",
+  },
+  151: {
+    name: "DepositReceiptLimitExceeded",
+    description:
+      "The vote-credited deposit would pass the SetDepositReceiptLimit per-deposit maximum or rolling-window cap; the agreed deposit is parked or queued instead, and the queue credits it once the window has room.",
+  },
+  153: {
+    name: "OwnerPendingWithdrawalsFull",
+    description:
+      "The owner already holds the most pending withdrawals one owner may; the request was refused before any debit. Retry once one settles.",
+  },
+  154: {
+    name: "PayoutRecordedForAnotherWithdrawal",
+    description:
+      "The Squads payout (vault, transaction index) already settled another withdrawal Paid; one payout settles one withdrawal, so this payout record or Paid vote is refused.",
+  },
   155: {
     name: "MarketSettingsChanged",
     description:
       "A quorum UpdateMarketFees names a settings sequence its market is not at, as when the settings changed after the proposal was made. Re-read the market's settings_sequence and propose the change again.",
+  },
+  156: {
+    name: "PostOnlyNotResting",
+    description:
+      "A post-only order with IOC or FOK time in force: it may neither take nor rest, so it could never fill.",
+  },
+  157: {
+    name: "AuthorityDomainRetired",
+    description:
+      "UpdateAuthoritySet names a retired authority list (composite feeder or scheduled operations). No action reads either list; nothing was written.",
   },
   255: { name: "InternalError", description: "unexpected runtime failure" },
 };

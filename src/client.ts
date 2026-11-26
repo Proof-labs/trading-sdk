@@ -62,11 +62,24 @@ import {
   type LiquidationHistoryPage,
 } from "./liquidation-history.js";
 import {
+  decodeOrderSummaryPage,
+  orderSummarySearchParams,
+  type OrderSummaryFilters,
+  type OrderSummaryPage,
+} from "./order-summaries.js";
+import {
   accountInfoFromWasm,
   accountViewFromWasm,
   openOrdersFromWasm,
   eventInfoFromWasm,
   marketConfigFromWasm,
+  bridgeStatusFromWasm,
+  bridgePayoutConfigFromWasm,
+  agreedDepositsFromWasm,
+  parkedDepositsFromWasm,
+  bridgeRegistryFromWasm,
+  pendingWithdrawalsFromWasm,
+  pendingDepositsFromWasm,
   toWasmFields,
 } from "./codec-adapter.js";
 import {
@@ -107,7 +120,9 @@ import type {
   Action,
   TxEvent,
   TxResult,
+  CloseOutcome,
   PlaceOrder,
+  OrderEntry,
   MarketOrder,
   AccountInfo,
   AccountView,
@@ -142,9 +157,13 @@ import type {
   NodeVersion,
   UpgradesInfo,
   LiquidationConfigInfo,
-  AuthorizeWithdrawal,
-  ConfirmWithdrawalReceipt,
-  FailWithdrawalReceipt,
+  BridgeStatus,
+  BridgePayoutConfig,
+  OperatorRegistry,
+  ParkedDepositPage,
+  QueuedDepositPage,
+  PendingWithdrawalPage,
+  PendingDepositPage,
 } from "./types.js";
 import {
   decodeAdminSignerRegistryInfo,
@@ -166,6 +185,13 @@ import {
   type ExchangeHttpTransport,
 } from "./http-transport.js";
 import { yesOrder, type NoOrder } from "./binary.js";
+import {
+  cancellationsOf,
+  placementsOf,
+  readOrderLists,
+  type CancelOrdersResult,
+  type PlaceOrdersResult,
+} from "./order-lists.js";
 import {
   depositAccount,
   queryDepositAddressAnswer,
@@ -840,9 +866,10 @@ export class ExchangeClient {
     txBytes: Uint8Array,
     action?: Action,
   ): Promise<TxResult> {
-    return this.useGateway
-      ? this.submitViaGateway(txBytes, action)
-      : this.submitViaCometBFT(txBytes, action);
+    const result = this.useGateway
+      ? await this.submitViaGateway(txBytes, action)
+      : await this.submitViaCometBFT(txBytes, action);
+    return readOrderLists(result);
   }
 
   /**
@@ -1082,7 +1109,8 @@ export class ExchangeClient {
     return (
       r.height !== undefined ||
       r.outcome === "engine" ||
-      r.outcome === "transport"
+      r.outcome === "transport" ||
+      r.outcome === "unreadable"
     );
   }
 
@@ -1241,6 +1269,7 @@ export class ExchangeClient {
    * Never resubmits writes. Use setUnsafeFastSubmit(true) to avoid a second poller.
    * `opts.action` labels the confirmation polls with that action's transport
    * priority, as on `submitSignedTx`; it is never checked against the hash.
+   * An executed result whose order events do not decode is `unreadable`.
    */
   async waitForDelivery(
     sync: TxResult,
@@ -1257,7 +1286,7 @@ export class ExchangeClient {
     opts: { timeoutMs?: number; signal?: AbortSignal },
     action?: Action,
   ): Promise<TxResult> {
-    if (this.isFinalResult(sync)) return sync;
+    if (this.isFinalResult(sync)) return readOrderLists(sync);
     if (!sync.hash) throw new Error("submitTx returned no tx hash");
     const timeoutMs = opts.timeoutMs ?? 9_000;
     if (!Number.isFinite(timeoutMs) || timeoutMs < 0)
@@ -1289,7 +1318,7 @@ export class ExchangeClient {
         );
         if (!res.ok) continue;
         const result = txFromQueryResponse(await res.json(), sync.hash);
-        if (!opts.signal?.aborted && result) return result;
+        if (!opts.signal?.aborted && result) return readOrderLists(result);
       } catch {
         /* Read failures leave the write outcome unknown. */
       } finally {
@@ -1328,32 +1357,43 @@ export class ExchangeClient {
   }
 
   /**
-   * Place a limit order for the loaded signer. `owner` is supplied
-   * automatically. Equivalent to
-   * `submitTx({ type: "PlaceOrder", data: { ...params, owner } })`.
+   * Place a limit order for the loaded signer: a `PlaceOrders` batch of one.
+   * Returns `{ tx, orders }` as {@link ExchangeClient.placeOrders}; the
+   * order's outcome is `orders[0]`. The other single-order methods return
+   * the same way.
    * Optional `stopLoss`/`takeProfit` limbs attach a pre-fill bracket that
    * installs on the order's first fill (validated client-side here and in
    * the codec path; encoded as the proof-wire 2.1.0 trailing fields).
    */
-  async placeOrder(params: Omit<PlaceOrder, "owner">): Promise<TxResult> {
+  async placeOrder(
+    params: Omit<PlaceOrder, "owner">,
+  ): Promise<PlaceOrdersResult> {
     validateOrderTriggers(params);
-    return this.submitTx({
+    const owner = this.requireOwner();
+    const tx = await this.submitTx({
       type: "PlaceOrder",
-      data: { ...params, owner: this.requireOwner() },
+      data: { ...params, owner },
     });
+    return { tx, orders: placementsOf(tx) };
   }
 
   /**
-   * Place a market order (crosses immediately) for the loaded signer.
+   * Place a market order (crosses immediately) for the loaded signer: a
+   * `PlaceOrders` of one market entry. Optional `worstPrice` stops the walk
+   * through the book at that price; `reduceOnly` only reduces the position.
    * Optional `stopLoss`/`takeProfit` limbs are validated like
-   * {@link ExchangeClient.placeOrder}.
+   * {@link ExchangeClient.placeOrder}, and the result reads the same way.
    */
-  async marketOrder(params: Omit<MarketOrder, "owner">): Promise<TxResult> {
+  async marketOrder(
+    params: Omit<MarketOrder, "owner">,
+  ): Promise<PlaceOrdersResult> {
     validateOrderTriggers(params);
-    return this.submitTx({
+    const owner = this.requireOwner();
+    const tx = await this.submitTx({
       type: "MarketOrder",
-      data: { ...params, owner: this.requireOwner() },
+      data: { ...params, owner },
     });
+    return { tx, orders: placementsOf(tx) };
   }
 
   /**
@@ -1364,7 +1404,7 @@ export class ExchangeClient {
    * Throws {@link BinaryPriceError} for a No price with no Yes mirror (0 or
    * `$1`).
    */
-  async buyNo(params: Omit<NoOrder, "side">): Promise<TxResult> {
+  async buyNo(params: Omit<NoOrder, "side">): Promise<PlaceOrdersResult> {
     return this.placeOrder(yesOrder({ ...params, side: Side.Buy }));
   }
 
@@ -1373,59 +1413,73 @@ export class ExchangeClient {
    * Selling No that an account holds is a reduce-only Yes buy: pass
    * `reduceOnly: true` to close without flipping. See {@link ExchangeClient.buyNo}.
    */
-  async sellNo(params: Omit<NoOrder, "side">): Promise<TxResult> {
+  async sellNo(params: Omit<NoOrder, "side">): Promise<PlaceOrdersResult> {
     return this.placeOrder(yesOrder({ ...params, side: Side.Sell }));
   }
 
-  /** Cancel a resting order by its engine-assigned order ID. */
-  async cancelOrder(orderId: bigint): Promise<TxResult> {
-    return this.submitTx({
+  /** Cancel a resting order by its engine-assigned order ID: a batch of one,
+   *  read as {@link ExchangeClient.cancelOrders} (`refused` code 2 when no
+   *  such order rests). */
+  async cancelOrder(orderId: bigint): Promise<CancelOrdersResult> {
+    const owner = this.requireOwner();
+    const tx = await this.submitTx({
       type: "CancelOrder",
-      data: { orderId, owner: this.requireOwner() },
+      data: { orderId, owner },
     });
+    return { tx, orders: cancellationsOf(tx) };
   }
 
-  /** Cancel a resting order by the owner-scoped client order ID. */
-  async cancelClientOrder(clientOrderId: bigint): Promise<TxResult> {
-    return this.submitTx({
+  /** Cancel a resting order by the owner-scoped client order ID; read as
+   *  {@link ExchangeClient.cancelOrder}. */
+  async cancelClientOrder(clientOrderId: bigint): Promise<CancelOrdersResult> {
+    const owner = this.requireOwner();
+    const tx = await this.submitTx({
       type: "CancelClientOrder",
-      data: { clientOrderId, owner: this.requireOwner() },
+      data: { clientOrderId, owner },
     });
+    return { tx, orders: cancellationsOf(tx) };
   }
 
   /**
-   * Submit the operator-quorum authorization for a pending withdrawal
-   * (action 0x24). Permissionless: the quorum proof inside is the authority,
-   * not the envelope signer. The canonical authorization bytes come from
-   * `encodeWithdrawalAuthorization` and the proof from operators signing
-   * those bytes — see the `bridge` module.
+   * Place 1 to `MAX_ORDERS_PER_BATCH` limit or market orders (`kind: "market"`)
+   * for the loaded signer in one batch under one signature (`PlaceOrders`).
+   * Each order stands or is rejected on its own: `tx` succeeds and `orders`
+   * gives each order's outcome in the order sent. `orders` is `null` while
+   * `tx` has no executed verdict; read them later with
+   * `placementsOf(await waitForDelivery(tx))`. An executed `tx` whose
+   * results do not read is `unreadable`: reconcile by hash, never resubmit.
    */
-  async authorizeWithdrawal(params: AuthorizeWithdrawal): Promise<TxResult> {
-    return this.submitTx({ type: "AuthorizeWithdrawal", data: params });
+  async placeOrders(orders: OrderEntry[]): Promise<PlaceOrdersResult> {
+    const owner = this.requireOwner();
+    const tx = await this.submitTx({
+      type: "PlaceOrders",
+      data: { owner, orders },
+    });
+    return { tx, orders: placementsOf(tx) };
   }
 
-  /**
-   * Settle a paid withdrawal through its finalized operator-quorum receipt
-   * (action 0x22). Permissionless: the quorum proof inside is the authority,
-   * not the envelope signer. The canonical message the proof signs comes
-   * from `encodeBridgeReceipt`.
-   */
-  async confirmWithdrawalReceipt(
-    params: ConfirmWithdrawalReceipt,
-  ): Promise<TxResult> {
-    return this.submitTx({ type: "ConfirmWithdrawalReceipt", data: params });
+  /** Cancel 1 to `MAX_ORDERS_PER_BATCH` resting orders by order ID
+   *  (`CancelOrders`); `orders` gives each cancel's outcome in order. */
+  async cancelOrders(orderIds: bigint[]): Promise<CancelOrdersResult> {
+    const owner = this.requireOwner();
+    const tx = await this.submitTx({
+      type: "CancelOrders",
+      data: { owner, orderIds },
+    });
+    return { tx, orders: cancellationsOf(tx) };
   }
 
-  /**
-   * Refund a cancelled withdrawal through its finalized operator-quorum
-   * receipt (action 0x23). Permissionless: the quorum proof inside is the
-   * authority, not the envelope signer. Positive cancellation proof only —
-   * a timeout or RPC error is never failure evidence.
-   */
-  async failWithdrawalReceipt(
-    params: FailWithdrawalReceipt,
-  ): Promise<TxResult> {
-    return this.submitTx({ type: "FailWithdrawalReceipt", data: params });
+  /** Cancel 1 to `MAX_ORDERS_PER_BATCH` resting orders by client order ID
+   *  (`CancelClientOrders`); `orders` gives each cancel's outcome in order. */
+  async cancelClientOrders(
+    clientOrderIds: bigint[],
+  ): Promise<CancelOrdersResult> {
+    const owner = this.requireOwner();
+    const tx = await this.submitTx({
+      type: "CancelClientOrders",
+      data: { owner, clientOrderIds },
+    });
+    return { tx, orders: cancellationsOf(tx) };
   }
 
   /**
@@ -1440,15 +1494,34 @@ export class ExchangeClient {
   }
 
   /**
-   * Close the loaded signer's entire position on `market` via an
-   * opposite-side IOC order at oracle±spread. Idempotent on an already-flat
-   * position.
+   * Close the loaded signer's entire position on `market`: a reduce-only
+   * market order on the opposite side for the position's size, read first
+   * with {@link ExchangeClient.queryAccount}. A flat account sends nothing
+   * and returns `nothingToClose`. Otherwise it returns `sent` with the
+   * transaction and the close order's outcome: `rejected` with code 35 when
+   * the position went flat before the close ran, 12 when the account cannot
+   * afford it; `order` is `null` without an executed verdict. The size and
+   * `nothingToClose` come from the account read, which can trail a fill made just before; the close never sends more
+   * than the position read.
    */
-  async closePosition(market: number): Promise<TxResult> {
-    return this.submitTx({
-      type: "ClosePosition",
-      data: { market, owner: this.requireOwner() },
+  async closePosition(market: number): Promise<CloseOutcome> {
+    const owner = this.requireOwner();
+    const account = await this.queryAccount();
+    const position = account?.positions.find(
+      (p) => p.market === market && p.size > 0n,
+    );
+    if (!position) return { kind: "nothingToClose" };
+    const tx = await this.submitTx({
+      type: "MarketOrder",
+      data: {
+        market,
+        owner,
+        side: position.side === "Buy" ? Side.Sell : Side.Buy,
+        quantity: position.size,
+        reduceOnly: true,
+      },
     });
+    return { kind: "sent", tx, order: placementsOf(tx)?.[0] ?? null };
   }
 
   /** Atomically replace a complete SL/TP bracket. When `owner` is omitted,
@@ -1797,6 +1870,27 @@ export class ExchangeClient {
     return decodeLiquidationHistoryPage(json, owner);
   }
 
+  /** One page of an owner's fills grouped into one row per order
+   * (`GET /v1/history/order-summaries/{owner}`), newest last fill first,
+   * optionally restricted to `filters.markets`. Only fills inside
+   * `fromMs`/`toMs` count. Pass a non-empty `nextCursor` back as
+   * `filters.cursor` with the other filters unchanged; an empty one ends the
+   * read. Always uses the gateway: the indexer, not the node, serves history. */
+  async queryOrderSummaries(
+    addressHex?: string,
+    filters: OrderSummaryFilters = {},
+  ): Promise<OrderSummaryPage> {
+    const hex = addressHex ?? this.addressHex;
+    if (!hex) throw new Error("No address available");
+    const owner = historyOwner(hex);
+    const qs = orderSummarySearchParams(filters).toString();
+    const json = await this.apiJson(
+      `${this.gatewayUrl}/v1/history/order-summaries/${owner}${qs ? `?${qs}` : ""}`,
+      "account",
+    );
+    return decodeOrderSummaryPage(json);
+  }
+
   /** Shared market-level deferred/resumed trigger transitions. These are not
    * duplicated into every owner's history and always route through gateway. */
   async queryTriggerMarketHistory(
@@ -1983,6 +2077,125 @@ export class ExchangeClient {
       status: raw[4] as WithdrawalStatus,
       requestHeight: BigInt(raw[5] as number | bigint),
     };
+  }
+
+  // -------------------------------------------------------------------------
+  // Bridge custody reads (`/v2/bridge/*`). Responses decode in the WASM core
+  // (`query_v2` views); these methods only page the route and rename
+  // fields. Bridge operators submit their signed messages with `submitTx`
+  // (`VoteWithdrawalPaid`, `RecordWithdrawalPayout`, `VoteDeposit`,
+  // `VotePauseBridge`, `VoteWithdrawalPayoutDead`), built by the `sign*`
+  // helpers in `bridge.ts`.
+  // -------------------------------------------------------------------------
+
+  /** GET one `/v2/bridge/*` read and decode it in the core as `kind`.
+   *  `params` become the query string (a cursor and a page limit). */
+  private async readBridge(
+    path: string,
+    kind: keyof WasmCore["ReadKind"],
+    params?: { cursor?: bigint | string; limit?: number },
+  ): Promise<unknown> {
+    const query = new URLSearchParams();
+    if (params?.cursor != null) query.set("cursor", String(params.cursor));
+    if (params?.limit != null) query.set("limit", String(params.limit));
+    const qs = query.toString();
+    const route = `${path}${qs ? `?${qs}` : ""}`;
+    const json = await this.apiJson(`${this.readBaseUrl}${route}`);
+    return this.decodeRead(kind, fromBase64(requireEncodedData(json, route)));
+  }
+
+  /** The bridge's state: `Active`, `Paused`, or `WithdrawalBacklog` (active,
+   *  with the pending withdrawal count at or above the alert level). */
+  async queryBridgeStatus(): Promise<BridgeStatus> {
+    return bridgeStatusFromWasm(
+      await this.readBridge("/v2/bridge/status", "BridgeStatus"),
+    );
+  }
+
+  /** The governed Squads payout vault and its rent wallet, or `null` while
+   *  the admin quorum has not set them. Every payout record must name this
+   *  vault. */
+  async queryBridgePayoutConfig(): Promise<BridgePayoutConfig | null> {
+    return bridgePayoutConfigFromWasm(
+      await this.readBridge("/v2/bridge/payout-config", "BridgePayoutConfig"),
+    );
+  }
+
+  /** The operator receipt registry: the roster every vote and payout record
+   *  verifies against. Omit `epoch` for the current one. */
+  async queryBridgeRegistry(epoch?: bigint): Promise<OperatorRegistry> {
+    const path =
+      epoch === undefined
+        ? "/v2/bridge/registry"
+        : `/v2/bridge/registry/${epoch}`;
+    return bridgeRegistryFromWasm(
+      await this.readBridge(path, "BridgeRegistry"),
+    );
+  }
+
+  /** One page of pending withdrawals with their recorded payouts and votes
+   *  so far. `cursor` is the previous page's `nextCursor` (the last scanned
+   *  withdrawal id); `limit` is forwarded, and the node refuses one above
+   *  its page cap. */
+  async queryPendingWithdrawals(opts?: {
+    cursor?: bigint;
+    limit?: number;
+  }): Promise<PendingWithdrawalPage> {
+    return pendingWithdrawalsFromWasm(
+      await this.readBridge(
+        "/v2/bridge/pending-withdrawals",
+        "PendingWithdrawals",
+        opts,
+      ),
+    );
+  }
+
+  /** One page of pending deposits with their votes. `cursor` is the
+   *  previous page's `nextCursor`, already in the route's form (the hex of
+   *  the last scanned transfer identity); pass it back verbatim. */
+  async queryPendingDeposits(opts?: {
+    cursor?: string;
+    limit?: number;
+  }): Promise<PendingDepositPage> {
+    return pendingDepositsFromWasm(
+      await this.readBridge(
+        "/v2/bridge/pending-deposits",
+        "PendingDeposits",
+        opts,
+      ),
+    );
+  }
+
+  /** One page of the agreed-deposit credit queue, oldest first: deposits
+   *  the operator threshold agreed on whose credit waits for a deposit cap's
+   *  window or an unpause. `cursor` is the previous page's `nextCursor`. */
+  async queryAgreedDeposits(opts?: {
+    cursor?: bigint;
+    limit?: number;
+  }): Promise<QueuedDepositPage> {
+    return agreedDepositsFromWasm(
+      await this.readBridge(
+        "/v2/bridge/agreed-deposits",
+        "AgreedDeposits",
+        opts,
+      ),
+    );
+  }
+
+  /** One page of parked deposits: agreed deposits over the per-deposit
+   *  maximum or the window cap, which no window can admit. `cursor` is the
+   *  previous page's `nextCursor`; pass it back verbatim. */
+  async queryParkedDeposits(opts?: {
+    cursor?: string;
+    limit?: number;
+  }): Promise<ParkedDepositPage> {
+    return parkedDepositsFromWasm(
+      await this.readBridge(
+        "/v2/bridge/parked-deposits",
+        "ParkedDeposits",
+        opts,
+      ),
+    );
   }
 
   /** Raw finalized ledger facts, independent of oracle valuation. Not authorization. */

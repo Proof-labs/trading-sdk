@@ -63,13 +63,63 @@ fn event_fields(oracle_source: serde_json::Value) -> serde_json::Value {
 }
 
 /// The shared `AttachConditional` fixture: the perp on market 15 attached to
-/// event 700 with its conditional books from 9100.
+/// event 700 with its conditional books from 9100, and DEC-293's impact
+/// notional — the field wire 12 appended, pinned at a non-default value.
 fn attach_fields() -> serde_json::Value {
     json!({
         "event_id": 700, "underlying_market": 15, "child_market_base": 9100,
         "im_bps": 3334, "mm_bps": 1667, "taker_fee_bps": 5, "maker_fee_bps": 2,
-        "signer": vec![0u8; 20], "max_open_interest": 0u64
+        "signer": vec![0u8; 20], "max_open_interest": 0u64,
+        "impact_notional": 1_000_000_000u64
     })
+}
+
+/// A `PlaceOrders` limit entry with no client id, not reduce-only, no limbs.
+fn limit_entry(
+    market: u32,
+    side: &str,
+    price: u64,
+    quantity: u64,
+    time_in_force: &str,
+    post_only: bool,
+) -> serde_json::Value {
+    json!({
+        "market": market, "side": side, "quantity": quantity,
+        "kind": { "Limit": { "price": price, "time_in_force": time_in_force, "post_only": post_only } },
+        "reduce_only": false, "client_order_id": null, "stop_loss": null, "take_profit": null
+    })
+}
+
+/// A `PlaceOrders` market entry with no client id, not reduce-only, no limbs.
+fn market_entry(
+    market: u32,
+    side: &str,
+    quantity: u64,
+    worst_price: Option<u64>,
+) -> serde_json::Value {
+    json!({
+        "market": market, "side": side, "quantity": quantity,
+        "kind": { "Market": { "worst_price": worst_price } },
+        "reduce_only": false, "client_order_id": null, "stop_loss": null, "take_profit": null
+    })
+}
+
+/// `entry` with `key` set to `value`.
+fn with(mut entry: serde_json::Value, key: &str, value: serde_json::Value) -> serde_json::Value {
+    if let Some(fields) = entry.as_object_mut() {
+        fields.insert(key.to_owned(), value);
+    }
+    entry
+}
+
+/// The engine's golden stop-loss limb.
+fn stop_loss() -> serde_json::Value {
+    json!({ "trigger_price": 95_000u64, "max_slippage_bps": 75u32, "client_trigger_id": 11u64 })
+}
+
+/// The engine's golden take-profit limb.
+fn take_profit() -> serde_json::Value {
+    json!({ "trigger_price": 110_000u64, "max_slippage_bps": 50u32, "client_trigger_id": 12u64 })
 }
 
 fn codec_case(case: &str, action_type: u8, input: serde_json::Value) -> cv::CodecCase {
@@ -83,45 +133,6 @@ fn codec_case(case: &str, action_type: u8, input: serde_json::Value) -> cv::Code
             payload_hex: hex::encode(payload),
         },
     }
-}
-
-/// The engine golden `BridgeWithdrawalReceipt` fixture (mirrors exchange-core
-/// `codec::tests::golden_receipt`). `terminal_state` is `1 = Paid` for a
-/// confirm, `2 = Cancelled` for a fail; every other field is fixed.
-fn receipt_json(terminal_state: u8) -> serde_json::Value {
-    json!({
-        "deployment_id": vec![0x11u8; 32],
-        "authorization_digest": vec![0x22u8; 32],
-        "withdrawal_id": 777u64,
-        "terminal_state": terminal_state,
-        "vault_tier": 1,
-        "proof_owner": vec![0x05u8; 20],
-        "destination_owner": vec![0x06u8; 32],
-        "destination_token_acct": vec![0x07u8; 32],
-        "amount_micro_usdc": 1_000_000u64,
-        "fee_micro_usdc": 1_000_000u64,
-        "authorization_signer_epoch": 3u64,
-        "solana_tx_signature": vec![0x10u8; 64],
-        "finalized_slot": 900u64,
-        "finalized_blockhash": vec![0x33u8; 32],
-        "receipt_quorum_kind": 1,
-        "receipt_authority_epoch": 3u64,
-    })
-}
-
-/// The engine golden `OperatorReceiptProof` fixture (mirrors exchange-core
-/// `codec::tests::golden_proof`): a 4-of-n bitmap and four 64-byte ed25519
-/// signatures.
-fn operator_proof_json() -> serde_json::Value {
-    json!({
-        "signer_bitmap": vec![0x0Fu8],
-        "signatures": vec![
-            vec![0xABu8; 64],
-            vec![0xCDu8; 64],
-            vec![0xEFu8; 64],
-            vec![0x12u8; 64],
-        ],
-    })
 }
 
 fn error_case(case: &str, code: u32, log: Option<&str>) -> cv::ErrorCase {
@@ -143,10 +154,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Action-type bytes (kept inline; the runners read action_type from the
     // vectors, and Python/TS map names→bytes via the core's get_action_types).
-    const PLACE_ORDER: u8 = 0x01;
-    const CANCEL_ORDER: u8 = 0x02;
-    const MARKET_ORDER: u8 = 0x04;
-    const CLOSE_POSITION: u8 = 0x17;
+    const PLACE_ORDERS: u8 = cv::PLACE_ORDERS;
+    const CANCEL_ORDERS: u8 = proof_trading_sdk::codec::ActionType::CancelOrders as u8;
+    const CANCEL_CLIENT_ORDERS: u8 = proof_trading_sdk::codec::ActionType::CancelClientOrders as u8;
+    // Retired bytes, kept only to sign the frozen envelopes below.
+    const RETIRED_PLACE_ORDER: u8 = 0x01;
+    const RETIRED_MARKET_ORDER: u8 = 0x04;
     const CONFIRM_DEPOSIT: u8 = 0x09;
     const CREATE_MARKET: u8 = 0x07;
     const UPDATE_MARKET_FEES: u8 = 0x10;
@@ -155,11 +168,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     const APPROVE_ADMIN_ACTION: u8 = 0x1F;
     const REJECT_ADMIN_ACTION: u8 = 0x20;
     const EMERGENCY_ADMIN_ACTION: u8 = 0x21;
-    const CONFIRM_WITHDRAWAL_RECEIPT: u8 = 0x22;
-    const FAIL_WITHDRAWAL_RECEIPT: u8 = 0x23;
-    const AUTHORIZE_WITHDRAWAL: u8 = 0x24;
     // Coverage burn-down (issue #69): the 15 previously-unpinned action types.
-    // (CONFIRM_DEPOSIT is already declared above.)
+    // (CONFIRM_DEPOSIT is already declared above.) 0x22, 0x23, 0x24 and 0x2E
+    // are retired bytes and have no vectors.
     const DEPOSIT: u8 = 0x05;
     const WITHDRAW: u8 = 0x06;
     const WITHDRAW_REQUEST: u8 = 0x08;
@@ -170,10 +181,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     const RESOLVE_EVENT: u8 = 0x27;
     const CREATE_SUB_ACCOUNT: u8 = 0x28;
     const SUB_ACCOUNT_TRANSFER: u8 = 0x29;
-    const CLAIM_WITHDRAWAL_PAYOUT: u8 = 0x2e;
     const RECORD_WITHDRAWAL_PAYOUT: u8 = 0x31;
+    const VOTE_WITHDRAWAL_PAID: u8 = 0x30;
+    const VOTE_DEPOSIT: u8 = 0x32;
+    const VOTE_PAUSE_BRIDGE: u8 = 0x33;
+    const VOTE_WITHDRAWAL_PAYOUT_DEAD: u8 = 0x34;
     const SET_USER_MARKET_LEVERAGE: u8 = 0x16;
-    const CANCEL_CLIENT_ORDER: u8 = 0x18;
     const CANCEL_ALL_ORDERS: u8 = 0x19;
     const CANCEL_REPLACE_ORDER: u8 = 0x1a;
     const AMEND_ORDER: u8 = 0x1b;
@@ -185,48 +198,89 @@ fn main() -> Result<(), Box<dyn Error>> {
     let signer = vec![0x03u8; 20];
 
     // ── codec family ─────────────────────────────────────────────────────
-    // Trigger expansion (proof-wire 2.1.0): the engine's frozen vectors from
-    // Proof-labs/exchange `exchange-wire/vectors/`. The .hex files there are
-    // FULL SIGNED ENVELOPES (test key
-    // 0x42×32, UNBOUND_CHAIN_ID); the payload segment of each is pinned here
-    // byte-exactly, and the full envelopes themselves are pinned in the
-    // signing family below (`…@seqN/unbound` cases). `place_order_no_triggers`
-    // freezes the pre-2.1.0 byte string (no trailing nils) — non-canonical by
-    // design now — so its codec row pins the 2.1.0 canonical form (trailing
-    // nils) while the old bytes ride the signing row + the TS decode-compat
-    // round-trip test.
+    // Cases pinned to the engine's frozen `exchange-wire/vectors/` payloads
+    // name them in a comment; the rest are the core's own encodings.
     let codec = vec![
+        // Order lists (0x35, 0x36, 0x37): a single order is a list of one. A
+        // `PlaceOrders` entry carries its kind, limit or market.
         codec_case(
-            "place_order/min",
-            PLACE_ORDER,
-            json!({
-                "market": 1, "owner": owner, "side": "Buy",
-                "price": 100, "quantity": 10, "client_order_id": null,
-                "post_only": false, "reduce_only": false, "time_in_force": "Gtc"
-            }),
+            "place_orders/limit_min",
+            PLACE_ORDERS,
+            json!({ "owner": owner, "orders": [limit_entry(1, "Buy", 100, 10, "Gtc", false)] }),
         ),
         codec_case(
-            "place_order/flags_cloid_ioc",
-            PLACE_ORDER,
-            json!({
-                "market": 7, "owner": owner, "side": "Sell",
-                "price": 6675000u64, "quantity": 3, "client_order_id": 99u64,
-                "post_only": true, "reduce_only": false, "time_in_force": "Ioc"
-            }),
+            "place_orders/limit_flags_cloid_ioc",
+            PLACE_ORDERS,
+            json!({ "owner": owner, "orders": [
+                with(limit_entry(7, "Sell", 6675000u64, 3, "Ioc", true), "client_order_id", json!(99u64))
+            ] }),
         ),
         codec_case(
-            "place_order/max_u64",
-            PLACE_ORDER,
-            json!({
-                "market": 4294967295u32, "owner": vec![0xFFu8; 20], "side": "Sell",
-                "price": u64::MAX, "quantity": u64::MAX, "client_order_id": u64::MAX,
-                "post_only": false, "reduce_only": true, "time_in_force": "Fok"
-            }),
+            "place_orders/limit_max_u64",
+            PLACE_ORDERS,
+            json!({ "owner": vec![0xFFu8; 20], "orders": [with(
+                with(limit_entry(4294967295u32, "Sell", u64::MAX, u64::MAX, "Fok", false),
+                     "reduce_only", json!(true)),
+                "client_order_id", json!(u64::MAX))
+            ] }),
         ),
         codec_case(
-            "cancel_order/basic",
-            CANCEL_ORDER,
-            json!({ "order_id": 42, "owner": vec![0x02u8; 20] }),
+            "place_orders/limit_with_triggers",
+            PLACE_ORDERS,
+            json!({ "owner": owner, "orders": [with(
+                with(limit_entry(1, "Buy", 100, 10, "Gtc", false), "stop_loss", stop_loss()),
+                "take_profit", take_profit())
+            ] }),
+        ),
+        codec_case(
+            "place_orders/market_basic",
+            PLACE_ORDERS,
+            json!({ "owner": owner, "orders": [market_entry(3, "Buy", 250, None)] }),
+        ),
+        codec_case(
+            "place_orders/market_worst_price_with_triggers",
+            PLACE_ORDERS,
+            json!({ "owner": owner, "orders": [
+                with(market_entry(1, "Sell", 10, Some(95_000)), "stop_loss", stop_loss())
+            ] }),
+        ),
+        // A close: a reduce-only market entry on the position's other side.
+        codec_case(
+            "place_orders/close",
+            PLACE_ORDERS,
+            json!({ "owner": owner, "orders": [
+                with(market_entry(2, "Sell", 5, None), "reduce_only", json!(true))
+            ] }),
+        ),
+        // The engine's frozen `place_orders_list.hex` payload, byte for byte.
+        codec_case(
+            "place_orders/engine_list",
+            PLACE_ORDERS,
+            json!({ "owner": vec![0x0Au8; 20], "orders": [
+                with(with(limit_entry(1, "Buy", 99_000_000u64, 10, "Gtc", true),
+                          "client_order_id", json!(1u64)), "stop_loss", stop_loss()),
+                with(market_entry(2, "Sell", 10, Some(101_000_000)), "reduce_only", json!(true)),
+            ] }),
+        ),
+        codec_case(
+            "cancel_orders/one",
+            CANCEL_ORDERS,
+            json!({ "owner": vec![0x02u8; 20], "order_ids": [42] }),
+        ),
+        codec_case(
+            "cancel_orders/two_orders",
+            CANCEL_ORDERS,
+            json!({ "owner": vec![0x02u8; 20], "order_ids": [42, 43] }),
+        ),
+        codec_case(
+            "cancel_client_orders/one",
+            CANCEL_CLIENT_ORDERS,
+            json!({ "owner": owner, "client_order_ids": [99u64] }),
+        ),
+        codec_case(
+            "cancel_client_orders/two_orders",
+            CANCEL_CLIENT_ORDERS,
+            json!({ "owner": owner, "client_order_ids": [99u64, 100u64] }),
         ),
         codec_case(
             "submit_oracle_observation/max_u64_with_confidence",
@@ -241,17 +295,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             json!({"market": 1, "policy_version": 1, "source_id": 1,
                    "publish_time_ms": 1700000000123u64, "price_micro": 67000000000u64,
                    "confidence_micro": null, "evidence_digest": vec![0x5Au8;32], "signer": signer}),
-        ),
-        codec_case(
-            "market_order/basic",
-            MARKET_ORDER,
-            json!({ "market": 3, "owner": owner, "side": "Buy",
-                    "quantity": 250, "client_order_id": null }),
-        ),
-        codec_case(
-            "close_position/basic",
-            CLOSE_POSITION,
-            json!({ "market": 2, "owner": owner }),
         ),
         // ConfirmDeposit (0x09) with the trailing DepositLocator. Mirrors the
         // engine's own `all_action_variants` fixture (owner 0x55, amount
@@ -328,15 +371,17 @@ fn main() -> Result<(), Box<dyn Error>> {
             }),
         ),
         // UpdateMarketFees appends the existing live-risk ratio levers at
-        // slots 18/19 before the S40 OI cap at slot 20. Null placeholders are
-        // intentional and prevent the cap from being decoded as im_bps.
+        // slots 18/19 before the S40 OI cap at slot 20, and wire 12's
+        // impact-notional lever last. Null placeholders are intentional and
+        // prevent the cap from being decoded as im_bps.
         codec_case(
             "update_market_fees/max_open_interest_only",
             UPDATE_MARKET_FEES,
             json!({
                 "market": 43, "signer": signer,
                 "im_bps": null, "mm_bps": null,
-                "max_open_interest": 500_000u64
+                "max_open_interest": 500_000u64,
+                "impact_notional": null
             }),
         ),
         // Pin the three adjacent risk tails together across Rust, TypeScript,
@@ -347,7 +392,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             json!({
                 "market": 44, "signer": signer,
                 "im_bps": 3334, "mm_bps": 1667,
-                "max_open_interest": 750_000u64
+                "max_open_interest": 750_000u64,
+                "impact_notional": 250_000_000u64
             }),
         ),
         // AtomicBasketOrder (0x1c) — multi-leg, mixed leg optionals; pins the
@@ -585,6 +631,56 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "action": "UnpauseBridge"
             }),
         ),
+        // The bridge controls the vote model depends on: PauseBridge (inner
+        // tag 0x20, a unit variant like UnpauseBridge), SetBridgePayoutConfig
+        // (0x21: the payout vault every payout record must name) and
+        // SetDepositReceiptLimit (0x22: the caps on vote-credited deposits;
+        // 0 turns a cap off).
+        codec_case(
+            "propose_admin_action/pause_bridge",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": "PauseBridge"
+            }),
+        ),
+        codec_case(
+            "propose_admin_action/set_bridge_payout_config",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": {"SetBridgePayoutConfig": {
+                    "payout_multisig": vec![0xB2u8; 32],
+                    "ops_wallet": (0u8..32).collect::<Vec<u8>>()}}
+            }),
+        ),
+        codec_case(
+            "propose_admin_action/set_deposit_receipt_limit",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": {"SetDepositReceiptLimit": {
+                    "per_receipt_max_micro_usdc": 10_000_000_000u64,
+                    "window_cap_micro_usdc": u64::MAX,
+                    "window_secs": 86_400u32}}
+            }),
+        ),
+        // SetWithdrawalPolicy (inner tag 37): the flat withdrawal fee and the
+        // minimum net withdrawal, which is never below the fee.
+        codec_case(
+            "propose_admin_action/set_withdrawal_policy",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": {"SetWithdrawalPolicy": {
+                    "fee_micro_usdc": 1_000_000u64,
+                    "min_withdrawal_micro_usdc": u64::MAX}}
+            }),
+        ),
         // SetLiquidationConfig (inner tag 0x11): the configuration exchange-wire
         // freezes in its own vector. Every newtype is its bare integer and the
         // full-close threshold is a nested positional pair.
@@ -810,6 +906,24 @@ fn main() -> Result<(), Box<dyn Error>> {
                 } }
             }),
         ),
+        // SetAccountFeeOverride (inner tag 0x24), one account's fee tier
+        // through the admin quorum: each field holds its own value, so a
+        // binding that swaps the two fees changes the bytes. The engine's
+        // frozen proposal is golden-vectors/propose_set_account_fee_override.hex.
+        codec_case(
+            "propose_admin_action/set_account_fee_override",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": { "SetAccountFeeOverride": {
+                    "account": vec![0xDDu8; 20],
+                    "taker_fee_bps": 7u32,
+                    "maker_fee_bps": 4294967295u32,
+                    "seq": 9u64
+                } }
+            }),
+        ),
         codec_case(
             "approve_admin_action/rotate_registry",
             APPROVE_ADMIN_ACTION,
@@ -844,40 +958,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             json!({
                 "signer": vec![0x44u8; 20],
                 "action": { "PauseMarket": { "market_id": 7 } }
-            }),
-        ),
-        // W28-20 receipt-gated terminal withdrawals (0x22 / 0x23). The receipt
-        // + operator-ed25519 proof fixtures mirror the engine golden vectors
-        // (exchange-core `codec::tests::golden_receipt` / `golden_proof`); the
-        // generated payload_hex must equal the engine's committed
-        // docs/spec/golden-vectors/{confirm,fail}_withdrawal_receipt.hex.
-        codec_case(
-            "confirm_withdrawal_receipt/paid",
-            CONFIRM_WITHDRAWAL_RECEIPT,
-            json!({
-                "receipt": receipt_json(1),
-                "proof": operator_proof_json(),
-            }),
-        ),
-        codec_case(
-            "fail_withdrawal_receipt/cancelled",
-            FAIL_WITHDRAWAL_RECEIPT,
-            json!({
-                "receipt": receipt_json(2),
-                "proof": operator_proof_json(),
-            }),
-        ),
-        // The authorization leg (0x24): the fixed 221-byte
-        // `WithdrawalAuthorizationV1` bytes + the operator proof. The engine
-        // commits no golden .hex for this action; the engine-derived pin is
-        // crates/spec/golden-vectors/authorize_withdrawal.hex (see the core
-        // golden test), and this case carries it to all three runners.
-        codec_case(
-            "authorize_withdrawal/operator",
-            AUTHORIZE_WITHDRAWAL,
-            json!({
-                "authorization": vec![0x44u8; 221],
-                "proof": operator_proof_json(),
             }),
         ),
         // ── coverage burn-down (issue #69) ───────────────────────────────
@@ -932,7 +1012,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             REVOKE_AGENT,
             json!({ "owner": owner, "agent_pubkey": vec![0xAAu8; 32] }),
         ),
-        // Sub-accounts (0x28, 0x29) and the withdrawal payout lease (0x2e):
+        // Sub-accounts (0x28, 0x29):
         // the wire's own frozen envelopes use these fixtures.
         codec_case(
             "create_sub_account/basic",
@@ -944,28 +1024,128 @@ fn main() -> Result<(), Box<dyn Error>> {
             SUB_ACCOUNT_TRANSFER,
             json!({ "owner": owner, "from": owner, "to": vec![0x02u8; 20], "amount": 1_000_000u64 }),
         ),
-        codec_case(
-            "claim_withdrawal_payout/basic",
-            CLAIM_WITHDRAWAL_PAYOUT,
-            json!({ "withdrawal_id": 777u64, "holder": vec![0x05u8; 20] }),
-        ),
-        // The wire's vectors/record_withdrawal_payout.hex fixture.
+        // The payout record: the recording operator's signature over the
+        // record preimage, carried as a 64-byte array like a vote's.
         codec_case(
             "record_withdrawal_payout/basic",
             RECORD_WITHDRAWAL_PAYOUT,
-            json!({ "withdrawal_id": 777u64, "holder": vec![0x05u8; 20],
-                    "solana_signature": vec![0x07u8; 64],
-                    "last_valid_block_height": 500u64 }),
+            json!({ "withdrawal_id": 777u64,
+                    "vault": vec![0x08u8; 32],
+                    "squads_transaction_index": 42u32,
+                    "deployment_id": vec![0xA1u8; 32],
+                    "chain_id": vec![0xC7u8; 32],
+                    "registry_epoch": 3u64,
+                    "signed_at_ms": 1_700_000_000_123u64,
+                    "signature": vec![0x5Du8; 64] }),
         ),
-        // Both integers at u64::MAX and a non-uniform signature (bytes 0..63),
-        // so every binding asserts the same integer width and the signature's
-        // array-of-u8 encoding, not just its own round trip.
+        // Every u64 at u64::MAX and the u32 index at its own bound, so every
+        // binding asserts the same integer widths, not just its own round
+        // trip.
         codec_case(
             "record_withdrawal_payout/u64_bounds",
             RECORD_WITHDRAWAL_PAYOUT,
-            json!({ "withdrawal_id": u64::MAX, "holder": vec![0x05u8; 20],
-                    "solana_signature": (0u8..64).collect::<Vec<u8>>(),
-                    "last_valid_block_height": u64::MAX }),
+            json!({ "withdrawal_id": u64::MAX,
+                    "vault": (0u8..32).collect::<Vec<u8>>(),
+                    "squads_transaction_index": u32::MAX,
+                    "deployment_id": (1u8..33).collect::<Vec<u8>>(),
+                    "chain_id": (2u8..34).collect::<Vec<u8>>(),
+                    "registry_epoch": u64::MAX,
+                    "signed_at_ms": u64::MAX,
+                    "signature": (0u8..64).collect::<Vec<u8>>() }),
+        ),
+        codec_case(
+            "vote_pause_bridge/basic",
+            VOTE_PAUSE_BRIDGE,
+            json!({ "deployment_id": vec![0xA1u8; 32],
+                    "chain_id": vec![0xC7u8; 32],
+                    "registry_epoch": 2u64,
+                    "signed_at_ms": 1_700_000_000_123u64,
+                    "signature": vec![0x5Eu8; 64] }),
+        ),
+        codec_case(
+            "vote_pause_bridge/u64_bounds",
+            VOTE_PAUSE_BRIDGE,
+            json!({ "deployment_id": (1u8..33).collect::<Vec<u8>>(),
+                    "chain_id": (2u8..34).collect::<Vec<u8>>(),
+                    "registry_epoch": u64::MAX,
+                    "signed_at_ms": u64::MAX,
+                    "signature": (0u8..64).collect::<Vec<u8>>() }),
+        ),
+        // Operator votes: one registry member's
+        // signature over the canonical vote preimage, carried as a 64-byte
+        // array. Two items per action: a plain vote and a u64-bounds vote
+        // with a non-uniform signature, so every binding pins the widths and
+        // the signature's array-of-u8 encoding.
+        codec_case(
+            "vote_withdrawal_paid/basic",
+            VOTE_WITHDRAWAL_PAID,
+            json!({ "withdrawal_id": 777u64,
+                    "vault": vec![0xB2u8; 32],
+                    "squads_transaction_index": 11u32,
+                    "deployment_id": vec![0xA1u8; 32],
+                    "chain_id": vec![0xC7u8; 32],
+                    "registry_epoch": 3u64,
+                    "signed_at_ms": 1_700_000_000_123u64,
+                    "signature": vec![0x5Cu8; 64] }),
+        ),
+        codec_case(
+            "vote_withdrawal_paid/u64_bounds",
+            VOTE_WITHDRAWAL_PAID,
+            json!({ "withdrawal_id": u64::MAX,
+                    "vault": (0u8..32).collect::<Vec<u8>>(),
+                    "squads_transaction_index": u32::MAX,
+                    "deployment_id": (1u8..33).collect::<Vec<u8>>(),
+                    "chain_id": (2u8..34).collect::<Vec<u8>>(),
+                    "registry_epoch": u64::MAX,
+                    "signed_at_ms": u64::MAX,
+                    "signature": (0u8..64).collect::<Vec<u8>>() }),
+        ),
+        codec_case(
+            "vote_withdrawal_payout_dead/basic",
+            VOTE_WITHDRAWAL_PAYOUT_DEAD,
+            json!({ "withdrawal_id": 8u64, "vault": vec![0xB2u8; 32],
+                    "squads_transaction_index": 13u32,
+                    "deployment_id": vec![0xA1u8; 32], "chain_id": vec![0xC7u8; 32],
+                    "registry_epoch": 4u64,
+                    "signed_at_ms": 1_700_000_000_123u64, "signature": vec![0x51u8; 64] }),
+        ),
+        codec_case(
+            "vote_deposit/basic",
+            VOTE_DEPOSIT,
+            json!({ "owner": vec![0x01u8; 20], "amount_micro_usdc": 1_000_000u64,
+                    "solana_tx_sig": vec![0xABu8; 64],
+                    "locator": { "top_index": 2, "inner_index": 5 },
+                    "deployment_id": vec![0xA1u8; 32],
+                    "chain_id": vec![0xC7u8; 32],
+                    "registry_epoch": 9u64,
+                    "signed_at_ms": 1_700_000_000_123u64,
+                    "signature": vec![0x5Cu8; 64] }),
+        ),
+        // The LEGACY reading: an absent locator rides the vote preimage as
+        // the top-0 / inner-0xFFFF suffix, so the nil branch is pinned too.
+        codec_case(
+            "vote_deposit/legacy_locator",
+            VOTE_DEPOSIT,
+            json!({ "owner": vec![0x01u8; 20], "amount_micro_usdc": 5u64,
+                    "solana_tx_sig": vec![0xABu8; 64],
+                    "locator": null,
+                    "deployment_id": vec![0xA1u8; 32],
+                    "chain_id": vec![0xC7u8; 32],
+                    "registry_epoch": 1u64,
+                    "signed_at_ms": 1_700_000_000_123u64,
+                    "signature": vec![0x5Cu8; 64] }),
+        ),
+        codec_case(
+            "vote_deposit/u64_bounds",
+            VOTE_DEPOSIT,
+            json!({ "owner": vec![0xFFu8; 20], "amount_micro_usdc": u64::MAX,
+                    "solana_tx_sig": (0u8..64).collect::<Vec<u8>>(),
+                    "locator": { "top_index": u16::MAX, "inner_index": null },
+                    "deployment_id": (1u8..33).collect::<Vec<u8>>(),
+                    "chain_id": (2u8..34).collect::<Vec<u8>>(),
+                    "registry_epoch": u64::MAX,
+                    "signed_at_ms": u64::MAX,
+                    "signature": (64u8..128).collect::<Vec<u8>>() }),
         ),
         // `outcome` is a NUMERIC_ENUM_FIELDS entry in codec-adapter.ts (the
         // integer-vs-name class the markSourceMode regression belonged to);
@@ -986,13 +1166,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             SET_USER_MARKET_LEVERAGE,
             json!({ "owner": owner, "market": 7, "user_im_bps": 2000 }),
         ),
-        // Order management: cancel-by-cloid, cancel-all (scoped + global),
+        // Order management: cancel-all (scoped + global),
         // cancel-replace (by order id + by client id), amend (populated + null).
-        codec_case(
-            "cancel_client_order/basic",
-            CANCEL_CLIENT_ORDER,
-            json!({ "owner": owner, "client_order_id": 99u64 }),
-        ),
         codec_case(
             "cancel_all_orders/market_scoped",
             CANCEL_ALL_ORDERS,
@@ -1066,54 +1241,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "expected_position_epoch": 3u64
             }),
         ),
-        // F2 frozen vectors (payload segments of the exchange envelopes):
-        // place_order with both limbs, post_only/reduce_only/GTC set.
-        codec_case(
-            "place_order/with_triggers",
-            PLACE_ORDER,
-            json!({
-                "market": 1, "owner": owner, "side": "Buy",
-                "price": 100, "quantity": 10, "client_order_id": null,
-                "post_only": false, "reduce_only": false, "time_in_force": "Gtc",
-                "stop_loss": {
-                    "trigger_price": 95_000u64,
-                    "max_slippage_bps": 75u32,
-                    "client_trigger_id": 11u64
-                },
-                "take_profit": {
-                    "trigger_price": 110_000u64,
-                    "max_slippage_bps": 50u32,
-                    "client_trigger_id": 12u64
-                }
-            }),
-        ),
-        // Same order without limbs: the 2.1.0 canonical form carries the two
-        // trailing nils (pre-2.1.0 encoders emitted the 9-field array that
-        // `place_order_no_triggers@seq2/unbound` freezes below).
-        codec_case(
-            "place_order/no_triggers_canonical",
-            PLACE_ORDER,
-            json!({
-                "market": 1, "owner": owner, "side": "Buy",
-                "price": 100, "quantity": 10, "client_order_id": null,
-                "post_only": false, "reduce_only": false, "time_in_force": "Gtc"
-            }),
-        ),
-        // market_order with a stop-loss limb only.
-        codec_case(
-            "market_order/with_triggers",
-            MARKET_ORDER,
-            json!({
-                "market": 1, "owner": owner, "side": "Sell",
-                "quantity": 10, "client_order_id": null,
-                "stop_loss": {
-                    "trigger_price": 95_000u64,
-                    "max_slippage_bps": 75u32,
-                    "client_trigger_id": 11u64
-                },
-                "take_profit": null
-            }),
-        ),
         // cancel_replace with a take-profit limb only.
         codec_case(
             "cancel_replace_order/with_triggers",
@@ -1156,18 +1283,23 @@ fn main() -> Result<(), Box<dyn Error>> {
     ];
     write_ndjson(&dir.join(cv::CODEC_FILE), &codec)?;
 
+    // The operators' Ed25519 message preimages are a cross-language contract,
+    // separate from the MessagePack payload vectors. Derive the expected
+    // bytes through the same proof-wire methods the engine verifies. Ids and
+    // epochs are decimal strings so a reader without 64-bit integers keeps
+    // them exact.
+    let vote_preimages = bridge_message_vectors();
+    write_ndjson(&dir.join("vote-preimages.ndjson"), &vote_preimages)?;
+
     // ── signing family ───────────────────────────────────────────────────
     let unbound = [0u8; 32];
     let sk = [0x42u8; 32];
-    let po_payload = cv::codec_payload(
-        PLACE_ORDER,
-        &json!({
-            "market": 1, "owner": vec![0x01u8; 20], "side": "Buy",
-            "price": 100, "quantity": 10, "client_order_id": null,
-            "post_only": false, "reduce_only": false, "time_in_force": "Gtc"
-        }),
+    // Signing pins envelope framing over opaque payload bytes: the retired
+    // 0x01 `place_order/min` payload, which no longer decodes.
+    let po_payload = hex::decode(
+        "9b01dc00140101010101010101010101010101010101010101a3427579640ac0c2c2a3477463c0c0",
     )?;
-    let envelope = cv::sign_envelope(&unbound, PLACE_ORDER, 1, &po_payload, &sk)?;
+    let envelope = cv::sign_envelope(&unbound, RETIRED_PLACE_ORDER, 1, &po_payload, &sk)?;
     let guard_chain = [0x11u8; 32];
     let guard_payload = cv::codec_payload(
         PROPOSE_ADMIN_ACTION,
@@ -1199,7 +1331,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         cv::SigningCase::Sign {
             case: "place_order/min@seq1/unbound".to_string(),
             chain_id: unbound.to_vec(),
-            action_type: PLACE_ORDER,
+            action_type: RETIRED_PLACE_ORDER,
             seq: 1,
             payload_hex: hex::encode(&po_payload),
             secret_key: sk.to_vec(),
@@ -1218,12 +1350,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     ];
 
     // ── Frozen envelopes (proof-wire 2.1.0) ──────────────────────────────
-    // Byte-exact pins of Proof-labs/exchange `exchange-wire/vectors/*.hex`:
-    // full signed envelopes, test key 0x42×32 over UNBOUND_CHAIN_ID. Generation panics if the core's
-    // envelope framing drifts from the engine's frozen bytes. The
-    // `no_triggers` row signs the pre-2.1.0 9-field payload verbatim —
-    // old bytes keep verifying; canonical 2.1.0 encodes add the two
-    // trailing nils (see the codec row + TS decode-compat test).
+    // Byte-exact signed envelopes the engine froze (test key 0x42×32 over
+    // UNBOUND_CHAIN_ID). Generation panics if the core's envelope framing
+    // drifts from them. The 0x01 and 0x04 payloads are retired and no longer
+    // decode; they still pin signing over opaque bytes.
     fn frozen_envelope_case(
         case: &str,
         action_type: u8,
@@ -1257,7 +1387,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let frozen: Vec<cv::SigningCase> = vec![
         frozen_envelope_case(
             "place_order/with_triggers@seq1/unbound",
-            PLACE_ORDER,
+            RETIRED_PLACE_ORDER,
             1,
             "9b01dc00140101010101010101010101010101010101010101a3427579640ac0c2c2a347746393ce000173184b0b93ce0001adb0320c",
             "96020101c4369b01dc00140101010101010101010101010101010101010101a3427579640ac0c2c2a347746393ce000173184b0b93ce0001adb0320cc4202152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12c440dc991c8b31063e6cd1d26cd61e3dcf91f6af2e1d9092db51ca49808316e7b3640c3f9622cb55036adbb39424508f56e1e5acdb59aa56088d2ecea3d309307e05",
@@ -1266,7 +1396,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         ),
         frozen_envelope_case(
             "place_order_no_triggers@seq2/unbound",
-            PLACE_ORDER,
+            RETIRED_PLACE_ORDER,
             2,
             "9901dc00140101010101010101010101010101010101010101a3427579640ac0c2c2a3477463",
             "96020102c4269901dc00140101010101010101010101010101010101010101a3427579640ac0c2c2a3477463c4202152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12c44063588d198e83ae1e4862432b1cf58d23fc95c6638db6e0b0c2d76b2248552a67d4200214b0299aff617aab73b91183e43def96d0e23b3d83be22a75722460b0d",
@@ -1275,7 +1405,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         ),
         frozen_envelope_case(
             "market_order/with_triggers@seq4/unbound",
-            MARKET_ORDER,
+            RETIRED_MARKET_ORDER,
             4,
             "9701dc00140101010101010101010101010101010101010101a453656c6c0ac093ce000173184b0bc0",
             "96020404c4299701dc00140101010101010101010101010101010101010101a453656c6c0ac093ce000173184b0bc0c4202152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12c4407da0887ef1326b5a33afa7d640c19ff1247cf510f1031ab2b087034133296bd93222a52cf0f02219b3ad3d18ba81f7e1e9bc990357412055d101da65b272b007",
@@ -1606,6 +1736,48 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "settlement_balance_after": 6_000_000u64,
             }}),
         ),
+        // List events: every placement outcome and both cancel entries.
+        (
+            "orders_placed/every_outcome",
+            json!({"OrdersPlaced": {
+                "owner": vec![0xA1u8; 20],
+                "orders": [
+                    {"market": 7, "client_order_id": 3001u64, "outcome": {"Resting": {
+                        "order_id": 2001u64, "side": "Buy", "price": 100_000_000u64,
+                        "quantity": 5u64, "time_in_force": "Gtc", "post_only": true,
+                        "reduce_only": false,
+                    }}},
+                    {"market": 7, "client_order_id": null,
+                     "outcome": {"Executed": {
+                        "order_id": 2002u64, "requested_quantity": 10u64,
+                        "filled_quantity": 4u64, "unfilled": "NoLiquidity",
+                     }}},
+                    {"market": 7, "client_order_id": 3004u64,
+                     "outcome": {"Executed": {
+                        "order_id": 2003u64, "requested_quantity": 6u64,
+                        "filled_quantity": 6u64, "unfilled": null,
+                     }}},
+                    {"market": 7, "client_order_id": 3003u64,
+                     "outcome": {"Rejected": {"code": 22}}},
+                ],
+            }}),
+        ),
+        (
+            "orders_cancelled/user_requested",
+            json!({"OrdersCancelled": {
+                "owner": vec![0xA1u8; 20],
+                "reason": "UserRequested",
+                "orders": [
+                    {"Cancelled": {
+                        "order_id": 2001u64, "market": 7, "client_order_id": null,
+                        "original_quantity": 5u64, "remaining_quantity": 3u64,
+                        "filled_quantity": 2u64,
+                    }},
+                    {"Refused": {"target": {"OrderId": 2004u64}, "code": 2}},
+                    {"Refused": {"target": {"ClientOrderId": 3005u64}, "code": 44}},
+                ],
+            }}),
+        ),
     ];
     let events = event_inputs
         .into_iter()
@@ -1631,4 +1803,154 @@ fn main() -> Result<(), Box<dyn Error>> {
         dir.display()
     );
     Ok(())
+}
+
+/// One row per bridge-operator message shape, with the edges where the
+/// bindings could disagree: an absent locator, a top-level-only locator, and
+/// the largest ids, epochs and indexes.
+fn bridge_message_vectors() -> Vec<serde_json::Value> {
+    use proof_trading_sdk::bridge::{
+        DeploymentId, MicroUsdc, OperatorSignature, RegistryEpoch, SolanaPubkey, TxSignature,
+        WithdrawalId,
+    };
+    use proof_trading_sdk::types::{
+        DepositLocator, RecordWithdrawalPayout, VoteDeposit, VotePauseBridge, VoteWithdrawalPaid,
+        VoteWithdrawalPayoutDead,
+    };
+    const DEPLOYMENT: [u8; 32] = [0xA1; 32];
+    const CHAIN: [u8; 32] = [0xC7; 32];
+    const VAULT: [u8; 32] = [0xB2; 32];
+    const UNSIGNED: OperatorSignature = OperatorSignature::new([0; 64]);
+
+    // The signed tail: the largest epoch rows also sign at u64::MAX.
+    let signed_at = |epoch: u64| {
+        if epoch == u64::MAX {
+            u64::MAX
+        } else {
+            1_700_000_000_123
+        }
+    };
+    let binding = |row: &mut serde_json::Value, epoch: u64| {
+        row["deployment_id"] = json!(hex::encode(DEPLOYMENT));
+        row["chain_id"] = json!(hex::encode(CHAIN));
+        row["registry_epoch"] = json!(epoch.to_string());
+        row["signed_at_ms"] = json!(signed_at(epoch).to_string());
+    };
+    let payout = |case: &str, kind: &str, id: u64, index: u32, epoch: u64| {
+        let (withdrawal_id, vault, deployment_id, registry_epoch) = (
+            WithdrawalId::new(id),
+            SolanaPubkey::new(VAULT),
+            DeploymentId::new(DEPLOYMENT),
+            RegistryEpoch::new(epoch),
+        );
+        let preimage = match kind {
+            "withdrawal_paid" => VoteWithdrawalPaid {
+                withdrawal_id,
+                vault,
+                squads_transaction_index: index,
+                deployment_id,
+                chain_id: CHAIN,
+                registry_epoch,
+                signed_at_ms: signed_at(epoch),
+                signature: UNSIGNED,
+            }
+            .vote_message(),
+            "withdrawal_payout_dead" => VoteWithdrawalPayoutDead {
+                withdrawal_id,
+                vault,
+                squads_transaction_index: index,
+                deployment_id,
+                chain_id: CHAIN,
+                registry_epoch,
+                signed_at_ms: signed_at(epoch),
+                signature: UNSIGNED,
+            }
+            .vote_message(),
+            "payout_record" => RecordWithdrawalPayout {
+                withdrawal_id,
+                vault,
+                squads_transaction_index: index,
+                deployment_id,
+                chain_id: CHAIN,
+                registry_epoch,
+                signed_at_ms: signed_at(epoch),
+                signature: UNSIGNED,
+            }
+            .record_message(),
+            other => unreachable!("not a payout message kind: {other}"),
+        };
+        let mut row = json!({ "case": case, "kind": kind,
+            "withdrawal_id": id.to_string(), "vault": hex::encode(VAULT),
+            "squads_transaction_index": index, "preimage_hex": hex::encode(preimage) });
+        binding(&mut row, epoch);
+        row
+    };
+    let deposit = |case: &str, amount: u64, locator: Option<DepositLocator>, epoch: u64| {
+        let preimage = VoteDeposit {
+            owner: [0x11; 20],
+            amount_micro_usdc: MicroUsdc::new(amount),
+            solana_tx_sig: TxSignature::new([0x22; 64]),
+            locator,
+            deployment_id: DeploymentId::new(DEPLOYMENT),
+            chain_id: CHAIN,
+            registry_epoch: RegistryEpoch::new(epoch),
+            signed_at_ms: signed_at(epoch),
+            signature: UNSIGNED,
+        }
+        .vote_message();
+        let mut row = json!({ "case": case, "kind": "deposit",
+            "owner": hex::encode([0x11; 20]), "amount_micro_usdc": amount.to_string(),
+            "solana_tx_sig": hex::encode([0x22; 64]),
+            "locator": locator.map(|l| json!({ "top_index": l.top_index, "inner_index": l.inner_index })),
+            "preimage_hex": hex::encode(preimage) });
+        binding(&mut row, epoch);
+        row
+    };
+    let pause = |case: &str, epoch: u64| {
+        let preimage = VotePauseBridge {
+            deployment_id: DeploymentId::new(DEPLOYMENT),
+            chain_id: CHAIN,
+            registry_epoch: RegistryEpoch::new(epoch),
+            signed_at_ms: signed_at(epoch),
+            signature: UNSIGNED,
+        }
+        .vote_message();
+        let mut row = json!({ "case": case, "kind": "pause_bridge",
+            "preimage_hex": hex::encode(preimage) });
+        binding(&mut row, epoch);
+        row
+    };
+    vec![
+        payout("withdrawal_paid", "withdrawal_paid", 777, 11, 3),
+        payout(
+            "withdrawal_paid_max",
+            "withdrawal_paid",
+            u64::MAX,
+            u32::MAX,
+            u64::MAX,
+        ),
+        payout("withdrawal_payout_dead", "withdrawal_payout_dead", 8, 13, 4),
+        payout("payout_record", "payout_record", 8, 13, 4),
+        deposit(
+            "deposit",
+            1_000_000,
+            Some(DepositLocator {
+                top_index: 2,
+                inner_index: Some(5),
+            }),
+            9,
+        ),
+        deposit("deposit_locator_absent", 1_000_000, None, 9),
+        deposit(
+            "deposit_top_only",
+            u64::MAX,
+            Some(DepositLocator {
+                top_index: u16::MAX,
+                inner_index: None,
+            }),
+            u64::MAX,
+        ),
+        pause("pause_bridge", 2),
+        pause("pause_bridge_max", u64::MAX),
+    ]
 }

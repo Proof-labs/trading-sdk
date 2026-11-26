@@ -37,10 +37,24 @@ from proof_trading_sdk._native import (
 from proof_trading_sdk.external_signer import ExternalSigner
 from proof_trading_sdk.actions import (
     Action,
+    CancelClientOrders,
+    CancelOrders,
     CancelPositionTriggers,
+    MarketOrder,
+    OrderEntry,
+    PlaceOrders,
     SetPositionTriggers,
     TriggerLimb,
     encode_action,
+)
+from proof_trading_sdk.order_lists import (
+    CancelOrdersResult,
+    OrderPlacement,
+    PlaceOrdersResult,
+    check_order_result,
+    executed,
+    order_cancellations,
+    order_placements,
 )
 from proof_trading_sdk.config import SdkConfig, load_config
 from proof_trading_sdk.finalized_markets import (
@@ -82,7 +96,6 @@ from proof_trading_sdk.finalized_accounts import (
 from proof_trading_sdk.errors import (
     AuthenticationError,
     CodecError,
-    EngineError,
     GatewayError,
     PreAdmissionRefusal,
     ProofTradingSdkError,
@@ -170,6 +183,22 @@ def _submission_may_have_been_admitted(exc: TransportError) -> bool:
         return True
     cause = exc.__cause__
     return isinstance(cause, httpx.RequestError) and not isinstance(cause, _NOT_SENT)
+
+
+def _engine_refusal(code: int, error: str) -> dict[str, t.Any]:
+    """A legacy gateway's ``"<code>: <message>"`` verdict, in the shape of a
+    structured one."""
+    return {"status": "error", "code": code, "error": error}
+
+
+def _read_order_result(envelope: bytes, data: dict[str, t.Any]) -> dict[str, t.Any]:
+    """Check an executed code-0 response's order list (see
+    :func:`check_order_result`); any other response passes through."""
+    if not executed(data):
+        # A code-less acknowledgement has not executed yet.
+        return data
+    check_order_result(hashlib.sha256(envelope).hexdigest().upper(), data.get("events"))
+    return data
 
 
 def _to_hex(owner: bytes | str) -> str:
@@ -263,6 +292,27 @@ class RateLimitState:
     reset: int = 0
     tier: str = ""
     bucket: str = ""
+
+
+@dataclass(frozen=True)
+class Sent:
+    """:meth:`ExchangeClient.close_position` sent the close: ``tx`` is its
+    ``/exchange`` response and ``order`` the close order's outcome, which can
+    be a :class:`RejectedOrder` (code 12 when the account cannot afford it, 35
+    when the position went flat first); ``None`` without an executed verdict
+    (the engine refused the whole transaction, or it has not executed yet)."""
+
+    tx: dict[str, t.Any]
+    order: Optional[OrderPlacement]
+
+
+@dataclass(frozen=True)
+class NothingToClose:
+    """:meth:`ExchangeClient.close_position` found no position, so sent
+    nothing."""
+
+
+CloseOutcome = Sent | NothingToClose
 
 
 # ── Client ───────────────────────────────────────────────────────────────────
@@ -552,7 +602,7 @@ class ExchangeClient:
         """Sign *action_payload* and encode it as a wire envelope.
 
         Args:
-            action_type: Action type byte (e.g. 0x01 for PlaceOrder).
+            action_type: Action type byte (e.g. 0x35 for PlaceOrders).
             action_payload: MessagePack-encoded action payload bytes.
 
         Returns:
@@ -628,6 +678,40 @@ class ExchangeClient:
         """Encode + sign + submit a typed action in one call."""
         return self.submit_action(self.sign_action(action))
 
+    def close_position(self, market: int, *, owner: bytes | None = None) -> CloseOutcome:
+        """Close the whole position on *market*: a reduce-only market order on
+        the opposite side for the position's size, read first with
+        :meth:`account`. ``owner`` defaults to the signer.
+
+        A flat account sends nothing and returns :class:`NothingToClose`.
+        Otherwise it returns :class:`Sent` with the response and the close
+        order's outcome, which can be a :class:`RejectedOrder` (code 35 when
+        the position went flat before the close ran). The size and
+        ``NothingToClose`` come from the account read, which can trail a fill
+        made just before; the close never sends more than the position read.
+        """
+        selected_owner = self._own_owner() if owner is None else owner
+        position = next(
+            (
+                p
+                for p in self.account(selected_owner).positions
+                if p["market"] == market and p["size"] > 0
+            ),
+            None,
+        )
+        if position is None:
+            return NothingToClose()
+        order = MarketOrder(
+            market=market,
+            owner=selected_owner,
+            side="Sell" if position["side"] == "Buy" else "Buy",
+            quantity=int(position["size"]),
+            reduce_only=True,
+        )
+        tx = self.submit(order)
+        placed = order_placements(tx)
+        return Sent(tx=tx, order=placed[0] if placed else None)
+
     def _submit_with_signer_revision(self, action: Action, revision: int) -> dict[str, t.Any]:
         action_type, payload = encode_action(action)
         envelope = self._sign_and_encode_action(action_type, payload, expected_revision=revision)
@@ -684,6 +768,80 @@ class ExchangeClient:
             revision,
         )
 
+    def place_order(self, order: OrderEntry, *, owner: bytes | None = None) -> PlaceOrdersResult:
+        """Place one limit or market order (:meth:`OrderEntry.market_order`):
+        a batch of one, read as :meth:`place_orders`; its outcome is
+        ``orders[0]``."""
+        return self.place_orders([order], owner=owner)
+
+    def cancel_order(self, order_id: int, *, owner: bytes | None = None) -> CancelOrdersResult:
+        """Cancel one resting order by order id: a batch of one, read as
+        :meth:`cancel_orders` (a :class:`RefusedCancel`, code 2, when no such
+        order rests)."""
+        return self.cancel_orders([order_id], owner=owner)
+
+    def cancel_client_order(
+        self, client_order_id: int, *, owner: bytes | None = None
+    ) -> CancelOrdersResult:
+        """Cancel one resting order by client order id; read as
+        :meth:`cancel_order`."""
+        return self.cancel_client_orders([client_order_id], owner=owner)
+
+    def place_orders(
+        self, orders: t.Sequence[OrderEntry], *, owner: bytes | None = None
+    ) -> PlaceOrdersResult:
+        """Place 1 to 100 limit or market orders under one signature, each on
+        its own (market orders via :meth:`OrderEntry.market_order`).
+
+        Returns the response and each order's outcome (:data:`OrderPlacement`),
+        in order; a rejected order is a :class:`RejectedOrder` with its code.
+        ``orders`` is ``None`` without an executed verdict: a refused
+        transaction (non-zero ``tx["code"]``) or a code-less acknowledgement.
+        ``owner`` defaults to the signer. An executed batch whose results do
+        not read raises :class:`OrderResultUnreadable`: reconcile by hash,
+        never re-submit.
+        """
+        with self._signer_lock:
+            revision = self._signer_revision
+            selected_owner = self._own_owner() if owner is None else owner
+        tx = self._submit_with_signer_revision(
+            PlaceOrders(owner=selected_owner, orders=list(orders)), revision
+        )
+        return PlaceOrdersResult.of(tx)
+
+    def cancel_orders(
+        self, order_ids: t.Sequence[int], *, owner: bytes | None = None
+    ) -> CancelOrdersResult:
+        """Cancel 1 to 100 resting orders by order id, each on its own.
+
+        Returns the response and each cancel's outcome (:data:`OrderCancellation`), in
+        order; a cancel that removed nothing is ``refused`` with its code.
+        An unreadable result raises as in :meth:`place_orders`.
+        """
+        with self._signer_lock:
+            revision = self._signer_revision
+            selected_owner = self._own_owner() if owner is None else owner
+        tx = self._submit_with_signer_revision(
+            CancelOrders(owner=selected_owner, order_ids=list(order_ids)), revision
+        )
+        return CancelOrdersResult.of(tx)
+
+    def cancel_client_orders(
+        self, client_order_ids: t.Sequence[int], *, owner: bytes | None = None
+    ) -> CancelOrdersResult:
+        """Cancel 1 to 100 resting orders by client order id, each on its own.
+
+        Results as :meth:`cancel_orders`.
+        """
+        with self._signer_lock:
+            revision = self._signer_revision
+            selected_owner = self._own_owner() if owner is None else owner
+        tx = self._submit_with_signer_revision(
+            CancelClientOrders(owner=selected_owner, client_order_ids=list(client_order_ids)),
+            revision,
+        )
+        return CancelOrdersResult.of(tx)
+
     # ── Write action ─────────────────────────────────────────────────────
 
     def submit_action(self, envelope: bytes) -> dict[str, t.Any]:
@@ -697,8 +855,12 @@ class ExchangeClient:
             The engine's response dict with keys like ``code``,
             ``tx_hash``, etc.
 
+        A transaction the engine refused comes back as a value: ``code`` is
+        its ``ExecError`` code (non-zero), ``error`` its message; read the
+        name with :func:`get_error_name`. Exceptions are for submissions with
+        no engine verdict.
+
         Raises:
-            EngineError: the engine rejected the tx with an ``ExecError`` code.
             SubmissionPending: the gateway broadcast it but could not report
                 the outcome; reconcile by ``tx_hash``.
             PreAdmissionRefusal: the gateway refused the request before
@@ -711,7 +873,14 @@ class ExchangeClient:
                 ``Unavailable``. An ambiguous 5xx is ``SubmissionPending``.
             TransportError: a transport or HTTP failure with no refusal
                 envelope.
+            OrderResultUnreadable: the transaction executed but its order
+                results do not read; reconcile by hash, never re-submit.
+                Rejected orders are reported in their results.
         """
+        return _read_order_result(envelope, self._post_envelope(envelope))
+
+    def _post_envelope(self, envelope: bytes) -> dict[str, t.Any]:
+        """``POST /exchange`` the envelope and classify the answer."""
         body = json.dumps({"action": base64.b64encode(envelope).decode("ascii")}).encode()
         try:
             resp = self._post(
@@ -739,7 +908,7 @@ class ExchangeClient:
             text = (parsed if isinstance(parsed, str) else raw or "").strip()
             code = _leading_error_code(text)
             if code is not None and code > 0:
-                raise EngineError(code, text[:200])
+                return _engine_refusal(code, text[:200])
             # An arbitrary proxy body or truncated response is not an engine
             # rejection. The original transaction may still have committed.
             raise SubmissionPending(
@@ -791,10 +960,8 @@ class ExchangeClient:
 
         code = data.get("code")
         if isinstance(code, int) and not isinstance(code, bool):
-            # Structured chain verdict — the engine code is authoritative.
-            if code != 0:
-                msg = data.get("message") or data.get("log") or data.get("error") or ""
-                raise EngineError(code, msg)
+            # Structured chain verdict — the engine code is authoritative. A
+            # non-zero code is the engine's answer, returned as a value.
             return data
 
         if data.get("status") == "ok":
@@ -821,7 +988,7 @@ class ExchangeClient:
         err = str(data.get("error") or data.get("message") or "")
         code = _leading_error_code(err)
         if code is not None and code > 0:
-            raise EngineError(code, err)
+            return _engine_refusal(code, err)
         raise SubmissionPending(
             hashlib.sha256(envelope).hexdigest().upper(),
             "malformed /exchange response (no verdict); reconcile by hash",
@@ -1093,6 +1260,368 @@ class ExchangeClient:
         resp = self._get(f"/v1/nonce/{_to_hex(owner)}")
         return _response_object(resp)
 
+    # ── Bridge custody reads (`/v2/bridge/*`) ────
+
+    _WITHDRAWAL_STATUSES = {
+        "pending": "Pending",
+        "completed": "Completed",
+        "failed": "Failed",
+        "unknown": "Unknown",
+    }
+    _PAYOUT_VERDICTS = {"paid": "Paid", "dead": "Dead", "unknown": "Unknown"}
+
+    @staticmethod
+    def _bridge_bytes(value: t.Any, size: int, name: str) -> bytes:
+        raw = bytes(value) if isinstance(value, (bytes, bytearray, memoryview)) else None
+        if raw is None or len(raw) != size:
+            raise CodecError(
+                f"bridge decode: {name} must be exactly {size} bytes"
+            )
+        return raw
+
+    @staticmethod
+    def _bridge_enum(value: t.Any, names: dict[str, str], name: str) -> str:
+        """A view enum spelled in snake_case. A value this SDK does not name
+        reads as ``"Unknown"``, as the wire's ``#[serde(other)]`` does, so a
+        newer engine's value never fails the whole page."""
+        if not isinstance(value, str):
+            raise CodecError(f"bridge decode: {name} must be a string")
+        return names.get(value, "Unknown")
+
+    @staticmethod
+    def _bridge_uint(value: t.Any, name: str) -> int:
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise CodecError(f"bridge decode: {name} must be a u64")
+        return int(value)
+
+    def _bridge_view(self, path: str, params: dict[str, t.Any] | None = None) -> dict[str, t.Any]:
+        raw = self._get_data(path, params=params)
+        if not isinstance(raw, dict):
+            raise CodecError(f"bridge decode: {path} (expected a field map)")
+        return raw
+
+    def _bridge_u16(self, value: t.Any, name: str) -> int:
+        index = self._bridge_uint(value, name)
+        if index > 0xFFFF:
+            raise CodecError(f"bridge decode: {name} must be a u16")
+        return index
+
+    def _bridge_locator(self, value: t.Any) -> dict[str, t.Any]:
+        if not isinstance(value, dict):
+            raise CodecError("bridge decode: locator (expected a field map)")
+        inner = value.get("inner_index")
+        return {
+            "top_index": self._bridge_u16(value.get("top_index"), "top_index"),
+            "inner_index": None if inner is None else self._bridge_u16(inner, "inner_index"),
+        }
+
+    def _payout_vote(self, value: t.Any) -> dict[str, t.Any]:
+        if not isinstance(value, dict):
+            raise CodecError("bridge decode: vote (expected a field map)")
+        return {
+            "voter": self._bridge_bytes(value.get("voter"), 32, "voter"),
+            "registry_epoch": self._bridge_uint(value.get("registry_epoch"), "registry_epoch"),
+            "verdict": self._bridge_enum(value.get("verdict"), self._PAYOUT_VERDICTS, "verdict"),
+            "vault": self._bridge_bytes(value.get("vault"), 32, "vault"),
+            "squads_transaction_index": self._bridge_uint(
+                value.get("squads_transaction_index"), "squads_transaction_index"
+            ),
+            "signed_at_ms": self._bridge_uint(value.get("signed_at_ms"), "signed_at_ms"),
+            "signature": self._bridge_bytes(value.get("signature"), 64, "signature"),
+        }
+
+    def _cleared_payouts(self, value: t.Any) -> list[dict[str, t.Any]]:
+        """A row's ``cleared_payouts``; the view's serde default reads an
+        absent list as none cleared."""
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise CodecError("bridge decode: cleared_payouts (expected a list)")
+        cleared: list[dict[str, t.Any]] = []
+        for payout in value:
+            if not isinstance(payout, dict):
+                raise CodecError("bridge decode: cleared payout (expected a field map)")
+            cleared.append({
+                "vault": self._bridge_bytes(payout.get("vault"), 32, "vault"),
+                "squads_transaction_index": self._bridge_uint(
+                    payout.get("squads_transaction_index"), "squads_transaction_index"
+                ),
+            })
+        return cleared
+
+    def bridge_status(self) -> str:
+        """The bridge's state (`/v2/bridge/status`): ``"Active"``,
+        ``"Paused"``, or ``"WithdrawalBacklog"`` (active, with the pending
+        withdrawal count at or above the alert level)."""
+        raw = self._get_data("/v2/bridge/status")
+        if raw not in ("Active", "Paused", "WithdrawalBacklog"):
+            raise CodecError(f"bridge decode: status (unknown variant {raw!r})")
+        return raw
+
+    def bridge_payout_config(self) -> dict[str, bytes] | None:
+        """The governed Squads payout vault and its rent wallet
+        (`/v2/bridge/payout-config`), or ``None`` while the admin quorum has
+        not set them. Every payout record must name ``payout_multisig``."""
+        raw = self._get_data("/v2/bridge/payout-config")
+        if raw is None:
+            return None
+        if not isinstance(raw, dict):
+            raise CodecError("bridge decode: payout config (expected a field map)")
+        return {
+            "payout_multisig": self._bridge_bytes(raw.get("payout_multisig"), 32, "payout_multisig"),
+            "ops_wallet": self._bridge_bytes(raw.get("ops_wallet"), 32, "ops_wallet"),
+        }
+
+    def bridge_registry(self, epoch: int | None = None) -> dict[str, t.Any]:
+        """The operator receipt registry: the roster every vote and payout
+        record verifies against. Omit ``epoch`` for the current one. Each
+        member is one operator's ed25519 key."""
+        path = "/v2/bridge/registry" if epoch is None else f"/v2/bridge/registry/{int(epoch)}"
+        raw = self._bridge_view(path)
+        members_raw = raw.get("members")
+        if not isinstance(members_raw, list):
+            raise CodecError("bridge decode: members (expected a list)")
+        members: list[dict[str, t.Any]] = []
+        for member in members_raw:
+            if not isinstance(member, dict):
+                raise CodecError("bridge decode: member (expected a field map)")
+            members.append({"key": self._bridge_bytes(member.get("key"), 32, "key")})
+        return {
+            "deployment_id": self._bridge_bytes(raw.get("deployment_id"), 32, "deployment_id"),
+            "epoch": self._bridge_uint(raw.get("epoch"), "epoch"),
+            "threshold": self._bridge_uint(raw.get("threshold"), "threshold"),
+            "members": members,
+        }
+
+    def pending_withdrawals(
+        self, cursor: int | None = None, limit: int | None = None
+    ) -> dict[str, t.Any]:
+        """One page of pending withdrawals (`/v2/bridge/pending-withdrawals`)
+        with their recorded payout, votes so far and the payouts a Dead
+        threshold cleared (``cleared_payouts``), which a Paid vote may still
+        name. ``cursor`` is the
+        previous page's ``next_cursor`` (the last scanned withdrawal id);
+        ``None`` starts from the first. The status reads ``"Pending"``,
+        ``"Completed"``, ``"Failed"`` or ``"Unknown"``, as in TypeScript.
+        """
+        params: dict[str, t.Any] = {}
+        if cursor is not None:
+            params["cursor"] = int(cursor)
+        if limit is not None:
+            params["limit"] = int(limit)
+        raw = self._bridge_view("/v2/bridge/pending-withdrawals", params or None)
+        rows_raw = raw.get("rows")
+        if not isinstance(rows_raw, list):
+            raise CodecError("bridge decode: rows (expected a list)")
+        rows: list[dict[str, t.Any]] = []
+        for row in rows_raw:
+            if not isinstance(row, dict):
+                raise CodecError("bridge decode: withdrawal row (expected a field map)")
+            withdrawal = row.get("withdrawal")
+            if not isinstance(withdrawal, dict):
+                raise CodecError("bridge decode: withdrawal (expected a field map)")
+            status = self._bridge_enum(
+                withdrawal.get("status"), self._WITHDRAWAL_STATUSES, "status"
+            )
+            quarantined = withdrawal.get("quarantined", False)
+            if not isinstance(quarantined, bool):
+                raise CodecError("bridge decode: quarantined must be a boolean")
+            decoded: dict[str, t.Any] = {
+                "withdrawal": {
+                    "withdrawal_id": self._bridge_uint(
+                        withdrawal.get("withdrawal_id"), "withdrawal_id"
+                    ),
+                    "owner": self._bridge_bytes(withdrawal.get("owner"), 20, "owner"),
+                    "amount": self._bridge_uint(withdrawal.get("amount"), "amount"),
+                    "solana_destination": self._bridge_bytes(
+                        withdrawal.get("solana_destination"), 32, "solana_destination"
+                    ),
+                    "status": status,
+                    "request_height": self._bridge_uint(
+                        withdrawal.get("request_height"), "request_height"
+                    ),
+                    # The view's serde default: absent reads as not quarantined.
+                    "quarantined": quarantined,
+                },
+                "payout": None,
+            }
+            payout = row.get("payout")
+            if payout is not None:
+                if not isinstance(payout, dict):
+                    raise CodecError("bridge decode: payout (expected a field map)")
+                decoded["payout"] = {
+                    "recorder": self._bridge_bytes(payout.get("recorder"), 32, "recorder"),
+                    "vault": self._bridge_bytes(payout.get("vault"), 32, "vault"),
+                    "squads_transaction_index": self._bridge_uint(
+                        payout.get("squads_transaction_index"), "squads_transaction_index"
+                    ),
+                    "registry_epoch": self._bridge_uint(
+                        payout.get("registry_epoch"), "registry_epoch"
+                    ),
+                    "recorded_at_ms": self._bridge_uint(
+                        payout.get("recorded_at_ms"), "recorded_at_ms"
+                    ),
+                }
+            vote_rows = row.get("votes")
+            if not isinstance(vote_rows, list):
+                raise CodecError("bridge decode: votes (expected a list)")
+            decoded["votes"] = [self._payout_vote(v) for v in vote_rows]
+            decoded["cleared_payouts"] = self._cleared_payouts(row.get("cleared_payouts"))
+            rows.append(decoded)
+        next_cursor = raw.get("next_cursor")
+        return {
+            "rows": rows,
+            "next_cursor": None if next_cursor is None else self._bridge_uint(next_cursor, "next_cursor"),
+        }
+
+    def pending_deposits(
+        self, cursor: str | None = None, limit: int | None = None
+    ) -> dict[str, t.Any]:
+        """One page of pending deposits (`/v2/bridge/pending-deposits`) with
+        their operator votes. ``cursor`` is the previous page's
+        ``next_cursor``, already in the route's form (the hex of the last
+        scanned transfer identity); pass it back verbatim.
+        """
+        params: dict[str, t.Any] = {}
+        if cursor is not None:
+            params["cursor"] = str(cursor)
+        if limit is not None:
+            params["limit"] = int(limit)
+        raw = self._bridge_view("/v2/bridge/pending-deposits", params or None)
+        rows_raw = raw.get("rows")
+        if not isinstance(rows_raw, list):
+            raise CodecError("bridge decode: rows (expected a list)")
+        rows: list[dict[str, t.Any]] = []
+        for row in rows_raw:
+            if not isinstance(row, dict):
+                raise CodecError("bridge decode: deposit row (expected a field map)")
+            locator = row.get("locator")
+            vote_rows = row.get("votes")
+            if not isinstance(vote_rows, list):
+                raise CodecError("bridge decode: votes (expected a list)")
+            votes: list[dict[str, t.Any]] = []
+            for vote in vote_rows:
+                if not isinstance(vote, dict):
+                    raise CodecError("bridge decode: deposit vote (expected a field map)")
+                votes.append({
+                    "voter": self._bridge_bytes(vote.get("voter"), 32, "voter"),
+                    "registry_epoch": self._bridge_uint(vote.get("registry_epoch"), "registry_epoch"),
+                    "owner": self._bridge_bytes(vote.get("owner"), 20, "owner"),
+                    "amount_micro_usdc": self._bridge_uint(vote.get("amount_micro_usdc"), "amount_micro_usdc"),
+                    "signed_at_ms": self._bridge_uint(vote.get("signed_at_ms"), "signed_at_ms"),
+                    "signature": self._bridge_bytes(vote.get("signature"), 64, "signature"),
+                })
+            rows.append(
+                {
+                    "solana_tx_sig": self._bridge_bytes(
+                        row.get("solana_tx_sig"), 64, "solana_tx_sig"
+                    ),
+                    "locator": None if locator is None else self._bridge_locator(locator),
+                    "votes": votes,
+                }
+            )
+        return {"rows": rows, "next_cursor": self._deposit_cursor(raw.get("next_cursor"))}
+
+    def _agreed_deposit(self, value: t.Any) -> dict[str, t.Any]:
+        if not isinstance(value, dict):
+            raise CodecError("bridge decode: agreed deposit (expected a field map)")
+        locator = value.get("locator")
+        return {
+            "owner": self._bridge_bytes(value.get("owner"), 20, "owner"),
+            "amount_micro_usdc": self._bridge_uint(value.get("amount_micro_usdc"), "amount_micro_usdc"),
+            "solana_tx_sig": self._bridge_bytes(value.get("solana_tx_sig"), 64, "solana_tx_sig"),
+            "locator": None if locator is None else self._bridge_locator(locator),
+            "registry_epoch": self._bridge_uint(value.get("registry_epoch"), "registry_epoch"),
+            "agreed_height": self._bridge_uint(value.get("agreed_height"), "agreed_height"),
+            "agreed_at_ms": self._bridge_uint(value.get("agreed_at_ms"), "agreed_at_ms"),
+        }
+
+    def _bridge_rows(self, raw: dict[str, t.Any]) -> list[t.Any]:
+        rows = raw.get("rows")
+        if not isinstance(rows, list):
+            raise CodecError("bridge decode: rows (expected a list)")
+        for row in rows:
+            if not isinstance(row, dict):
+                raise CodecError("bridge decode: row (expected a field map)")
+        return rows
+
+    _PARK_CAUSES = {
+        "over_per_receipt_max": "OverPerReceiptMax",
+        "over_window_cap": "OverWindowCap",
+        "balance_overflow": "BalanceOverflow",
+        "unknown": "Unknown",
+    }
+
+    def agreed_deposits(
+        self, cursor: int | None = None, limit: int | None = None
+    ) -> dict[str, t.Any]:
+        """One page of the agreed-deposit credit queue
+        (`/v2/bridge/agreed-deposits`), oldest first: deposits the operator
+        threshold agreed on whose credit waits for a deposit cap's window or
+        an unpause. ``cursor`` is the previous page's ``next_cursor``."""
+        params: dict[str, t.Any] = {}
+        if cursor is not None:
+            params["cursor"] = int(cursor)
+        if limit is not None:
+            params["limit"] = int(limit)
+        raw = self._bridge_view("/v2/bridge/agreed-deposits", params or None)
+        next_cursor = raw.get("next_cursor")
+        return {
+            "rows": [
+                {
+                    "sequence": self._bridge_uint(row.get("sequence"), "sequence"),
+                    "deposit": self._agreed_deposit(row.get("deposit")),
+                }
+                for row in self._bridge_rows(raw)
+            ],
+            "next_cursor": None if next_cursor is None else self._bridge_uint(next_cursor, "next_cursor"),
+        }
+
+    def parked_deposits(
+        self, cursor: str | None = None, limit: int | None = None
+    ) -> dict[str, t.Any]:
+        """One page of parked deposits (`/v2/bridge/parked-deposits`): agreed
+        deposits over the per-deposit maximum or the window cap, which no
+        window can admit. ``cursor`` is the previous page's ``next_cursor``,
+        already in the route's hex form; pass it back verbatim."""
+        params: dict[str, t.Any] = {}
+        if cursor is not None:
+            params["cursor"] = str(cursor)
+        if limit is not None:
+            params["limit"] = int(limit)
+        raw = self._bridge_view("/v2/bridge/parked-deposits", params or None)
+        next_cursor = raw.get("next_cursor")
+        if next_cursor is not None and not isinstance(next_cursor, (bytes, bytearray)):
+            raise CodecError("bridge decode: next_cursor must be bytes")
+        return {
+            "rows": [
+                {
+                    "deposit": self._agreed_deposit(row.get("deposit")),
+                    "cause": self._bridge_enum(row.get("cause"), self._PARK_CAUSES, "cause"),
+                    "parked_height": self._bridge_uint(row.get("parked_height"), "parked_height"),
+                }
+                for row in self._bridge_rows(raw)
+            ],
+            "next_cursor": None if next_cursor is None else bytes(next_cursor).hex(),
+        }
+
+    def _deposit_cursor(self, value: t.Any) -> str | None:
+        """The route's pending-deposits cursor from the view's last scanned
+        identity: hex of ``solana_tx_sig(64) || top_index(2 BE) ||
+        inner_index(2 BE)``, ``0xFFFF`` for an absent inner index."""
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            raise CodecError("bridge decode: next_cursor (expected a field map)")
+        locator = self._bridge_locator(value.get("locator"))
+        inner = locator["inner_index"]
+        identity = (
+            self._bridge_bytes(value.get("solana_tx_sig"), 64, "solana_tx_sig")
+            + locator["top_index"].to_bytes(2, "big")
+            + (0xFFFF if inner is None else inner).to_bytes(2, "big")
+        )
+        return identity.hex()
+
     def market_stats(self, markets: t.Sequence[int]) -> MarketStatsResponse:
         """Indexed rolling 24-hour statistics; numeric strings/nulls retain exact meaning."""
         selected = market_stats_markets(markets)
@@ -1120,7 +1649,7 @@ class ExchangeClient:
         return result
 
     def authorities(self) -> AuthoritiesSnapshot:
-        """Read the six operator-authority sets. HTTP/decode failures remain errors.
+        """Read the four live operator-authority sets. HTTP/decode failures remain errors.
 
         Addresses are 20-byte values. These are gateway-reported membership
         facts, without a witness or proof of action authorization.
@@ -1487,6 +2016,12 @@ class ExchangeClient:
             "sz_decimals": opt(21),
             "ticker": None if len(raw) <= 22 or raw[22] is None else str(raw[22]),
             "max_open_interest": opt(23),
+            # The wire-12 tail, all `#[serde(default)]`: absent on pre-12
+            # rows, decoding to the serde defaults — 0 for the u64, None for
+            # the two Options.
+            "impact_notional": at(24),
+            "funding_dead_band_bps": opt(25),
+            "funding_interest_rate": opt(26),
         }
 
     def markets(self) -> list[dict[str, t.Any]]:

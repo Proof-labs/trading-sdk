@@ -34,6 +34,13 @@ export interface WasmCore {
     readonly Event: number;
     readonly Account: number;
     readonly AdminAction: number;
+    readonly BridgeStatus: number;
+    readonly BridgeRegistry: number;
+    readonly PendingWithdrawals: number;
+    readonly PendingDeposits: number;
+    readonly BridgePayoutConfig: number;
+    readonly AgreedDeposits: number;
+    readonly ParkedDeposits: number;
     readonly AuthorizedAgents: number;
     readonly InsuranceFundDirectory: number;
     readonly InsuranceFundState: number;
@@ -61,6 +68,9 @@ export interface WasmCore {
     seq: bigint,
     payload: Uint8Array,
   ): Uint8Array;
+  /** The canonical bytes a bridge operator signs for one message,
+   *  `fields` tagged by `kind` (see `BridgeMessageFields`). */
+  bridge_message_preimage(fields: unknown): Uint8Array;
   encode_signed_tx(
     actionType: number,
     payload: Uint8Array,
@@ -92,8 +102,6 @@ export interface WasmCore {
   encode_withdrawal_authorization(fields: unknown): Uint8Array;
   /** Bridge v1 `SHA256(canonical authorization)` — the identity the engine binds. */
   withdrawal_authorization_digest(fields: unknown): Uint8Array;
-  /** Bridge v1 canonical 327-byte `BridgeReceiptV1` — the operator-quorum signed message. */
-  encode_bridge_receipt(fields: unknown): Uint8Array;
 }
 
 let cached: WasmCore | null = null;

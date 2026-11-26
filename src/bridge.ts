@@ -1,32 +1,195 @@
 /**
- * Bridge custody: the canonical payload bytes the engine's receipt path
- * signs and verifies, exposed through the WASM core.
+ * Bridge custody: the messages bridge operators sign, and the canonical
+ * payload bytes the engine's withdrawal authorization binds, through the
+ * WASM core.
  *
- * The byte layout is owned by the wire contract's `bridge` module
- * (`proof_wire::bridge`), the same definition the engine and the bridge program
- * compile, so the SDK signs exactly the bytes the engine verifies. The
- * frozen vectors in `bridge.test.ts` pin the marshalling.
+ * Byte layouts are owned by the wire contract (`proof_wire`), the same
+ * definitions the engine compiles, so the SDK signs and hashes exactly the
+ * bytes the engine checks. The shared vectors in `conformance/` pin them
+ * across Rust, TypeScript and Python.
  *
- * The ed25519 quorum proof stays TypeScript-side (`signOperatorReceipt`):
- * keys never enter the bridge payload path, and the signature is over the
- * canonical message these functions produce.
+ * A bridge operator's only identity is its registry key. It signs five
+ * messages, each submitted on its own; the engine counts the distinct
+ * operators whose signature verifies against the named epoch's roster. The
+ * signature is the message's authority, not the envelope's, so any envelope
+ * signer may submit a signed message.
  */
 
-import { sign } from "./crypto.js";
 import { getWasm } from "./wasm-loader.js";
-import type { BridgeWithdrawalReceipt, OperatorReceiptProof } from "./types.js";
+import type {
+  DepositLocator,
+  RecordWithdrawalPayout,
+  VoteDeposit,
+  VotePauseBridge,
+  VoteWithdrawalPaid,
+  VoteWithdrawalPayoutDead,
+} from "./types.js";
+
+/** Signs the exact preimage the core produced with the operator's registry
+ *  key. May be asynchronous, so a key behind an HSM, KMS or remote signer
+ *  (an `ExternalSigner.signRaw`) works unchanged. */
+export type BridgeMessageSigner = (
+  message: Uint8Array,
+) => Uint8Array | Promise<Uint8Array>;
+
+/** What every bridge-operator message binds, its signed tail: the
+ *  deployment and chain it cannot replay across, the registry epoch whose
+ *  roster judges it, and the time it is signed at. */
+export interface BridgeBinding {
+  /** The bridge deployment, as the registry names it (32 bytes). */
+  deploymentId: Uint8Array;
+  /** The chain id the envelope is signed for (32 bytes). */
+  chainId: Uint8Array;
+  registryEpoch: bigint;
+  /** The Unix time in milliseconds the operator signs at: the latest
+   *  committed block's time, not the wall clock, which runs ahead of block
+   *  time. The engine refuses a message signed after the executing block, a
+   *  vote lifetime (24 hours) or more before it, or at or before the
+   *  bridge's last unpause; a vote counts for its lifetime from here. */
+  signedAtMs: bigint;
+}
+
+/** A binding with its signing time fixed: the one a preimage is built
+ *  from. */
+export type SignedBridgeBinding = BridgeBinding;
+
+/** The binding, refused when a JavaScript caller leaves out its signing
+ *  time: no default exists, since the wall clock runs ahead of block time. */
+function signedBinding(binding: BridgeBinding): SignedBridgeBinding {
+  if (typeof binding.signedAtMs !== "bigint") {
+    throw new TypeError(
+      "signedAtMs is required: pass the latest committed block's time",
+    );
+  }
+  return binding;
+}
+
+/** One recorded Squads payout of one withdrawal. */
+export interface PayoutIdentity {
+  withdrawalId: bigint;
+  /** The governed Squads vault the payout pays from (32 bytes). */
+  vault: Uint8Array;
+  /** The Squads vault-transaction index of the payout proposal. */
+  squadsTransactionIndex: number;
+}
+
+/** One bridge-operator message's signed fields, tagged by `kind`. */
+export type BridgeMessageFields =
+  | ({ kind: "withdrawalPaid" } & PayoutIdentity & SignedBridgeBinding)
+  | ({ kind: "withdrawalPayoutDead" } & PayoutIdentity & SignedBridgeBinding)
+  | ({ kind: "payoutRecord" } & PayoutIdentity & SignedBridgeBinding)
+  | ({
+      kind: "deposit";
+      /** The receiving engine account (20 bytes). */
+      owner: Uint8Array;
+      amountMicroUsdc: bigint;
+      /** The observed Solana transfer signature (64 bytes). */
+      solanaTxSig: Uint8Array;
+      /** Absent is the legacy reading (top-level instruction 0). */
+      locator?: DepositLocator | null;
+    } & SignedBridgeBinding)
+  | ({ kind: "pauseBridge" } & SignedBridgeBinding);
+
+/** The canonical bytes an operator signs for one message: the wire
+ *  contract's `vote_message` / `record_message`. Throws naming the field on
+ *  a wrong-width input, on a byte field that is not a `Uint8Array`, on a
+ *  field the message does not have, and on an inner index of 65535 (the
+ *  wire's absent-index sentinel). */
+export function bridgeMessagePreimage(fields: BridgeMessageFields): Uint8Array {
+  return getWasm().bridge_message_preimage(fields);
+}
+
+async function sign(
+  signer: BridgeMessageSigner,
+  fields: BridgeMessageFields,
+): Promise<Uint8Array> {
+  const signature = await signer(bridgeMessagePreimage(fields));
+  if (!(signature instanceof Uint8Array) || signature.length !== 64) {
+    throw new Error(
+      "bridge message signer must return exactly 64 signature bytes",
+    );
+  }
+  return signature;
+}
+
+/** Sign one operator's vote to settle a withdrawal `Paid`. */
+export async function signVoteWithdrawalPaid(
+  signer: BridgeMessageSigner,
+  payout: PayoutIdentity,
+  binding: BridgeBinding,
+): Promise<VoteWithdrawalPaid> {
+  const fields = { ...payout, ...signedBinding(binding) };
+  return {
+    ...fields,
+    signature: await sign(signer, { ...fields, kind: "withdrawalPaid" }),
+  };
+}
+
+/** Sign one operator's record of the Squads payout it proposed.
+ *  `binding.registryEpoch` is the epoch the proposal was made under. */
+export async function signRecordWithdrawalPayout(
+  signer: BridgeMessageSigner,
+  payout: PayoutIdentity,
+  binding: BridgeBinding,
+): Promise<RecordWithdrawalPayout> {
+  const fields = { ...payout, ...signedBinding(binding) };
+  return {
+    ...fields,
+    signature: await sign(signer, { ...fields, kind: "payoutRecord" }),
+  };
+}
+
+/** Sign one operator's vote that a recorded payout was rejected, so its
+ *  slot can be cleared. */
+export async function signVoteWithdrawalPayoutDead(
+  signer: BridgeMessageSigner,
+  payout: PayoutIdentity,
+  binding: BridgeBinding,
+): Promise<VoteWithdrawalPayoutDead> {
+  const fields = { ...payout, ...signedBinding(binding) };
+  return {
+    ...fields,
+    signature: await sign(signer, { ...fields, kind: "withdrawalPayoutDead" }),
+  };
+}
+
+/** Sign one operator's vote to credit one observed deposit. */
+export async function signVoteDeposit(
+  signer: BridgeMessageSigner,
+  deposit: Omit<
+    VoteDeposit,
+    "deploymentId" | "chainId" | "registryEpoch" | "signedAtMs" | "signature"
+  >,
+  binding: BridgeBinding,
+): Promise<VoteDeposit> {
+  const fields = { ...deposit, ...signedBinding(binding) };
+  return {
+    ...fields,
+    signature: await sign(signer, { ...fields, kind: "deposit" }),
+  };
+}
+
+/** Sign one operator's vote to pause the bridge: the signed tail alone,
+ *  its time included. */
+export async function signVotePauseBridge(
+  signer: BridgeMessageSigner,
+  binding: BridgeBinding,
+): Promise<VotePauseBridge> {
+  const fields = signedBinding(binding);
+  return {
+    ...fields,
+    signature: await sign(signer, { ...fields, kind: "pauseBridge" }),
+  };
+}
 
 /** Total length of a canonical `WithdrawalAuthorizationV1`. Fixed by construction. */
 export const WITHDRAWAL_AUTHORIZATION_LEN = 221;
-/** Total length of a canonical `BridgeReceiptV1`. Fixed by construction. */
-export const BRIDGE_RECEIPT_LEN = 327;
 
 /**
- * What a quorum signs to release one withdrawal — mirror of
+ * What the withdrawal authorization binds — mirror of
  * `bridge_core::WithdrawalAuthorizationV1` (frozen v1 contract, 221 encoded
- * bytes). The engine's `AuthorizeWithdrawal` binds
- * {@link withdrawalAuthorizationDigest} of these fields to the withdrawal's
- * sidecar; a terminal receipt must carry the same digest.
+ * bytes). `withdrawalAuthorizationDigest` of these fields is the
+ * authorization identity the engine binds to a withdrawal's sidecar.
  */
 export interface WithdrawalAuthorizationV1 {
   /** 32-byte deployment identity — pins Proof/Solana genesis, program, mint. */
@@ -82,76 +245,9 @@ export function withdrawalAuthorizationDigest(
   return getWasm().withdrawal_authorization_digest(auth);
 }
 
-/**
- * The canonical `BridgeReceiptV1` bytes — the message the operator quorum
- * signs and the engine re-encodes from the submitted
- * {@link BridgeWithdrawalReceipt} fields before verifying that quorum.
- * Byte-for-byte Rust `encode()`; throws naming the offending field.
- */
-export function encodeBridgeReceipt(
-  receipt: BridgeWithdrawalReceipt,
-): Uint8Array {
-  return getWasm().encode_bridge_receipt(receipt);
-}
-
-/** u8 wire byte for `TerminalState::Paid` (bridge-core frozen discriminants). */
-export const TERMINAL_PAID = 1;
-/** u8 wire byte for `TerminalState::Cancelled`. */
-export const TERMINAL_CANCELLED = 2;
-/** u8 wire byte for `ReceiptQuorumKind::OperatorMOfN`. */
-export const QUORUM_OPERATOR_M_OF_N = 1;
 /** u8 wire byte for `VaultTier::Hot`. */
 export const VAULT_TIER_HOT = 1;
 /** u8 wire byte for `VaultTier::Warm`. */
 export const VAULT_TIER_WARM = 2;
 /** u8 wire byte for `VaultTier::Cold`. */
 export const VAULT_TIER_COLD = 3;
-
-/**
- * Sign the canonical receipt bytes with a subset of the operator registry
- * and assemble the wire proof: one bit per signer in the registry's index
- * order (`ceil(registryLen / 8)` bytes, unused high bits zero), one 64-byte
- * signature per set bit in ascending set-bit order. The engine resolves the
- * bitmap against the bound epoch's registry and verifies each signature
- * strictly (canonical `s`, no small-order keys) — a signature from a key
- * outside the registry fails closed there.
- *
- * @param message the canonical bytes from {@link encodeBridgeReceipt}
- * @param signers secret keys (32-byte seeds) with their registry indexes
- * @param registryLen the bound registry's operator count
- * @throws on an out-of-range index, a duplicate index, or an empty signer
- * list — a proof the engine would refuse is refused here, before any wire
- * traffic.
- */
-export function signOperatorReceipt(
-  message: Uint8Array,
-  signers: ReadonlyArray<{ index: number; secretKey: Uint8Array }>,
-  registryLen: number,
-): OperatorReceiptProof {
-  if (signers.length === 0) {
-    throw new Error("an operator proof needs at least one signer");
-  }
-  if (!Number.isInteger(registryLen) || registryLen < 1) {
-    throw new Error(
-      `registryLen must be a positive integer, got ${registryLen}`,
-    );
-  }
-  const bitmap = new Uint8Array(Math.ceil(registryLen / 8));
-  const seen = new Set<number>();
-  const byIndex = [...signers].sort((a, b) => a.index - b.index);
-  const signatures: Uint8Array[] = [];
-  for (const { index, secretKey } of byIndex) {
-    if (!Number.isInteger(index) || index < 0 || index >= registryLen) {
-      throw new Error(
-        `signer index ${index} out of range for registry of ${registryLen}`,
-      );
-    }
-    if (seen.has(index)) {
-      throw new Error(`duplicate signer index ${index}`);
-    }
-    seen.add(index);
-    bitmap[index >> 3] |= 1 << (index % 8);
-    signatures.push(sign(secretKey, message));
-  }
-  return { signerBitmap: bitmap, signatures };
-}

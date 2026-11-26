@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { ExchangeClient } from "./client.js";
 import { generateKeypair, pubkeyToOwner } from "./crypto.js";
-import { Side, type Action, type TxResult } from "./types.js";
+import { Side, type AccountInfo, type Action, type TxResult } from "./types.js";
 
 function clientWithKey() {
   const { privateKey, publicKey } = generateKeypair();
@@ -136,14 +136,51 @@ describe("convenience action builders", () => {
     });
   });
 
-  it("closePosition maps market + owner", async () => {
+  it("marketOrder passes a worst price through", async () => {
+    const { client } = clientWithKey();
+    const spy = captureSubmit(client);
+    await client.marketOrder({
+      market: 3,
+      side: Side.Buy,
+      quantity: 5n,
+      worstPrice: 101_000n,
+    });
+    expect(spy.mock.calls[0][0].data).toMatchObject({ worstPrice: 101_000n });
+  });
+
+  it("closePosition sends a reduce-only market order against the position", async () => {
     const { client, owner } = clientWithKey();
     const spy = captureSubmit(client);
-    await client.closePosition(9);
+    vi.spyOn(client, "queryAccount").mockResolvedValue({
+      positions: [
+        { market: 4, side: "Sell", size: 2n },
+        { market: 9, side: "Buy", size: 7n },
+      ],
+    } as unknown as AccountInfo);
+    const closed = await client.closePosition(9);
+    expect(closed.kind).toBe("sent");
     expect(spy.mock.calls[0][0]).toEqual({
-      type: "ClosePosition",
-      data: { market: 9, owner },
+      type: "MarketOrder",
+      data: {
+        market: 9,
+        owner,
+        side: Side.Sell,
+        quantity: 7n,
+        reduceOnly: true,
+      },
     });
+  });
+
+  it("closePosition on a flat account sends nothing", async () => {
+    const { client } = clientWithKey();
+    const spy = captureSubmit(client);
+    vi.spyOn(client, "queryAccount").mockResolvedValue({
+      positions: [{ market: 4, side: "Sell", size: 2n }],
+    } as unknown as AccountInfo);
+    expect(await client.closePosition(9)).toEqual({ kind: "nothingToClose" });
+    vi.spyOn(client, "queryAccount").mockResolvedValue(null);
+    expect(await client.closePosition(9)).toEqual({ kind: "nothingToClose" });
+    expect(spy).not.toHaveBeenCalled();
   });
 
   it("throws a clear error when no signer key is loaded", async () => {
@@ -246,58 +283,27 @@ describe("pre-fill SL/TP limbs on order builders", () => {
   });
 });
 
-describe("operator-receipt submission methods", () => {
-  it("authorizeWithdrawal maps to the 0x24 action, proof intact", async () => {
+describe("bridge-operator message submission", () => {
+  // Operators submit their signed bridge messages through `submitTx`; there
+  // are no per-message convenience methods.
+  it("submits an operator vote through the generic path", async () => {
     const { client } = clientWithKey();
     const spy = captureSubmit(client);
 
-    const params = {
-      authorization: new Uint8Array(221).fill(1),
-      proof: {
-        signerBitmap: new Uint8Array([0b1]),
-        signatures: [new Uint8Array(64)],
+    const action = {
+      type: "VoteWithdrawalPaid",
+      data: {
+        withdrawalId: 777n,
+        vault: new Uint8Array(32).fill(0xb2),
+        squadsTransactionIndex: 11,
+        deploymentId: new Uint8Array(32).fill(0xa1),
+        chainId: new Uint8Array(32).fill(0xc7),
+        registryEpoch: 3n,
+        signedAtMs: 1_700_000_000_123n,
+        signature: new Uint8Array(64).fill(0x5c),
       },
-    };
-    await client.authorizeWithdrawal(params);
-
-    const action = spy.mock.calls[0][0];
-    expect(action.type).toBe("AuthorizeWithdrawal");
-    expect(action.data).toBe(params);
-  });
-
-  it("confirmWithdrawalReceipt / failWithdrawalReceipt map to 0x22 / 0x23", async () => {
-    const { client } = clientWithKey();
-    const spy = captureSubmit(client);
-
-    const params = {
-      receipt: {
-        deploymentId: new Uint8Array(32),
-        authorizationDigest: new Uint8Array(32),
-        withdrawalId: 1n,
-        terminalState: 1,
-        vaultTier: 1,
-        proofOwner: new Uint8Array(20),
-        destinationOwner: new Uint8Array(32),
-        destinationTokenAcct: new Uint8Array(32),
-        amountMicroUsdc: 1n,
-        feeMicroUsdc: 0n,
-        authorizationSignerEpoch: 1n,
-        solanaTxSignature: new Uint8Array(64),
-        finalizedSlot: 1n,
-        finalizedBlockhash: new Uint8Array(32),
-        receiptQuorumKind: 1,
-        receiptAuthorityEpoch: 1n,
-      },
-      proof: {
-        signerBitmap: new Uint8Array([0b1]),
-        signatures: [new Uint8Array(64)],
-      },
-    };
-    await client.confirmWithdrawalReceipt(params);
-    await client.failWithdrawalReceipt(params);
-
-    expect(spy.mock.calls[0][0].type).toBe("ConfirmWithdrawalReceipt");
-    expect(spy.mock.calls[1][0].type).toBe("FailWithdrawalReceipt");
-    expect(spy.mock.calls[0][0].data).toBe(params);
+    } as const;
+    await client.submitTx(action);
+    expect(spy.mock.calls[0][0]).toEqual(action);
   });
 });

@@ -109,8 +109,9 @@ try {
   ready,
 } from "@proof-labs/trading-sdk";
 
+// A single order encodes as a one-entry PlaceOrders.
 const expected =
-  "9b01dc00140101010101010101010101010101010101010101a3427579640ac0c2c2a3477463c0c0";
+  "92dc00140101010101010101010101010101010101010101919801a34275790a81a54c696d69749364a3477463c2c2c0c0c0";
 const expectedTrigger =
   "9607dc0014cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca50393ce000173184b0b93ce0001adb0320c09";
 const result = document.querySelector("#result");

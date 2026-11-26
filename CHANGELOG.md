@@ -7,8 +7,152 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking, all SDKs (needs proof-wire 14):** `RecordWithdrawalPayout` is
+  signed by the recording operator's registry key instead of an envelope
+  signer named as the lease holder: `holder` is gone, and the record carries
+  `deploymentId`, `chainId` and `signature`. Build it with
+  `signRecordWithdrawalPayout` / `RecordWithdrawalPayout.sign`.
+- **Breaking, all SDKs:** `SetOperatorReceiptRegistry` carries only
+  `operatorKeys`, one per operator; TypeScript refuses a key named twice.
+- **Rust and the conformance runners:** proof-wire is pinned to the wire 14
+  pre-merge mirror of exchange #1450 by full commit hash.
+- **Breaking, all SDKs, bridge operators:** every bridge-operator message
+  signs its time. The five messages end in one signed tail, `deploymentId`,
+  `chainId`, `registryEpoch` and `signedAtMs` (`signed_at_ms`, 8 bytes
+  big-endian), and every payload carries `signedAtMs` between
+  `registryEpoch` and `signature`. The pause vote's body is now empty: its
+  time moved into the tail, so `VotePauseBridge` lists `signedAtMs` after
+  `registryEpoch`.
+  - TypeScript: `BridgeBinding.signedAtMs` is required: pass the latest
+    committed block's time, since the wall clock runs ahead of block time and
+    the engine refuses a message signed after its block;
+    `signVotePauseBridge(signer, binding)` drops its separate time argument.
+    `bridgeMessagePreimage` takes a `SignedBridgeBinding`.
+  - Rust: `BridgeBinding` carries `signed_at_ms`;
+    `sign_vote_pause_bridge(signer, binding)` drops its separate argument and
+    `BridgeMessage::PauseBridge` holds only the binding.
+  - Python: each `.sign` and each `*_message` builder takes `signed_at_ms`
+    as a required last argument (the latest committed block's time), and `vote_pause_bridge_message` and
+    `VotePauseBridge.sign` take the binding first.
+  - The engine refuses a message signed after the executing block, 24 hours
+    or more before it, or at or before the bridge's last unpause (codes 146
+    and 148, carrying proof-wire's `SignedTimeRefusal`), and a stored vote
+    stops counting 24 hours after its signing time or once an unpause
+    postdates it.
+
+- **Breaking, TypeScript and Python:** the authorities read no longer exposes the retired
+  composite-feeder and scheduled-operations lists. `AuthoritiesSnapshot` carries
+  `relayer`, `oracle`, `custody` and `marketParams` (`market_params` in Python);
+  the engine's six-slot response is still checked in full and the two retired
+  slots are dropped. `AuthorityDomain` no longer offers `CexComposite` or
+  `ScheduledOps`; an `UpdateAuthoritySet` naming either decodes as
+  `RetiredAuthoritySetUpdate` and `isSubmittableAdminAction` rejects it; Python's
+  `is_submittable_admin_action` and the proposal builders refuse it too. The
+  wire format is unchanged, and the Rust crates keep proof-wire's six-field
+  `AuthoritiesSnapshot` until proof-wire changes.
+
 ### Added
 
+- **All SDKs, bridge operators (needs proof-wire 14):** sign the five
+  bridge-operator messages with the operator's registry key. The core builds
+  every preimage from the wire contract, so Rust, TypeScript and Python sign
+  the engine's bytes; the shared `conformance/vote-preimages.ndjson` pins them,
+  including an absent locator, a top-level-only locator and the largest ids.
+  - `VoteWithdrawalPaid` (0x30), `RecordWithdrawalPayout` (0x31),
+    `VoteDeposit` (0x32), `VotePauseBridge` (0x33) and
+    `VoteWithdrawalPayoutDead` (0x34).
+  - TypeScript: `signVoteWithdrawalPaid`, `signRecordWithdrawalPayout`,
+    `signVoteWithdrawalPayoutDead`, `signVoteDeposit`, `signVotePauseBridge`
+    and `bridgeMessagePreimage`. The signer may be asynchronous, so an
+    `ExternalSigner.signRaw` works unchanged, and must return 64 bytes.
+  - Rust: `bridge_votes::sign_*` and `BridgeMessage::preimage`, typed with
+    proof-wire's bridge newtypes.
+  - Python: `VoteWithdrawalPaid.sign`, `RecordWithdrawalPayout.sign`,
+    `VoteWithdrawalPayoutDead.sign`, `VoteDeposit.sign`,
+    `VotePauseBridge.sign` and `bridge_message_preimage`. A key handle signs
+    in Rust with `SigningHandle.sign_bridge_message`; an `ExternalSigner`
+    signs the core-built preimage; its signature must be 64 bytes and verify
+    against its `public_key`. Byte fields must be `bytes`.
+  - Every binding refuses, before signing: a field of the wrong width, a
+    byte field given as text or a number, a field the message does not
+    have, and an inner index of 65535 (the wire's absent-index sentinel).
+- **All SDKs:** the pending-withdrawals read lists each row's
+  `clearedPayouts` (`cleared_payouts` in Python): the payouts, by vault and
+  Squads transaction index, that a Dead threshold cleared and a Paid vote may
+  still name; a view without the field reads as none cleared. The pending
+  withdrawal and deposit votes carry the `signedAtMs` their signature
+  covers, and a parked deposit's cause can be `BalanceOverflow` (the owner's
+  balance cannot hold it). The engine refuses a payout record past the most
+  cleared payouts one withdrawal may hold as 148
+  (`ClearedPayoutLimitReached`), and reports a Dead vote refused because
+  another operator voted the payout Paid as a `bridge_vote_conflict` with
+  reason `payout_voted_paid`.
+- **All SDKs:** the bridge reads `/v2/bridge/status`, `/v2/bridge/payout-config`,
+  `/v2/bridge/registry[/{epoch}]`, `/v2/bridge/pending-withdrawals`,
+  `/v2/bridge/pending-deposits`, `/v2/bridge/agreed-deposits` and
+  `/v2/bridge/parked-deposits` (TypeScript `queryBridge*` / `queryPending*` /
+  `queryAgreedDeposits` / `queryParkedDeposits`, Python `bridge_*` /
+  `pending_*` / `agreed_deposits` / `parked_deposits`). A `nextCursor` is
+  already in the route's cursor form; pass it back verbatim. A status,
+  verdict or park cause this SDK does not name reads as `Unknown` in both
+  languages. These routes are served by the node; until api-gateway routes
+  them, read them direct-node (`useGateway: false`).
+- **All SDKs:** the admin quorum's bridge controls `PauseBridge` (inner tag
+  0x20), `SetBridgePayoutConfig` (0x21: the Squads vault every payout record
+  must name, and its rent wallet) and `SetDepositReceiptLimit` (0x22: the caps
+  on vote-credited deposits), and `SetWithdrawalPolicy` (37: the flat
+  withdrawal fee and the minimum net withdrawal). TypeScript and Python
+  refuse what the engine refuses: a payout config with a zero address or
+  whose rent wallet is the vault, a receipt-limit window under one second or
+  a per-deposit maximum above the window cap, and a minimum withdrawal below
+  the fee, and a proposal of an admin action this SDK does not
+  know now fails to decode instead of reaching the caller.
+- **Errors:** 143 to 151, 153 and 154 are named (`UserImAboveNotional`,
+  `BridgePaused`, `WithdrawalPayoutCleared`, `BridgeVoteInvalid`,
+  `BridgeUnauthorizedOperator`, `BridgePayoutReportInvalid`,
+  `WithdrawalQuarantined`, `WithdrawalPayoutSlotOccupied`,
+  `DepositReceiptLimitExceeded`, `OwnerPendingWithdrawalsFull`,
+  `PayoutRecordedForAnotherWithdrawal`).
+- **All SDKs:** the admin quorum's `SetAccountFeeOverride` (inner tag 36),
+  which sets one account's taker and maker fee, the fee tier a market maker
+  trades at. A `ProposeAdminAction` carries `AccountFeeOverrideChange`
+  (`account`, `takerFeeBps`, `makerFeeBps`, `seq`): the engine's outer
+  `SetAccountFeeOverride` without its `signer`, because the quorum is the
+  authorization. The engine refuses a fee above 10,000 basis points that is
+  not the revert sentinel `0xFFFF_FFFF` (code 42), and a `seq` at or below
+  the account's stored one (code 43), at proposal and again at execution.
+  Needs the proof-wire release that carries tag 36.
+  - TypeScript (MINOR): `AdminAction` gains the `SetAccountFeeOverride`
+    variant, with the `AccountFeeOverrideChange` type, and a tag-36 proposal
+    reads back under that kind in `decodeAdminAction`,
+    `decodeProposalDisplayInfo` and `decodeProposalPage`. The fee-range check
+    (code 42) runs before encoding and again when a stored action is decoded;
+    only the engine checks `seq`, which needs the stored sequence. An
+    exhaustive `switch` on `action.kind` (one that assigns the remainder to
+    `never`) or a `Record<AdminAction["kind"], …>` table needs a new entry.
+  - Rust: `governance` re-exports `AccountFeeOverrideChange`. proof-wire's
+    `AdminAction` is not `#[non_exhaustive]`, so an exhaustive `match` on it
+    needs a new arm.
+  - Python: `ProposeAdminAction(action={"SetAccountFeeOverride": {...}})`.
+  - Tested against the engine's frozen `propose_set_account_fee_override.hex`
+    in all three languages.
+- **Per-proposal thresholds:** from the engine release that carries
+  exchange #1593, each proposal takes its threshold from its action's
+  severity when it is made (stop 1, low impact 2, high impact 3, with low
+  and high never below the registry's count, and never more than the
+  registry has members), so proposals in one registry
+  can need different counts. Use `ProposalDisplayInfo.threshold`, the
+  proposal's own count. The counts are engine constants: there is no
+  action or read for a table. Error 157 (`AuthorityDomainRetired`) is named
+  too, and Rust now names 156 (`PostOnlyNotResting`), which TypeScript
+  already did.
+- **`SettleEvent` docs:** from the engine release that carries exchange
+  #1573, the quorum also settles an event without an oracle rule
+  (`RelayerAttested`, or no source) from its settlement time; a price event
+  still waits for its resolution window to close. No code change: the SDK
+  never restricted `SettleEvent` to price events.
 - **Rust core:** `market_snapshot::decode_snapshot_view` decodes a complete
   `GET /v2/markets-snapshot` body, bound to a chain, into proof-wire's
   `query_v2` view (`market_snapshot::MarketsSnapshotView`). A record that is
@@ -24,6 +168,91 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **Python:** `ExchangeClient.account_v2(owner=None)`.
   - **Rust (`proof-sdk-rs`):** `InfoClient::account_v2`; the core exports
     `query::decode_account_view`, `AccountView` and `PositionSummary`.
+
+### Changed
+
+- **Breaking (Python):** a transaction the engine refused is returned with its
+  non-zero `code` instead of raising `EngineError`, as in TypeScript and Rust.
+- **Breaking (Rust):** `UnfilledReason` is the SDK's own open enum,
+  `Known(<wire reason>)` or `Other(String)`, so a reason newer than the SDK
+  still reads. `PlacementOutcome` and `OrderPlacement` are no longer `Copy`.
+- **Breaking (Rust):** `Error::OrderResultUnreadable` carries only the
+  receipt; the event that did not parse is in `receipt.events`.
+
+### Fixed
+
+- Python order results reject malformed or out-of-range integer attributes,
+  a non-string `unfilled` reason and non-string order lists as
+  `OrderResultUnreadable`, preserving the executed transaction's hash for
+  reconciliation.
+
+### Removed
+
+- **Breaking, all SDKs:** the receipt and payout-lease surfaces, retired by the
+  vote model. Operators sign votes and payout records instead (see Added).
+  - Actions: `AuthorizeWithdrawal` (0x24), `ConfirmWithdrawalReceipt` (0x22),
+    `FailWithdrawalReceipt` (0x23) and `ClaimWithdrawalPayout` (0x2E), with
+    `OperatorReceiptProof` and `BridgeWithdrawalReceipt`.
+  - TypeScript: `authorizeWithdrawal`, `confirmWithdrawalReceipt`,
+    `failWithdrawalReceipt`, `encodeBridgeReceipt`, `signOperatorReceipt`,
+    `BRIDGE_RECEIPT_LEN`, `TERMINAL_PAID`, `TERMINAL_CANCELLED` and
+    `QUORUM_OPERATOR_M_OF_N`. Python: the same actions and their builders.
+  - Errors 91 (`WithdrawalPayoutLeaseActive`), 128
+    (`WithdrawalPayoutLeaseNotHeld`) and 129
+    (`WithdrawalPayoutRecordLimitReached`): the wire no longer assigns them.
+    73 and 74 stay named while the wire maps them.
+
+## [15.0.0] — 2026-11-24
+
+npm only: a MAJOR on proof-wire 13.0.0 (exchange 2.28.0). Every order and
+cancel is a batch of 1 to 100, and a refused order is its outcome rather than
+a failed transaction. The Rust and Python entries above stay under
+[Unreleased].
+
+### Added
+
+- Orders and cancels in batches (exchange#1513, #1514): place or cancel 1 to
+  100 orders for one account under one signature (`placeOrders` /
+  `cancelOrders` / `cancelClientOrders`, Python and Rust `place_orders` /
+  `cancel_orders` / `cancel_client_orders`). An order is a limit or a market
+  order; a market order takes an optional worst price.
+- Every order call returns each order's outcome in the order sent: resting,
+  executed (with requested and filled quantity and why the rest did not
+  fill) or rejected with its error code; a cancel is cancelled or refused.
+  Without an executed verdict (pending, or refused as a whole) the outcomes
+  are `null` (TypeScript) or `None` (Python, Rust).
+- An executed transaction whose order event does not decode is reported as
+  executed and unreadable (TypeScript `outcome: "unreadable"`, Python and
+  Rust `OrderResultUnreadable`): reconcile by hash, never resubmit.
+- **TypeScript:** `ExchangeClient.queryOrderSummaries(address?, filters)` reads
+  `GET /v1/history/order-summaries/{owner}`: the owner's fills grouped into one
+  row per order (`OrderSummary`: order id, market, side, filled quantity,
+  average price, notional, fees, first/last fill time, fill count), filtered by
+  a market list (`markets`, at most 200), `fromMs`/`toMs` and an opaque cursor.
+  `orderSummarySearchParams` and `decodeOrderSummaryPage` are exported.
+- Error code 156 `PostOnlyNotResting`: a post-only order that would not rest.
+
+### Changed
+
+- **Breaking:** every order call is a batch; a single order is a batch of
+  one. A rejected order or refused cancel no longer fails the transaction: it
+  is its outcome. Single-order calls return the batch result (`{ tx, orders }`
+  / `PlaceOrdersResult`; Rust `Submitted::placements`): read `orders[0]`.
+  Code that detects a refused order with `tx.code !== 0` / `code != 0` now
+  misses it: check each order's outcome. A non-zero transaction code remains
+  for a batch refused as a whole (for example an agent without authority for
+  the owner), which applies nothing.
+- **Breaking:** close position reads the position and sends a reduce-only
+  market order against it, returning the close's outcome (code 12 when
+  unaffordable, 35 when the position went flat first) or nothing-to-close on
+  a flat account. The raw `ClosePosition` action is gone.
+- Basket legs and account-stream order updates read from `orders_placed` /
+  `orders_cancelled`; the retired single-order events still decode from
+  history. Needs the wire of exchange#1514.
+- **Breaking (TypeScript):** `orderPlacements`, `orderCancellations`,
+  `placementsOf` and `cancellationsOf` take only the transaction. They read a
+  transaction you submitted; for another, match the event's `owner`.
+- Pins proof-wire 13.0.0 (exchange 2.28.0).
 
 ## [14.1.0] — 2026-11-20
 
