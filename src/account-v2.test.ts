@@ -83,6 +83,16 @@ describe("account v2 valuation", () => {
     expect(transport.mock.calls[0][1]?.method ?? "GET").toBe("GET");
     expect(transport.mock.calls[0][1]?.body).toBeUndefined();
   });
+  it.each(["0x", "0X"])(
+    "strips a %s owner prefix like the sibling owner reads",
+    async (prefix) => {
+      const { client, transport } = clientFor();
+      await client.queryAccountV2(prefix + owner.toUpperCase());
+      expect(transport.mock.calls[0][0]).toBe(
+        `https://gateway.example/v2/account/${owner}`,
+      );
+    },
+  );
   it("tells a stale leg and an unpriced position apart from live ones", async () => {
     const live = (await clientFor().client.queryAccountV2(owner))?.account;
     expect(live).toMatchObject({
