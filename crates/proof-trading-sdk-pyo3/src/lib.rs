@@ -328,6 +328,13 @@ fn decode_markets_snapshot<'py>(
     Ok(dict)
 }
 
+/// Decode map-encoded account valuation through the shared wire type.
+#[pyfunction]
+fn decode_account_view<'py>(py: Python<'py>, bytes: &[u8]) -> PyResult<Bound<'py, PyAny>> {
+    let view = core_sdk::query::decode_account_view(bytes).map_err(PyValueError::new_err)?;
+    pythonize::pythonize(py, &view).map_err(map_pythonize_err)
+}
+
 /// Decode raw settled account facts through the shared wire AccountStateInfo.
 #[pyfunction]
 fn decode_account_state<'py>(
@@ -681,6 +688,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?;
     m.add_function(wrap_pyfunction!(decode_markets_snapshot, m)?)?;
     m.add_function(wrap_pyfunction!(decode_account_state, m)?)?;
+    m.add_function(wrap_pyfunction!(decode_account_view, m)?)?;
     m.add(
         "MAX_BOOK_BYTES",
         core_sdk::finalized_orderbook::MAX_BOOK_BYTES,

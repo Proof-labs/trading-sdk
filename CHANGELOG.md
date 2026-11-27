@@ -14,6 +14,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `query_v2` view (`market_snapshot::MarketsSnapshotView`). A record that is
   not a map keyed by field name, or a name that is not a string (a status
   sent as the integer 0, for example), refuses the whole read.
+- **Version 2 account, all three SDKs:** reads `GET /v2/account/{owner}`
+  through the gateway (needs api-gateway 16.1.0) and decodes proof-wire's
+  map-encoded `query_v2::Account`. Each position carries `valuation_price`, the
+  exact micro-USDC valuation reference, and `book_restricted`, a boolean for
+  conditionals only; both read as null when an older node omits them. A
+  position's `stale` names why it is valued at its last accepted price (null
+  when live); `unpriced` lists positions with no price, left out of the
+  totals, and `totals_complete` is false while any exist. A
+  positional v1 account is refused. Returns `{ height, account }` with the same
+  response's height; missing or malformed heights fail. Existing account methods
+  are unchanged.
+  - **TypeScript:** `queryAccountV2(ownerHex?)` returning `AccountSnapshot | null`;
+    height must be a safe nonnegative integer.
+  - **Python:** `ExchangeClient.account_v2(owner=None)`.
+  - **Rust (`proof-sdk-rs`):** `InfoClient::account_v2` returning `AccountSnapshot`;
+    the core exports
+    `query::decode_account_view`, `AccountView` and `PositionSummary`.
 
 ### Changed
 
