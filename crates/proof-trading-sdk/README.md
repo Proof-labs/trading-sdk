@@ -62,7 +62,8 @@ let action = Action::PlaceOrders(PlaceOrders::one(PlaceOrder {
 }));
 
 // `seq` is a wall-clock-millisecond timestamp nonce, unique per signature.
-// The engine accepts it only within [block time - 2 days, block time + 1 day].
+// The engine accepts an order's nonce only within [block time - 1 minute,
+// block time + 1 day]. Other actions get 2 days back.
 let seq = std::time::SystemTime::now()
     .duration_since(std::time::UNIX_EPOCH)?
     .as_millis() as u64;

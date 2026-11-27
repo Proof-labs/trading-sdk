@@ -764,8 +764,9 @@ export class ExchangeClient {
    * Algorithm: `max(now_ms, last_nonce + 1, floor + 1)`. Refuse allocation
    * above `now_ms + 60s` without rewinding or repeating the last nonce.
    *
-   * Engine window: `[block_time - 2 days, block_time + 1 day]`. All four
-   * rejection modes (too old, too far future, replay, below oldest) map to
+   * Engine window: `[block_time - 2 days, block_time + 1 day]`, except that
+   * orders, cancels and position triggers may trail block time by 1 minute
+   * only. All four rejection modes (too old, too far future, replay, below oldest) map to
    * code 21 `InvalidNonce`. Nonces are burned on success — no rewinding.
    *
    * Concurrent calls on this client reserve distinct nonces synchronously.

@@ -2,7 +2,9 @@
 //!
 //! The engine's rule for `seq`, per key:
 //!
-//! - it must fall within `[block time - 2 days, block time + 1 day]`;
+//! - it must fall within `[block time - 2 days, block time + 1 day]`, and
+//!   orders, cancels and position triggers may trail block time by 1 minute
+//!   only;
 //! - it must not repeat one the engine remembers (code 21, `InvalidNonce`);
 //! - the engine remembers the last 100. Once it holds 100, anything at or
 //!   below the oldest of them is refused (`NonceBelowOldest`).

@@ -20,8 +20,9 @@ class NonceAllocator:
     recent set full and ``nonce <= oldest``   ``InvalidNonce`` (21)
     ========================================  ============================
 
-    All four map to code 21. Nonces are burned on success — only invalid
-    signatures skip the burn.
+    Orders, cancels and position triggers are too old after 1 minute, not
+    2 days. All four map to code 21. A rejected nonce is not burned; a
+    transaction that fails after its nonce is accepted still burns it.
 
     Allocation algorithm::
 

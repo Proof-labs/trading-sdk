@@ -334,7 +334,8 @@ while let Some(msg) = rx.recv().await {                      // or use it as a `
 ## Nonces
 
 `seq` is a millisecond timestamp. The engine accepts it within 2 days behind
-and 1 day ahead of block time, refuses one it remembers, and remembers the last
+(1 minute for orders, cancels and position triggers) and 1 day ahead of block
+time, refuses one it remembers, and remembers the last
 100 per key: once it holds 100, anything at or below the oldest is refused. So
 order does not matter within the last 100. Send roughly in nonce order and keep
 fewer than 100 signed-but-unsent transactions per key, or a cancel signed early
