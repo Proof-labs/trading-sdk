@@ -9,6 +9,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **TypeScript:** `ExchangeClient.queryHoldingSteps(owners, filters)` reads
+  an account's holdings at fixed steps from the bucketed position read
+  (`GET /v1/history/positions/{owner}?interval=…&transitions=true`) in one
+  request: several owners, optional `markets`, `fromMs`/`toMs`, `stepMs`,
+  `limit` and `cursor`. Each `HoldingStep` carries owner, market, side (or
+  `null`), size, entry price, block height and time, and `kind` — `"step"`
+  for a market's last snapshot in a step, `"close"` at the exact snapshot of
+  a held→flat change, `"open"` at the first sampled snapshot after a
+  flat→held change. `holdingStepOwners`, `holdingStepSearchParams` and
+  `decodeHoldingStepPage` are exported. Needs Proof-labs/indexer#475 (after
+  #474) deployed.
 - **Rust core:** `market_snapshot::decode_snapshot_view` decodes a complete
   `GET /v2/markets-snapshot` body, bound to a chain, into proof-wire's
   `query_v2` view (`market_snapshot::MarketsSnapshotView`). A record that is
@@ -63,17 +74,6 @@ stores them. The Rust and Python entries above stay under [Unreleased].
 
 ### Added
 
-- **TypeScript:** `ExchangeClient.queryHoldingSteps(owners, filters)` reads
-  an account's holdings at fixed steps from the bucketed position read
-  (`GET /v1/history/positions/{owner}?interval=…&transitions=true`) in one
-  request: several owners, optional `markets`, `fromMs`/`toMs`, `stepMs`,
-  `limit` and `cursor`. Each `HoldingStep` carries owner, market, side (or
-  `null`), size, entry price, block height and time, and `kind` — `"step"`
-  for a market's last snapshot in a step, `"close"` at the exact snapshot of
-  a held→flat change, `"open"` at the first sampled snapshot after a
-  flat→held change. `holdingStepOwners`, `holdingStepSearchParams` and
-  `decodeHoldingStepPage` are exported. Needs Proof-labs/indexer#475 (after
-  #474) deployed.
 - **All SDKs, bridge operators (needs proof-wire 14):** sign the five
   bridge-operator messages with the operator's registry key. The core builds
   every preimage from the wire contract, so Rust, TypeScript and Python sign
