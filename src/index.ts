@@ -413,7 +413,10 @@ export {
   type HoldingStep,
   type HoldingStepFilters,
   type HoldingStepKind,
+  type HoldingStepClose,
+  type HoldingStepOpen,
   type HoldingStepPage,
+  type HoldingStepStep,
 } from "./holding-steps.js";
 
 export {

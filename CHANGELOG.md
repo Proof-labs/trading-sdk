@@ -17,7 +17,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `null`), size, entry price, block height and time, and `kind` — `"step"`
   for a market's last snapshot in a step, `"close"` at the exact snapshot of
   a held→flat change, `"open"` at the first sampled snapshot after a
-  flat→held change. `holdingStepOwners`, `holdingStepSearchParams` and
+  flat→held change. `HoldingStep` is a union on `kind`
+  (`HoldingStepStep`, `HoldingStepOpen`, `HoldingStepClose`): a `close` has
+  `side: null` and `size: "0"`, an `open` always has a side. With `markets`,
+  a read over the server's 20,000 owner × market × step probe budget is
+  refused before fetching. `holdingStepOwners`, `holdingStepSearchParams` and
   `decodeHoldingStepPage` are exported. Needs Proof-labs/indexer#475 (after
   #474) deployed.
 - **Rust core:** `market_snapshot::decode_snapshot_view` decodes a complete

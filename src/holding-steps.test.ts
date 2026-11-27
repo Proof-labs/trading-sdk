@@ -174,6 +174,68 @@ describe("holding step limit", () => {
   });
 });
 
+describe("holding step probe budget", () => {
+  // The indexer refuses owners × markets × steps above 20,000, counting steps
+  // epoch-aligned with both ends included. One-hour steps from an aligned
+  // `fromMs`: 100 owner × market pairs × 200 steps is 20,000 probes.
+  const hour = 3_600_000;
+  const at = (owners: string[], markets: number, steps: number) =>
+    holdingStepSearchParams(owners, {
+      fromMs,
+      toMs: fromMs + (steps - 1) * hour,
+      stepMs: hour,
+      markets: Array.from({ length: markets }, (_, i) => i),
+    });
+  const two = [main, sub];
+
+  it("accepts 20,000 probes", () => {
+    expect(() => at(two, 50, 200)).not.toThrow();
+  });
+
+  it("refuses 20,001 probes", () => {
+    // 3 owners × 59 markets × 113 steps.
+    const third = "00000000000000000000000000000000000000aa";
+    expect(() => at([...two, third], 59, 113)).toThrow(
+      /Too many holding step probes/,
+    );
+    expect(() => at([...two, third], 59, 112)).not.toThrow();
+  });
+
+  it("counts the step that `toMs` falls in", () => {
+    // 100 pairs × 201 steps: `toMs` sits at the start of a 201st step.
+    expect(() =>
+      holdingStepSearchParams(two, {
+        fromMs,
+        toMs: fromMs + 200 * hour,
+        stepMs: hour,
+        markets: Array.from({ length: 50 }, (_, i) => i),
+      }),
+    ).toThrow(/Too many holding step probes/);
+  });
+
+  it("counts distinct owners and markets", () => {
+    // 1 owner × 100 markets × 200 steps once duplicates are removed.
+    expect(() =>
+      holdingStepSearchParams([main, main.toUpperCase()], {
+        fromMs,
+        toMs: fromMs + 199 * hour,
+        stepMs: hour,
+        markets: [...Array.from({ length: 100 }, (_, i) => i), 0, 1],
+      }),
+    ).not.toThrow();
+  });
+
+  it("is not checked without markets", () => {
+    expect(() =>
+      holdingStepSearchParams(two, {
+        fromMs,
+        toMs: fromMs + 4999 * hour,
+        stepMs: hour,
+      }),
+    ).not.toThrow();
+  });
+});
+
 describe("decodeHoldingStepPage", () => {
   const row = recorded.positions[0];
   const decode = (patch: Record<string, unknown>, markets?: number[]) =>
@@ -202,8 +264,19 @@ describe("decodeHoldingStepPage", () => {
     });
   });
 
+  it("narrows each kind", () => {
+    const step = decode({ kind: "step", size: "0", side: null, entry_px: null })
+      .steps[0];
+    expect(step).toMatchObject({ kind: "step", side: null, size: "0" });
+    const open = decode({ kind: "open" }).steps[0];
+    if (open.kind !== "open") throw new Error("expected an open");
+    // No null check needed: an open always has a side.
+    expect(open.side.toUpperCase()).toBe("BUY");
+  });
+
   it.each([
     ["an unknown kind", { kind: "bucket" }],
+    ["a flat step with a side", { kind: "step", size: "0" }],
     ["a missing kind", { kind: undefined }],
     ["a close with a size", { kind: "close" }],
     ["a close with a side", { kind: "close", size: "0" }],

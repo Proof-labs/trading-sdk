@@ -1905,10 +1905,19 @@ export class ExchangeClient {
    * exact snapshot (`"close"`) and every flat→held change at the first
    * sampled snapshot after it (`"open"`). A `close` with no held row before
    * it is a holding opened and closed between two samples, or one opened
-   * before `fromMs` that closed within one sample of it; rows come newest
-   * first, so judge this only after reading every page. Pass `nextCursor`
-   * back as `cursor` with the same owners and filters. Reads
+   * before `fromMs` that closed before the end of the first step; a lone
+   * `close` in the first step is ambiguous unless the read starts one step
+   * earlier. Rows come newest first, so judge this only after reading every
+   * page. Pass `nextCursor` back as `cursor` with the same owners and
+   * filters. Reads
    * `GET /v1/history/positions/{owner}?interval=…&transitions=true`.
+   *
+   * The server refuses a read of more than 20,000 owner × market × step
+   * probes with 400 `read_too_large`. With `markets` the SDK checks this
+   * before fetching. Without `markets` the server counts every market the
+   * owners have ever held, so the same request can start failing as the
+   * account ages; pass the held markets explicitly, split owners or markets
+   * across calls, or widen `stepMs`.
    */
   async queryHoldingSteps(
     owners: readonly string[],

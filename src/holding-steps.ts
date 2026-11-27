@@ -20,6 +20,11 @@ export const HOLDING_STEPS_MAX_MARKETS = 200;
 /** Also the default page size; keeps a page under the gateway's 1 MiB cap. */
 export const HOLDING_STEPS_MAX_LIMIT = 3000;
 export const HOLDING_STEPS_MAX_STEPS = 5000;
+/** Owners × markets × steps (as the indexer counts steps: epoch-aligned,
+ *  both ends included) one read may take; above it the server answers 400
+ *  `read_too_large`. Checked only when `markets` is given: without it the
+ *  server counts every market the owners have ever held. */
+const HOLDING_STEPS_MAX_PROBES = 20_000;
 
 /** Query parameters. Keep every one fixed while following `cursor`. */
 export interface HoldingStepFilters {
@@ -41,26 +46,11 @@ export interface HoldingStepFilters {
 /** Why a row is in the result. */
 export type HoldingStepKind = "step" | "open" | "close";
 
-/** One position snapshot. */
-export interface HoldingStep {
+/** The fields every row carries. */
+interface HoldingStepBase {
   /** 20-byte owner address, lowercase hex without `0x`. */
   owner: string;
   market: number;
-  /** `step`: the market's last snapshot in a step. `close`: the exact
-   *  snapshot where it went flat (`size` "0", `side` null). `open`: the first
-   *  sampled snapshot after the market was flat, so up to one sample interval
-   *  after the real open. A step that is also an open or close is one row
-   *  with the open/close kind.
-   *
-   *  A `close` with no held row before it (older, so later in the result) is
-   *  either a holding opened and closed between two samples, or one opened
-   *  before `fromMs` that closed within one sample of it. Rows come newest
-   *  first, so judge this only after reading every page. */
-  kind: HoldingStepKind;
-  /** `null` when flat. */
-  side: "buy" | "sell" | null;
-  /** Integer contracts as decimal text; "0" when flat. */
-  size: string;
   /** Micro-USDC decimal text as served (may carry a fraction); `null` when
    *  the closed position has no entry price. */
   entryPrice: string | null;
@@ -70,6 +60,42 @@ export interface HoldingStep {
   /** `blockTime` in Unix epoch milliseconds. */
   timestamp: number;
 }
+
+/** A held position: a side and a non-zero size (integer contracts as
+ *  decimal text). */
+interface Held {
+  side: "buy" | "sell";
+  size: string;
+}
+
+/** A flat position: no side, size "0". */
+interface Flat {
+  side: null;
+  size: "0";
+}
+
+/** The market's last snapshot in a step, held or flat. */
+export type HoldingStepStep = HoldingStepBase & { kind: "step" } & (
+    Held | Flat
+  );
+
+/** The first sampled snapshot after the market was flat, so up to one
+ *  sample interval after the real open. */
+export type HoldingStepOpen = HoldingStepBase & { kind: "open" } & Held;
+
+/** The exact snapshot where the market went flat.
+ *
+ *  A `close` with no held row before it (older, so later in the result) is
+ *  either a holding opened and closed between two samples, or one opened
+ *  before `fromMs` that closed before the end of the first step: the first
+ *  step's row is then the close itself. A lone `close` in the first step is
+ *  therefore ambiguous unless the read starts one step earlier. Rows come
+ *  newest first, so judge this only after reading every page. */
+export type HoldingStepClose = HoldingStepBase & { kind: "close" } & Flat;
+
+/** One position snapshot, by `kind`. A step that is also an open or close is
+ *  one row with the open or close kind. */
+export type HoldingStep = HoldingStepStep | HoldingStepOpen | HoldingStepClose;
 
 export interface HoldingStepPage {
   steps: HoldingStep[];
@@ -100,7 +126,8 @@ export function holdingStepSearchParams(
   owners: readonly string[],
   filters: HoldingStepFilters,
 ): URLSearchParams {
-  const others = holdingStepOwners(owners).slice(1);
+  const list = holdingStepOwners(owners);
+  const others = list.slice(1);
   if (filters.fromMs === undefined || filters.toMs === undefined) {
     throw new Error("Invalid history range");
   }
@@ -132,6 +159,16 @@ export function holdingStepSearchParams(
       !markets.every(validMarket)
     ) {
       throw new Error("Invalid holding step markets");
+    }
+    // As the indexer counts probes: epoch-aligned steps, both ends included.
+    // Its floor of whole seconds divided by whole-second steps equals this
+    // floor of milliseconds divided by the step in milliseconds.
+    const buckets =
+      Math.floor(filters.toMs / stepMs) -
+      Math.floor(filters.fromMs / stepMs) +
+      1;
+    if (list.length * markets.length * buckets > HOLDING_STEPS_MAX_PROBES) {
+      throw new Error("Too many holding step probes");
     }
     params.set("markets", markets.join(","));
   }
@@ -165,23 +202,25 @@ export function decodeHoldingStepPage(
       fail(`${at}.size must be an integer string`);
     }
     // The shared decoder admits only buy/sell in either case.
-    const side = (position.side?.toLowerCase() ?? null) as HoldingStep["side"];
-    const flat = size === "0";
-    if (kind === "close" && (!flat || side !== null)) {
-      fail(`${at} is a close with a size or side`);
-    }
-    if (kind === "open" && flat) fail(`${at} is an open with no size`);
-    return {
+    const side = (position.side?.toLowerCase() ?? null) as
+      "buy" | "sell" | null;
+    const base = {
       owner: position.owner,
       market: position.market,
-      kind,
-      side,
-      size,
       entryPrice: position.entryPrice,
       blockHeight: position.blockHeight,
       blockTime: position.blockTime,
       timestamp: Date.parse(position.blockTime),
     };
+    if (size === "0") {
+      if (side !== null) fail(`${at} is flat with a side`);
+      if (kind === "open") fail(`${at} is an open with no size`);
+      return { ...base, kind, side, size: "0" };
+    }
+    // The shared decoder refuses a non-zero size without a side.
+    if (side === null) fail(`${at} is held with no side`);
+    if (kind === "close") fail(`${at} is a close with a size or side`);
+    return { ...base, kind, side, size };
   });
   return { steps, nextCursor: page.nextCursor };
 }
