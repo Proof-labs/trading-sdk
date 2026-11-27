@@ -39,11 +39,11 @@ GOLDEN_CANCEL_ALL_FOR_ACCOUNT_UNSCOPED = (
 # externally-tagged bare-string domain and two address-list fields, over the
 # same golden context. Same authority as above; the TypeScript suite pins
 # the identical constants.
-GOLDEN_UPDATE_AUTHORITY_SET_ADD = (
-    "9f344b099fd7771f04d62f186595a5d58165463dcc638adcef71be9c35ea889f"
-)
 GOLDEN_UPDATE_AUTHORITY_SET_REMOVE = (
     "a4f4828d828c4e3e5f50ea883568e63b21d49c620f4848542dec498a292b847d"
+)
+GOLDEN_RETIRED_MARKET_PARAMS = (
+    "9f344b099fd7771f04d62f186595a5d58165463dcc638adcef71be9c35ea889f"
 )
 GOLDEN_RETIRED_COMPOSITE = (
     "c1a08060eea60d4f64a05d0660593871de7860757b87290fcbf47ff4029b6ce5"
@@ -187,7 +187,7 @@ class TestAdminProposalContentHash:
         [
             ("CexComposite", [bytes([0xB2] * 20)], [], GOLDEN_RETIRED_COMPOSITE),
             # Retired with the single-key market settings (release 18.0).
-            ("MarketParams", [bytes([0xB2] * 20)], [], GOLDEN_UPDATE_AUTHORITY_SET_ADD),
+            ("MarketParams", [bytes([0xB2] * 20)], [], GOLDEN_RETIRED_MARKET_PARAMS),
             ("ScheduledOps", [], [bytes([0xC3] * 20)], GOLDEN_RETIRED_SCHEDULED),
         ],
     )
