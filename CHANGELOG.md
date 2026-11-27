@@ -57,20 +57,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **TypeScript:** `ExchangeClient.queryHoldingSteps(owners, filters)` reads
   an account's holdings at fixed steps from the bucketed position read
-  (`GET /v1/history/positions/{owner}?interval=…`) in one request: up to 16
-  owners, optional `markets`, `fromMs`/`toMs`, `stepMs`, `limit` and
-  `cursor`. Each `HoldingStep` carries owner, market, side (or `null`),
-  size, entry price, block height and time, and `kind` — `"step"` for a
-  market's last snapshot in a step, `"close"` at the exact snapshot of a
-  held→flat change, `"open"` at the first sampled snapshot after a flat→held
-  change (up to 250 heights late; a holding between two samples has only its
-  `close`). Sends `transitions=true`; `limit` is at most and defaults to
-  3000 (gateway 1 MiB response cap), `markets` at most 200.
-  `holdingStepSearchParams`, `decodeHoldingStepPage`,
-  `HOLDING_STEPS_MAX_OWNERS`, `HOLDING_STEPS_MAX_MARKETS` and
-  `HOLDING_STEPS_MAX_LIMIT` are exported. Needs the indexer and gateway
-  support for multiple owners, `markets` and `transitions`
-  (Proof-labs/indexer#472, Proof-labs/api-gateway#375).
+  (`GET /v1/history/positions/{owner}?interval=…&transitions=true`) in one
+  request: several owners, optional `markets`, `fromMs`/`toMs`, `stepMs`,
+  `limit` and `cursor`. Each `HoldingStep` carries owner, market, side (or
+  `null`), size, entry price, block height and time, and `kind` — `"step"`
+  for a market's last snapshot in a step, `"close"` at the exact snapshot of
+  a held→flat change, `"open"` at the first sampled snapshot after a
+  flat→held change. `holdingStepOwners`, `holdingStepSearchParams` and
+  `decodeHoldingStepPage` are exported. Needs Proof-labs/indexer#475 (after
+  #474) deployed.
 - **All SDKs, bridge operators (needs proof-wire 14):** sign the five
   bridge-operator messages with the operator's registry key. The core builds
   every preimage from the wire contract, so Rust, TypeScript and Python sign

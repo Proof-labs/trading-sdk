@@ -92,22 +92,26 @@ export function historyInterval(value: string): string {
   return value;
 }
 
-/** Current indexer page. Closed positions have no side or entry price. */
+/** Current indexer page. Closed positions have no side or entry price.
+ * Every row must belong to one of `owners` and, when given, `markets`. */
 export function decodeHistoryPositionsPage(
   value: unknown,
-  owner: string,
-  market?: number,
+  owners: string | readonly string[],
+  markets?: number | readonly number[],
 ): HistoryPositionsPage {
+  const ownerSet = new Set(typeof owners === "string" ? [owners] : owners);
+  const marketSet =
+    markets === undefined
+      ? undefined
+      : new Set<unknown>(typeof markets === "number" ? [markets] : markets);
   const page = object(value);
   if (!Array.isArray(page.positions) || typeof page.next_cursor !== "string")
     throw new Error("Invalid position history page");
   return {
     positions: page.positions.map((value) => {
       const row = object(value);
-      if (
-        row.owner !== owner ||
-        (market !== undefined && row.market !== market)
-      )
+      const owner = row.owner as string;
+      if (!ownerSet.has(owner) || (marketSet && !marketSet.has(row.market)))
         throw new Error("Position history scope mismatch");
       const blockTime = text(row.block_time, "block_time");
       time(blockTime);

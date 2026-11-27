@@ -8,33 +8,31 @@
  */
 
 import {
+  decodeHistoryPositionsPage,
   historyInterval,
   historyOwner,
   historySearchParams,
 } from "./history.js";
 
-/** The most owners one read may name: an account and its sub-accounts. */
+// Server limits, checked before fetching. Internal: the server owns them.
 export const HOLDING_STEPS_MAX_OWNERS = 16;
-
-/** The most markets one read may name. */
 export const HOLDING_STEPS_MAX_MARKETS = 200;
-
-/** The largest page, and the default: the gateway caps a response at 1 MiB
- *  (about 4000 rows). */
+/** Also the default page size; keeps a page under the gateway's 1 MiB cap. */
 export const HOLDING_STEPS_MAX_LIMIT = 3000;
+export const HOLDING_STEPS_MAX_STEPS = 5000;
 
 /** Query parameters. Keep every one fixed while following `cursor`. */
 export interface HoldingStepFilters {
-  /** Market ids to read; omit for every market. At most 200. */
+  /** Market ids to read; omit for every market. */
   markets?: readonly number[];
   /** Inclusive lower bound, Unix epoch milliseconds. */
   fromMs: number;
   /** Exclusive upper bound, Unix epoch milliseconds. */
   toMs: number;
-  /** Step width in milliseconds: whole seconds, at most 365 days. Steps are
-   *  epoch-aligned by the indexer. */
+  /** Step width in milliseconds, whole seconds. Steps are epoch-aligned by
+   *  the indexer. */
   stepMs: number;
-  /** Page size, 1 to 3000; defaults to 3000. */
+  /** Page size; defaults to the largest the SDK sends. */
   limit?: number;
   /** A previous page's non-empty `nextCursor`. */
   cursor?: string;
@@ -50,11 +48,14 @@ export interface HoldingStep {
   market: number;
   /** `step`: the market's last snapshot in a step. `close`: the exact
    *  snapshot where it went flat (`size` "0", `side` null). `open`: the first
-   *  sampled snapshot after the market was flat — the indexer samples every
-   *  250 heights, so it can trail the real open by up to that much. A holding
-   *  that opened and closed between two samples has only its `close`: read a
-   *  `close` with no held row before it as held for a moment before it. A
-   *  step that is also an open or close is one row with the open/close kind. */
+   *  sampled snapshot after the market was flat, so up to one sample interval
+   *  after the real open. A step that is also an open or close is one row
+   *  with the open/close kind.
+   *
+   *  A `close` with no held row before it (older, so later in the result) is
+   *  either a holding opened and closed between two samples, or one opened
+   *  before `fromMs` that closed within one sample of it. Rows come newest
+   *  first, so judge this only after reading every page. */
   kind: HoldingStepKind;
   /** `null` when flat. */
   side: "buy" | "sell" | null;
@@ -78,25 +79,6 @@ export interface HoldingStepPage {
 
 function fail(problem: string): never {
   throw new Error(`holding steps decode: ${problem}`);
-}
-
-function object(value: unknown, name: string): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    fail(`${name} must be an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function text(value: unknown, name: string): string {
-  if (typeof value !== "string") fail(`${name} must be a string`);
-  return value;
-}
-
-function count(value: unknown, name: string): number {
-  if (!Number.isSafeInteger(value) || (value as number) < 0) {
-    fail(`${name} must be a non-negative safe integer`);
-  }
-  return value as number;
 }
 
 function validMarket(market: number): boolean {
@@ -136,6 +118,12 @@ export function holdingStepSearchParams(
     throw new Error("Invalid holding step width");
   }
   params.set("interval", historyInterval(`${stepMs / 1000}s`));
+  // As the indexer counts steps: whole seconds of the window (truncated),
+  // integer-divided by the step in seconds.
+  const spanSeconds = Math.trunc((filters.toMs - filters.fromMs) / 1000);
+  if (Math.trunc(spanSeconds / (stepMs / 1000)) > HOLDING_STEPS_MAX_STEPS) {
+    throw new Error("Too many holding steps");
+  }
   if (filters.markets !== undefined) {
     const markets = [...new Set(filters.markets)].sort((a, b) => a - b);
     if (
@@ -153,70 +141,47 @@ export function holdingStepSearchParams(
 }
 
 /** Decode one page, checking each row against the requested owners and
- *  markets. A malformed row throws rather than being skipped. */
+ *  markets. A malformed row throws rather than being skipped. Rows decode
+ *  as in `queryHistoryPositionsPage`, plus `kind` and `timestamp`. */
 export function decodeHoldingStepPage(
   value: unknown,
   owners: readonly string[],
   markets?: readonly number[],
 ): HoldingStepPage {
-  const ownerSet = new Set(holdingStepOwners(owners));
-  const marketSet = markets === undefined ? undefined : new Set(markets);
-  const page = object(value, "page");
-  if (!Array.isArray(page.positions)) fail("positions must be an array");
-  const nextCursor = text(page.next_cursor, "next_cursor");
-  const steps = page.positions.map((value, index): HoldingStep => {
+  const page = decodeHistoryPositionsPage(
+    value,
+    holdingStepOwners(owners),
+    markets,
+  );
+  const raw = (value as { positions: Record<string, unknown>[] }).positions;
+  const steps = page.positions.map((position, index): HoldingStep => {
     const at = `positions[${index}]`;
-    const row = object(value, at);
-    const owner = text(row.owner, `${at}.owner`);
-    const market = count(row.market, `${at}.market`);
-    if (!ownerSet.has(owner) || (marketSet && !marketSet.has(market))) {
-      fail(`${at} is outside the requested owners or markets`);
-    }
-    const kind = text(row.kind, `${at}.kind`);
+    const kind = raw[index].kind;
     if (kind !== "step" && kind !== "open" && kind !== "close") {
       fail(`${at}.kind must be "step", "open" or "close"`);
     }
-    const rawSide = row.side === null ? null : text(row.side, `${at}.side`);
-    const side = rawSide === null ? null : rawSide.toLowerCase();
-    if (side !== null && side !== "buy" && side !== "sell") {
-      fail(`${at}.side must be "buy", "sell" or null`);
-    }
-    const size = text(row.size, `${at}.size`);
+    const { size } = position;
     if (!/^(0|[1-9][0-9]*)$/.test(size)) {
       fail(`${at}.size must be an integer string`);
     }
-    const entryPrice =
-      row.entry_px === null ? null : text(row.entry_px, `${at}.entry_px`);
-    if (entryPrice !== null && !/^\d+(?:\.\d+)?$/.test(entryPrice)) {
-      fail(`${at}.entry_px must be a decimal string`);
-    }
+    // The shared decoder admits only buy/sell in either case.
+    const side = (position.side?.toLowerCase() ?? null) as HoldingStep["side"];
     const flat = size === "0";
-    if (!flat && (side === null || entryPrice === null)) {
-      fail(`${at} is an open position without side or entry price`);
-    }
     if (kind === "close" && (!flat || side !== null)) {
       fail(`${at} is a close with a size or side`);
     }
     if (kind === "open" && flat) fail(`${at} is an open with no size`);
-    const blockTime = text(row.block_time, `${at}.block_time`);
-    const timestamp = Date.parse(blockTime);
-    if (
-      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/.test(blockTime) ||
-      !Number.isFinite(timestamp)
-    ) {
-      fail(`${at}.block_time must be an RFC3339 UTC timestamp`);
-    }
     return {
-      owner,
-      market,
+      owner: position.owner,
+      market: position.market,
       kind,
       side,
       size,
-      entryPrice,
-      blockHeight: count(row.block_height, `${at}.block_height`),
-      blockTime,
-      timestamp,
+      entryPrice: position.entryPrice,
+      blockHeight: position.blockHeight,
+      blockTime: position.blockTime,
+      timestamp: Date.parse(position.blockTime),
     };
   });
-  return { steps, nextCursor };
+  return { steps, nextCursor: page.nextCursor };
 }

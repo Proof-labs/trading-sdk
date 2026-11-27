@@ -1,18 +1,23 @@
-// queryHoldingSteps against the bucketed position read. The fixture's `step`
-// rows are a DevNet response recorded 2026-11-26 (owner 83a7ff…, 36000s
-// steps); the sub-account `open`/`close` pair is added in the shape of the
-// stepped-holdings contract (Proof-labs/ProofOfBrain#1066), which the indexer
-// does not serve yet.
+// queryHoldingSteps against the bucketed position read.
+//
+// Fixture: one page for owner 83a7ff… and a sub-account, 36000s steps, newest
+// first. Market 3 and 100 `step` rows are real DevNet snapshots; the
+// sub-account's market-3 `open` (sampled height 14,499,500) and `close`
+// (exact height 14,520,031) are a short holding in the contract's row shape,
+// timed at the chain's rate between the recorded rows. The test checks the
+// request URL, `next_cursor`, row count, the full decode of the first row and
+// of the open/close pair, and newest-first order; the other fields are as
+// served and only pass through the decoder's checks.
 
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ExchangeClient } from "./client.js";
 import {
-  HOLDING_STEPS_MAX_OWNERS,
   decodeHoldingStepPage,
   holdingStepSearchParams,
   type HoldingStepPage,
 } from "./index.js";
+import { HOLDING_STEPS_MAX_OWNERS } from "./holding-steps.js";
 
 const recorded = JSON.parse(
   readFileSync(
@@ -77,8 +82,8 @@ describe("queryHoldingSteps", () => {
         size: "0",
         entryPrice: null,
         blockHeight: 14_520_031,
-        blockTime: "2026-11-25T06:40:51.903114Z",
-        timestamp: 1_795_588_851_903,
+        blockTime: "2026-11-25T08:07:53.300358Z",
+        timestamp: 1_795_594_073_300,
       },
       {
         owner: sub,
@@ -87,9 +92,9 @@ describe("queryHoldingSteps", () => {
         side: "sell",
         size: "40",
         entryPrice: "74810000.000000",
-        blockHeight: 14_499_117,
-        blockTime: "2026-11-25T04:12:07.118402Z",
-        timestamp: 1_795_579_927_118,
+        blockHeight: 14_499_500,
+        blockTime: "2026-11-25T06:04:48.197003Z",
+        timestamp: 1_795_586_688_197,
       },
     ]);
     const times = page.steps.map((s) => s.timestamp);
@@ -134,6 +139,8 @@ describe("queryHoldingSteps", () => {
       [[main], { fromMs: toMs }],
       [[main], { limit: 3001 }],
       [[main], { markets: Array.from({ length: 201 }, (_, i) => i) }],
+      // 43,200 one-minute steps in 30 days, over the indexer's 5000.
+      [[main], { stepMs: 60_000 }],
     ];
     for (const [owners, patch] of bad) {
       await expect(
@@ -146,6 +153,24 @@ describe("queryHoldingSteps", () => {
       ).rejects.toThrow();
     }
     expect(calls).toEqual([]);
+  });
+});
+
+describe("holding step limit", () => {
+  // The indexer divides whole seconds of `to - from` by the step in seconds.
+  const at = (spanMs: number) =>
+    holdingStepSearchParams([main], {
+      fromMs,
+      toMs: fromMs + spanMs,
+      stepMs: 1000,
+    });
+
+  it("accepts 5000 steps, including a trailing part-second", () => {
+    expect(() => at(5_000_999)).not.toThrow();
+  });
+
+  it("refuses 5001 steps", () => {
+    expect(() => at(5_001_000)).toThrow(/Too many holding steps/);
   });
 });
 
@@ -180,25 +205,31 @@ describe("decodeHoldingStepPage", () => {
   it.each([
     ["an unknown kind", { kind: "bucket" }],
     ["a missing kind", { kind: undefined }],
-    ["an owner not requested", { owner: sub }],
-    ["a fractional size", { size: "1.5" }],
-    ["an open position without a side", { side: null }],
     ["a close with a size", { kind: "close" }],
     ["a close with a side", { kind: "close", size: "0" }],
     ["an open with no size", { kind: "open", size: "0" }],
-    ["a non-UTC time", { block_time: "2026-11-25T21:59:49+08:00" }],
-    ["a numeric size", { size: 243378 }],
+    ["a size with a leading zero", { size: "0243378" }],
   ])("rejects %s", (_, patch) => {
     expect(() => decode(patch)).toThrow(/holding steps decode/);
   });
 
+  it.each([
+    ["an owner not requested", { owner: sub }],
+    ["a fractional size", { size: "1.5" }],
+    ["an open position without a side", { side: null }],
+    ["a non-UTC time", { block_time: "2026-11-25T21:59:49+08:00" }],
+    ["a numeric size", { size: 243378 }],
+  ])("rejects %s, as the position history decoder does", (_, patch) => {
+    expect(() => decode(patch)).toThrow(/history/i);
+  });
+
   it("rejects a market not requested", () => {
-    expect(() => decode({}, [3])).toThrow(/outside the requested/);
+    expect(() => decode({}, [3])).toThrow(/scope mismatch/);
   });
 
   it("rejects a page without a cursor", () => {
     expect(() => decodeHoldingStepPage({ positions: [] }, [main])).toThrow(
-      /next_cursor/,
+      /position history page/,
     );
   });
 });
