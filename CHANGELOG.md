@@ -46,6 +46,9 @@ stores them. The Rust and Python entries above stay under [Unreleased].
 
 ### Added
 
+- **npm `next` channel:** every green commit on `dev` is published as
+  `<next patch>-next.<run>` under the `next` dist-tag, so a consumer can pin an
+  unreleased SDK before a release. `latest` is unchanged.
 - **All SDKs, bridge operators (needs proof-wire 14):** sign the five
   bridge-operator messages with the operator's registry key. The core builds
   every preimage from the wire contract, so Rust, TypeScript and Python sign

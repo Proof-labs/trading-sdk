@@ -11,6 +11,9 @@ name: publish
 #   wasm-v2.1.0     -> crates.io proof-trading-sdk-wasm
 #   py-v3.0.0       -> PyPI proof-trading-sdk (the maturin wheel + sdist)
 #
+# Unreleased builds of `dev` go to the npm `next` dist-tag from ci.yml's
+# `publish-next` job, not from here.
+#
 # The PyO3 binding is not published to crates.io — it ships only inside the
 # PyPI wheel (py-v*), so it has no tag of its own.
 #

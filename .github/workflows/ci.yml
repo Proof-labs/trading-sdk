@@ -317,3 +317,66 @@ jobs:
           FORMAT_SELECTED: ${{ needs.changes.outputs.format }}
           FORMAT_RESULT: ${{ needs.format.result }}
         run: .github/scripts/verify-ci-gate.sh
+
+  # npm `next` channel (#518): every push to `dev` that passes the gate above is
+  # published as `<next patch>-next.<run>` (for example 15.0.1-next.42) under the
+  # `next` dist-tag, so a consumer can pin an unreleased SDK and go green before
+  # the release. Releases stay in publish.yml (`npm-v*` tag, staged, 2FA); `next`
+  # never becomes `latest`, so `npm install` and `^15` never resolve to it.
+  #
+  # It lives here, not in its own `workflow_run` workflow, because `workflow_run`
+  # fires only for a workflow file on the default branch (`main`), which trails
+  # `dev` until a release promotion. npm trusts this file only in the `npm-next`
+  # environment, which admits the `dev` branch alone; pull-request runs never
+  # reach it. The version is set for the build only and never committed.
+  publish-next:
+    name: npm publish next
+    needs: ci-ok
+    if: >-
+      needs.ci-ok.result == 'success' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    environment: npm-next
+    permissions:
+      contents: read
+      id-token: write # the OIDC token npm trusts, and provenance
+    # Pinned to commits: this job can publish to npm, so a moved tag must not change what runs.
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          check-latest: true
+          registry-url: "https://registry.npmjs.org"
+          cache: npm
+      # Same npm and WASM toolchain as publish.yml's npm job.
+      - name: Upgrade npm
+        run: npm install -g npm@12
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Resolve wasm-bindgen version from the crate graph
+        id: wb
+        run: |
+          cargo generate-lockfile
+          version="$(cargo metadata --format-version 1 | jq -r 'first(.packages[] | select(.name=="wasm-bindgen")).version')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: taiki-e/install-action@073e1fd0bc889c9aee68dbaaa927cde1b5653a83 # v2.90.11
+        with:
+          tool: wasm-bindgen-cli@${{ steps.wb.outputs.version }}
+      - run: npm ci --ignore-scripts
+      - name: Set the next version
+        env:
+          RUN: ${{ github.run_number }}
+        run: |
+          released="$(node -p "require('./package.json').version")"
+          IFS=. read -r major minor patch <<< "$released"
+          version="$major.$minor.$((patch + 1))-next.$RUN"
+          npm version "$version" --no-git-tag-version --ignore-scripts
+          echo "\`@proof-labs/trading-sdk@$version\` from \`$GITHUB_SHA\` (released: $released)" >> "$GITHUB_STEP_SUMMARY"
+      - run: npm run build
+      - name: Publish on the next dist-tag
+        run: npm publish --provenance --access public --tag next
