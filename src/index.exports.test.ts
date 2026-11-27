@@ -115,7 +115,6 @@ it("exports current market-grid and oracle payload types for operator harnesses"
     mmBps: 500,
     takerFeeBps: 5,
     makerFeeBps: 0,
-    signer,
     fundingIntervalMs: 0n,
     maxFundingRateBps: 100,
     szDecimals: 5,
@@ -138,7 +137,14 @@ it("exports current market-grid and oracle payload types for operator harnesses"
     bundle: new Uint8Array([1, 2, 3]),
   };
   const actions: Action[] = [
-    { type: "CreateMarket", data: market },
+    {
+      type: "ProposeAdminAction",
+      data: {
+        proposer: signer,
+        registryVersion: 1n,
+        action: { kind: "CreateMarket", value: market },
+      },
+    },
     { type: "SubmitOracleObservation", data: observation },
     {
       type: "ProposeAdminAction",
@@ -150,7 +156,7 @@ it("exports current market-grid and oracle payload types for operator harnesses"
     },
   ];
   expect(actions.map((action) => action.type)).toEqual([
-    "CreateMarket",
+    "ProposeAdminAction",
     "SubmitOracleObservation",
     "ProposeAdminAction",
   ]);

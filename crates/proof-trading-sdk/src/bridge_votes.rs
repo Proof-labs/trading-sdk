@@ -73,8 +73,8 @@ pub struct DepositObservation {
     pub amount: MicroUsdc,
     pub solana_tx_sig: TxSignature,
     /// `None` is the LEGACY reading (top-level instruction 0, no inner
-    /// index), the same default the wire applies to an absent
-    /// `ConfirmDeposit.locator`.
+    /// index), the same default the wire applied to an absent locator on the
+    /// retired `ConfirmDeposit`.
     pub locator: Option<DepositLocator>,
 }
 

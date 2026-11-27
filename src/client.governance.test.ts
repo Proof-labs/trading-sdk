@@ -41,7 +41,7 @@ describe("ExchangeClient governance reads (W30-11)", () => {
     globalThis.fetch = originalFetch;
   });
 
-  it("queryAuthorities routes through the gateway and decodes all six sets", async () => {
+  it("queryAuthorities routes through the gateway and decodes the three live sets", async () => {
     // Captured from devnet on 2026-09-28: relayer and oracle each hold one
     // signer; the other four sets are empty.
     stubFetch(
@@ -56,13 +56,7 @@ describe("ExchangeClient governance reads (W30-11)", () => {
       "6601e832953d30318b7d1f36386a241b59b7d2d7",
     ]);
     expect(got.custody).toEqual([]);
-    expect(got.marketParams).toEqual([]);
-    expect(Object.keys(got).sort()).toEqual([
-      "custody",
-      "marketParams",
-      "oracle",
-      "relayer",
-    ]);
+    expect(Object.keys(got).sort()).toEqual(["custody", "oracle", "relayer"]);
   });
 
   it("queryAuthorities fails closed on a snapshot that is not six sets", async () => {
@@ -137,7 +131,6 @@ describe("ExchangeClient governance reads (W30-11)", () => {
           500,
           7,
           3,
-          new Array(20).fill(0),
           3_600_000n,
           800,
           9,

@@ -95,7 +95,6 @@ def _cancel_client_orders(i: dict) -> actions.CancelClientOrders:
 
 
 BUILDERS = {
-    "create_market/full": lambda i: actions.CreateMarket(**_admin(i, "signer")),
     "vote_withdrawal_paid/basic": lambda i: actions.VoteWithdrawalPaid(
         **_admin(i, "deployment_id", "chain_id", "signature")
     ),

@@ -8,11 +8,11 @@ import pytest
 
 import proof_trading_sdk as pts
 
-GOLDEN_V3 = "a4de11bbe373974cae0de8f1116681cd7f08ecab07b007bea1067cbd0f19fb4f"
-GOLDEN_V4 = "da916970c56796acd6cc8a67bfba8430598c94dafaf5b1eb54f40479a380be9c"
+GOLDEN_V3 = "5176d48959040cd454aa6b09b4a9a985be3785e68c80594c636bda319d0529ad"
+GOLDEN_V4 = "2aba9bf7ac376e0c62a70752196a642b8761e2fee24ce04b1a5e8459c6b55076"
 # Admin-actions v2 (engine's ``admin_proposal_content_hash_v2_golden_vectors``)
 GOLDEN_ATTACH = "424729ae1b5fbbfd182d4e099ca565a06347fa68fb334fd325725d2a38eaa82a"
-GOLDEN_BATCH = "27b0091972e0da2193ba71736966457ccf2debbbf3b228fa9f3d263f93cbad1b"
+GOLDEN_BATCH = "c3924f50a96cfa232d91df3d07817a2468d2271fa46dc9c4d7e7340d64257a12"
 # The one admin action that is NOT a map: a fieldless unit variant, whose
 # canonical bytes are the bare fixstr "UnpauseBridge". exchange-core has no
 # frozen content-hash vector for this arm yet, so the value comes from the
@@ -78,7 +78,6 @@ def engine_default_create_market() -> dict:
         "mm_bps": 1667,
         "taker_fee_bps": 5,
         "maker_fee_bps": 2,
-        "signer": bytes(20),
         "funding_interval_ms": 60_000,
         "max_funding_rate_bps": 3000,
         "pool_id": 0,
@@ -183,22 +182,12 @@ class TestAdminProposalContentHash:
         h = pts.admin_proposal_content_hash(**kwargs)
         assert h.hex() == GOLDEN_CANCEL_ALL_FOR_ACCOUNT_UNSCOPED
 
-    def test_update_authority_set_add_hash(self):
-        kwargs = golden_kwargs()
-        kwargs["action"] = {
-            "UpdateAuthoritySet": {
-                "domain": "MarketParams",
-                "add": [bytes([0xB2] * 20)],
-                "remove": [],
-            }
-        }
-        h = pts.admin_proposal_content_hash(**kwargs)
-        assert h.hex() == GOLDEN_UPDATE_AUTHORITY_SET_ADD
-
     @pytest.mark.parametrize(
         "domain,add,remove,golden",
         [
             ("CexComposite", [bytes([0xB2] * 20)], [], GOLDEN_RETIRED_COMPOSITE),
+            # Retired with the single-key market settings (release 18.0).
+            ("MarketParams", [bytes([0xB2] * 20)], [], GOLDEN_UPDATE_AUTHORITY_SET_ADD),
             ("ScheduledOps", [], [bytes([0xC3] * 20)], GOLDEN_RETIRED_SCHEDULED),
         ],
     )

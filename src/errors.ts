@@ -56,7 +56,8 @@ export enum ExecErrorCode {
   StateCorruption = 10,
   InsufficientBalance = 11,
   InsufficientMargin = 12,
-  UnauthorizedRelayer = 13,
+  /** The signer is not on the key list the action requires. */
+  UnauthorizedSigner = 13,
   WithdrawalNotFound = 14,
   WithdrawalAlreadyProcessed = 15,
   DuplicateDeposit = 16,
@@ -126,13 +127,15 @@ export enum ExecErrorCode {
   EmergencyRateLimited = 67,
   EmergencyGlobalRateLimited = 68,
   EmergencyActionRetired = 69,
-  AdminActionRequiresProposal = 70,
+  // 70 was AdminActionRequiresProposal, retired with the single-key admin
+  // routes; never reassigned.
   InvalidAdminRegistry = 71,
   BridgeReceiptRegistryInactive = 72,
   BridgeReceiptInvalid = 73,
   BridgeReceiptMismatch = 74,
   WithdrawalBelowMinimum = 75,
-  WithdrawalTerminalGated = 76,
+  // 76 was WithdrawalTerminalGated, retired with the single-signer bridge
+  // terminals; never reassigned.
   /** The block has no certified oracle-policy verdict for the market, so a
    *  mark-dependent action is refused until a later block certifies a price
    *  — the market is stale or unpriceable this block, not misconfigured. */
@@ -227,6 +230,15 @@ export enum ExecErrorCode {
   MarketSettingsChanged = 155,
   PostOnlyNotResting = 156,
   AuthorityDomainRetired = 157,
+  /** A direct `Deposit` or `Withdraw` on a chain with an operator receipt
+   *  registry: only bridge operator votes move money in and out. */
+  DirectCustodyClosed = 158,
+  /** A `ResolveEvent` for an event no `MarketOracle` rule decides: it
+   *  settles only through the admin quorum's `SettleEvent` or `VoidEvent`. */
+  EventSettlesByQuorum = 159,
+  /** An upgrade failed a pending proposal whose stored action no longer
+   *  re-encodes to its own bytes. */
+  NonCanonicalProposal = 160,
   InternalError = 255,
 }
 
@@ -259,8 +271,8 @@ const TABLE: Record<number, ExecErrorInfo> = {
     description: "post-trade equity below initial margin requirement",
   },
   13: {
-    name: "UnauthorizedRelayer",
-    description: "unauthorized relayer signer",
+    name: "UnauthorizedSigner",
+    description: "unauthorized signer",
   },
   14: { name: "WithdrawalNotFound", description: "withdrawal not found" },
   15: {
@@ -479,11 +491,6 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "EmergencyActionRetired",
     description: "this emergency arm was retired; new submissions fail closed",
   },
-  70: {
-    name: "AdminActionRequiresProposal",
-    description:
-      "the signer registry exists — this admin action is proposal-only, even for an authorized relayer",
-  },
   71: {
     name: "InvalidAdminRegistry",
     description:
@@ -508,11 +515,6 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "WithdrawalBelowMinimum",
     description:
       "net withdrawal amount is below the effective minimum (dust-griefing gate)",
-  },
-  76: {
-    name: "WithdrawalTerminalGated",
-    description:
-      "retired legacy relayer terminal submitted at or above the receipt cutover",
   },
   77: {
     name: "UnpricedNoVerdict",
@@ -801,7 +803,22 @@ const TABLE: Record<number, ExecErrorInfo> = {
   157: {
     name: "AuthorityDomainRetired",
     description:
-      "UpdateAuthoritySet names a retired authority list (composite feeder or scheduled operations). No action reads either list; nothing was written.",
+      "UpdateAuthoritySet names a retired authority list (composite feeder, market parameters or scheduled operations). No action reads it; nothing was written.",
+  },
+  158: {
+    name: "DirectCustodyClosed",
+    description:
+      "A direct Deposit or Withdraw on a chain with an operator receipt registry, where only bridge operator votes move money. Deposit through the bridge; withdraw with WithdrawRequest.",
+  },
+  159: {
+    name: "EventSettlesByQuorum",
+    description:
+      "ResolveEvent for an event no MarketOracle rule decides. Settle it through the admin quorum's SettleEvent or VoidEvent.",
+  },
+  160: {
+    name: "NonCanonicalProposal",
+    description:
+      "A pending proposal's stored action still decodes but no longer re-encodes to its own bytes, so it could never be approved; an upgrade failed it. Propose the action again.",
   },
   255: { name: "InternalError", description: "unexpected runtime failure" },
 };

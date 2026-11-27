@@ -28,7 +28,6 @@ function engineDefaultCreateMarket(): AdminAction {
       mmBps: 1667,
       takerFeeBps: 5,
       makerFeeBps: 2,
-      signer: new Uint8Array(20),
       fundingIntervalMs: 60_000n,
       maxFundingRateBps: 3000,
       poolId: 0,
@@ -107,7 +106,7 @@ describe("adminProposalContentHash (engine golden vectors)", () => {
     const hash = adminProposalContentHash(goldenContext());
     expect(hash).toBeInstanceOf(Uint8Array);
     expect(bytesToHex(hash)).toBe(
-      "a4de11bbe373974cae0de8f1116681cd7f08ecab07b007bea1067cbd0f19fb4f",
+      "5176d48959040cd454aa6b09b4a9a985be3785e68c80594c636bda319d0529ad",
     );
   });
 
@@ -117,7 +116,7 @@ describe("adminProposalContentHash (engine golden vectors)", () => {
       registryVersion: 4n,
     });
     expect(bytesToHex(hash)).toBe(
-      "da916970c56796acd6cc8a67bfba8430598c94dafaf5b1eb54f40479a380be9c",
+      "2aba9bf7ac376e0c62a70752196a642b8761e2fee24ce04b1a5e8459c6b55076",
     );
   });
 
@@ -139,7 +138,7 @@ describe("adminProposalContentHash (engine golden vectors)", () => {
       action: engineV2Batch(),
     });
     expect(bytesToHex(hash)).toBe(
-      "27b0091972e0da2193ba71736966457ccf2debbbf3b228fa9f3d263f93cbad1b",
+      "c3924f50a96cfa232d91df3d07817a2468d2271fa46dc9c4d7e7340d64257a12",
     );
   });
 
@@ -196,20 +195,6 @@ describe("adminProposalContentHash (engine golden vectors)", () => {
     // Struct variant with an externally-tagged bare-string domain and two
     // address-array fields — the shapes `CancelAllOrdersForAccount` above
     // doesn't exercise (a plain enum-name string, and `Vec<Address>`).
-    const added = adminProposalContentHash({
-      ...goldenContext(),
-      action: {
-        kind: "UpdateAuthoritySet",
-        value: {
-          domain: "MarketParams",
-          add: [new Uint8Array(20).fill(0xb2)],
-          remove: [],
-        },
-      },
-    });
-    expect(bytesToHex(added)).toBe(
-      "9f344b099fd7771f04d62f186595a5d58165463dcc638adcef71be9c35ea889f",
-    );
     const removed = adminProposalContentHash({
       ...goldenContext(),
       action: {
@@ -235,6 +220,13 @@ describe("adminProposalContentHash (engine golden vectors)", () => {
         add: [new Uint8Array(20).fill(0xb2)],
         remove: [],
         hash: "c1a08060eea60d4f64a05d0660593871de7860757b87290fcbf47ff4029b6ce5",
+      },
+      {
+        // Retired with the single-key market settings (release 18.0).
+        domain: "MarketParams" as const,
+        add: [new Uint8Array(20).fill(0xb2)],
+        remove: [],
+        hash: "9f344b099fd7771f04d62f186595a5d58165463dcc638adcef71be9c35ea889f",
       },
       {
         domain: "ScheduledOps" as const,

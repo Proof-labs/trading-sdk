@@ -42,25 +42,21 @@ class TestCodecVectors:
             seen += 1
         assert seen > 0, "no codec vectors loaded"
 
-    def test_uncapped_create_market_vectors_share_canonical_v2_bytes(self):
-        vectors = {
-            c["case"]: c
-            for _, c in _cases("codec.ndjson")
-            if c["case"].startswith("create_market/")
-        }
-        omitted = vectors["create_market/full"]
-        explicit_zero = vectors[
-            "create_market/max_open_interest_zero_explicit"
-        ]
-        expected = omitted["expect"]["payload_hex"]
-        assert explicit_zero["expect"]["payload_hex"] == expected
-        assert expected.startswith("9e")  # MessagePack fixarray(14)
-
-        for case in (omitted, explicit_zero):
-            payload = _native.encode_action(case["action_type"], case["input"])
+    def test_uncapped_create_market_vectors_share_canonical_bytes(self):
+        vectors = {c["case"]: c for _, c in _cases("codec.ndjson")}
+        case = vectors["propose_admin_action/create_market"]
+        expected = case["expect"]["payload_hex"]
+        market = case["input"]["action"]["CreateMarket"]
+        assert market["max_open_interest"] == 0
+        omitted = {k: v for k, v in market.items() if k != "max_open_interest"}
+        for value in (market, omitted):
+            fields = {**case["input"], "action": {"CreateMarket": value}}
+            payload = _native.encode_action(case["action_type"], fields)
             assert payload.hex() == expected
             decoded = _native.decode_action(case["action_type"], payload)
-            assert decoded["max_open_interest"] == 0
+            created = decoded["action"]["CreateMarket"]
+            assert created["max_open_interest"] == 0
+            assert "signer" not in created
 
 
 class TestSigningVectors:

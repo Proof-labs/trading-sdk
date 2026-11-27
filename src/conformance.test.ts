@@ -338,28 +338,6 @@ function toAction(
           signer: bytes(input.signer),
         },
       };
-    case ActionType.CreateMarket:
-      return {
-        type: "CreateMarket",
-        data: {
-          market: input.market as number,
-          imBps: input.im_bps as number,
-          mmBps: input.mm_bps as number,
-          takerFeeBps: input.taker_fee_bps as number,
-          makerFeeBps: input.maker_fee_bps as number,
-          signer: bytes(input.signer),
-          fundingIntervalMs: big(input.funding_interval_ms),
-          maxFundingRateBps: input.max_funding_rate_bps as number,
-          poolId: input.pool_id as number,
-          szDecimals: input.sz_decimals as number,
-          ticker: input.ticker as string,
-          tickSize: big(input.tick_size),
-          lotSize: big(input.lot_size),
-          ...(input.max_open_interest === undefined
-            ? {}
-            : { maxOpenInterest: big(input.max_open_interest) }),
-        },
-      };
     case ActionType.WithdrawRequest:
       return {
         type: "WithdrawRequest",
@@ -367,45 +345,6 @@ function toAction(
           owner: bytes(input.owner),
           amount: big(input.amount),
           solanaDestination: bytes(input.solana_destination),
-        },
-      };
-    case ActionType.ConfirmDeposit: {
-      const loc = input.locator as Record<string, unknown> | undefined | null;
-      return {
-        type: "ConfirmDeposit",
-        data: {
-          owner: bytes(input.owner),
-          amount: big(input.amount),
-          solanaTxSig: bytes(input.solana_tx_sig),
-          signer: bytes(input.signer),
-          ...(loc
-            ? {
-                locator: {
-                  topIndex: Number(loc.top_index),
-                  innerIndex:
-                    loc.inner_index == null ? null : Number(loc.inner_index),
-                },
-              }
-            : {}),
-        },
-      };
-    }
-    case ActionType.ConfirmWithdrawal:
-      return {
-        type: "ConfirmWithdrawal",
-        data: {
-          withdrawalId: big(input.withdrawal_id),
-          solanaTxSig: bytes(input.solana_tx_sig),
-          signer: bytes(input.signer),
-        },
-      };
-    case ActionType.FailWithdrawal:
-      return {
-        type: "FailWithdrawal",
-        data: {
-          withdrawalId: big(input.withdrawal_id),
-          reason: input.reason as string,
-          signer: bytes(input.signer),
         },
       };
     case ActionType.ApproveAgent:
@@ -476,11 +415,6 @@ function toAction(
           outcome: OUTCOME[input.outcome as string],
           signer: bytes(input.signer),
         },
-      };
-    case ActionType.UpdateMarketFees:
-      return {
-        type: "UpdateMarketFees",
-        data: { ...toMarketSettingsChange(input), signer: bytes(input.signer) },
       };
     case ActionType.SetUserMarketLeverage:
       return {
@@ -654,7 +588,6 @@ function toCreateMarketValue(
     mmBps: m.mm_bps as number,
     takerFeeBps: m.taker_fee_bps as number,
     makerFeeBps: m.maker_fee_bps as number,
-    signer: bytes(m.signer),
     fundingIntervalMs: big(m.funding_interval_ms),
     maxFundingRateBps: m.max_funding_rate_bps as number,
     poolId: m.pool_id as number,
@@ -701,7 +634,6 @@ function toCreateEventValue(
     resolutionWindowMs: big(input.resolution_window_ms),
     takerFeeBps: input.taker_fee_bps as number,
     makerFeeBps: input.maker_fee_bps as number,
-    signer: bytes(input.signer),
     oracleSource: parsedOs,
     description:
       input.description === "" || input.description == null
@@ -1096,15 +1028,15 @@ function toEmergencyAction(
  * nested enums such as `AdminAction` use — struct variants are a one-entry
  * map of snake_case fields, NOT the positional array rmp-serde puts on the
  * wire):
- *   - null / absent  → undefined (encodes as nil; NOT the RelayerAttested
+ *   - null / absent  → undefined (encodes as nil; NOT the QuorumAttested
  *     unit variant, which is the bare string on the wire)
- *   - "RelayerAttested"  → { kind: "RelayerAttested" }
+ *   - "QuorumAttested"  → { kind: "QuorumAttested" }
  *   - {"UnderlyingPriceVsStrike": { strike_price, comparison }}
  *   - {"MarketOracle": { market, strike_price, comparison }}
  */
 function parseOracleSource(v: unknown): any {
   if (typeof v === "string") {
-    if (v === "RelayerAttested") return { kind: "RelayerAttested" };
+    if (v === "QuorumAttested") return { kind: "QuorumAttested" };
     throw new Error(`unknown EventOracleSource variant: ${v}`);
   }
   if (typeof v === "object" && v !== null) {
@@ -1394,7 +1326,7 @@ describe("conformance vectors (TypeScript)", () => {
     // Ratchet for the enum the adapter routes by hand
     // (eventOracleSourceToWasm / eventOracleSourceFromWasm). An absent
     // oracle_source encodes as nil, which is a different wire value from the
-    // RelayerAttested unit variant, so `null` fixtures prove nothing about
+    // QuorumAttested unit variant, so `null` fixtures prove nothing about
     // any variant — each one needs an explicit vector (#98).
     const seenKinds = new Set<string>();
     const seenComparisons = new Set<string>();
@@ -1416,7 +1348,7 @@ describe("conformance vectors (TypeScript)", () => {
     }
     expect([...seenKinds].sort()).toEqual([
       "MarketOracle",
-      "RelayerAttested",
+      "QuorumAttested",
       "UnderlyingPriceVsStrike",
     ]);
     expect([...seenComparisons].sort()).toEqual(Object.keys(PRICE_CMP).sort());
@@ -1428,7 +1360,7 @@ describe("conformance vectors (TypeScript)", () => {
       govTypes.has(c.action_type as number),
     );
     // Guard against the vector file drifting out from under this assertion:
-    // propose (create-market, the perp-plus-attach batch, the attach
+    // propose (create-market uncapped and capped, the perp-plus-attach batch, the attach
     // singleton, six create-event oracle-source shapes, trigger config,
     // unpause-bridge, enable-sub-accounts, set-liquidation-config,
     // set-margin-offset-policy, update-authority-set add and
@@ -1439,7 +1371,7 @@ describe("conformance vectors (TypeScript)", () => {
     // set-deposit-limit, set-market-status, update-market-fees,
     // set-account-fee-override), approve, reject, and the PauseMarket
     // emergency arm.
-    expect(govCases.length).toBe(40);
+    expect(govCases.length).toBe(41);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(
@@ -1452,46 +1384,45 @@ describe("conformance vectors (TypeScript)", () => {
     }
   });
 
-  it("codec: omitted, null, and zero CreateMarket caps share the canonical v2 bytes", () => {
-    const codecCases = cases("codec.ndjson");
-    const omitted = codecCases.find((c) => c.case === "create_market/full");
-    const explicitZero = codecCases.find(
-      (c) => c.case === "create_market/max_open_interest_zero_explicit",
+  it("codec: omitted, null, and zero CreateMarket caps share the canonical bytes", () => {
+    const vector = cases("codec.ndjson").find(
+      (c) => c.case === "propose_admin_action/create_market",
     );
-    if (!omitted || !explicitZero) {
-      throw new Error("missing uncapped CreateMarket conformance vectors");
-    }
-
-    const expected = (omitted.expect as { payload_hex: string }).payload_hex;
-    expect((explicitZero.expect as { payload_hex: string }).payload_hex).toBe(
-      expected,
-    );
-    expect(expected.startsWith("9e")).toBe(true);
-
+    if (!vector) throw new Error("missing proposed CreateMarket vector");
+    const expected = (vector.expect as { payload_hex: string }).payload_hex;
     const base = toAction(
-      omitted.action_type as ActionTypeValue,
-      omitted.input as Record<string, unknown>,
+      vector.action_type as ActionTypeValue,
+      vector.input as Record<string, unknown>,
     );
-    if (base.type !== "CreateMarket") throw new Error("type narrowing");
-    const forms: Action[] = [
-      base,
-      {
-        type: "CreateMarket",
-        data: { ...base.data, maxOpenInterest: null },
-      },
-      {
-        type: "CreateMarket",
-        data: { ...base.data, maxOpenInterest: 0n },
-      },
-    ];
-
-    for (const action of forms) {
+    if (
+      base.type !== "ProposeAdminAction" ||
+      base.data.action.kind !== "CreateMarket"
+    ) {
+      throw new Error("type narrowing");
+    }
+    const market = base.data.action.value;
+    expect(market.maxOpenInterest).toBe(0n);
+    const { maxOpenInterest: _omitted, ...withoutCap } = market;
+    for (const value of [
+      withoutCap,
+      { ...market, maxOpenInterest: null },
+      { ...market, maxOpenInterest: 0n },
+    ]) {
+      const action: Action = {
+        type: "ProposeAdminAction",
+        data: { ...base.data, action: { kind: "CreateMarket", value } },
+      };
       expect(bytesToHex(encodePayloadBytes(action))).toBe(expected);
       const decoded = decodeTx(
         encodeSignedTx(action, 1n, new Uint8Array(32), new Uint8Array(64)),
       ).action;
-      if (decoded.type !== "CreateMarket") throw new Error("type narrowing");
-      expect(decoded.data.maxOpenInterest).toBe(0n);
+      if (
+        decoded.type !== "ProposeAdminAction" ||
+        decoded.data.action.kind !== "CreateMarket"
+      ) {
+        throw new Error("type narrowing");
+      }
+      expect(decoded.data.action.value.maxOpenInterest).toBe(0n);
     }
   });
 

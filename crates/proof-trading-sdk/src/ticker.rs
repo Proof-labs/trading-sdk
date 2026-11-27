@@ -15,9 +15,7 @@
 use std::fmt;
 
 use crate::codec::ActionType;
-use crate::types::{
-    AdminAction, AdminBatchItem, ApproveAdminAction, CreateMarket, ProposeAdminAction,
-};
+use crate::types::{AdminAction, AdminBatchItem, ApproveAdminAction, ProposeAdminAction};
 
 /// Longest ticker the engine accepts, in UTF-8 bytes.
 pub const MAX_TICKER_LEN: usize = 24;
@@ -96,17 +94,13 @@ impl fmt::Display for PayloadTickerError {
 
 impl std::error::Error for PayloadTickerError {}
 
-/// Check every market creation in an encoded action payload: a direct
-/// `CreateMarket`, and a `CreateMarket` proposed or approved through
-/// governance, alone or as an item of an admin `Batch`. Other action types
+/// Check every market creation in an encoded action payload: a `CreateMarket`
+/// proposed or approved through governance, alone or as an item of an admin
+/// `Batch`. Other action types
 /// pass untouched. Bindings call this on the encode path only.
 pub fn check_payload_tickers(action_type: u8, payload: &[u8]) -> Result<(), PayloadTickerError> {
     let decode = |e: rmp_serde::decode::Error| PayloadTickerError::Decode(e.to_string());
     let admin = match action_type {
-        t if t == ActionType::CreateMarket as u8 => {
-            let m: CreateMarket = rmp_serde::from_slice(payload).map_err(decode)?;
-            return validate_ticker(&m.ticker).map_err(PayloadTickerError::Ticker);
-        }
         t if t == ActionType::ProposeAdminAction as u8 => {
             rmp_serde::from_slice::<ProposeAdminAction>(payload)
                 .map_err(decode)?
@@ -249,7 +243,7 @@ mod tests {
     fn market(ticker: &str) -> serde_json::Value {
         json!({
             "market": 42, "im_bps": 1000, "mm_bps": 500, "taker_fee_bps": 5,
-            "maker_fee_bps": 2, "signer": vec![0u8; 20], "funding_interval_ms": 60000u64,
+            "maker_fee_bps": 2, "funding_interval_ms": 60000u64,
             "max_funding_rate_bps": 100, "pool_id": 0, "sz_decimals": 0,
             "ticker": ticker, "max_open_interest": 0u64,
             "tick_size": 1u64, "lot_size": 1u64
@@ -277,11 +271,6 @@ mod tests {
             })
         };
         vec![
-            (
-                "direct CreateMarket",
-                ActionType::CreateMarket as u8,
-                market(ticker),
-            ),
             (
                 "proposed CreateMarket",
                 ActionType::ProposeAdminAction as u8,

@@ -95,7 +95,7 @@ export interface EventView {
         strikePrice: bigint;
         comparison: PriceComparison | "Unknown";
       }
-    | { type: "RelayerAttested" }
+    | { type: "QuorumAttested" }
     | { type: "Unknown" };
   attachedConditionals: {
     underlyingMarket: number;

@@ -445,15 +445,15 @@ const AUTHORITIES_FIELDS = [
   "oracle",
   null,
   "custody",
-  "marketParams",
+  null,
   null,
 ] as const;
 
 /**
  * Decode the engine's six-field `AuthoritiesSnapshot`. Fails closed on any
  * other shape: a partially decoded set would present a missing authority as
- * an empty one. The retired composite-feeder and scheduled-operations slots
- * are validated and dropped.
+ * an empty one. The retired composite-feeder, market-parameters and
+ * scheduled-operations slots are validated and dropped.
  */
 export function decodeAuthoritiesSnapshot(raw: unknown): AuthoritiesSnapshot {
   const fields = toTuple(raw, "authorities", AUTHORITIES_FIELDS.length);

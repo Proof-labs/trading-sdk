@@ -1132,7 +1132,7 @@ class RevokeAgent(Action):
         return {"owner": self.owner, "agent_pubkey": self.agent_pubkey}
 
 
-# ── Relayer-signed actions ────────────────────────────────────────────────────
+# ── Custody-signed actions ────────────────────────────────────────────────────
 
 
 @dataclass
@@ -1178,8 +1178,7 @@ class DepositLocator:
     top-level instruction index plus, for a transfer nested under a CPI, the
     inner instruction index (``None`` when the transfer is itself top-level).
     Two transfers in one transaction share a signature and differ only here.
-    Not an action by itself — the optional trailing field of
-    :class:`ConfirmDeposit`."""
+    Not an action by itself — part of a :class:`VoteDeposit` observation."""
 
     top_index: int
     inner_index: Optional[int] = None
@@ -1197,96 +1196,6 @@ class DepositLocator:
 
 
 @dataclass
-class ConfirmDeposit(Action):
-    ACTION_NAME = "ConfirmDeposit"
-    owner: bytes
-    amount: int
-    solana_tx_sig: bytes
-    signer: bytes
-    locator: Optional[DepositLocator] = None
-
-    def fields(self) -> dict[str, Any]:
-        return {
-            "owner": self.owner,
-            "amount": self.amount,
-            "solana_tx_sig": self.solana_tx_sig,
-            "signer": self.signer,
-            "locator": self.locator.as_wire() if self.locator else None,
-        }
-
-
-@dataclass
-class ConfirmWithdrawal(Action):
-    ACTION_NAME = "ConfirmWithdrawal"
-    withdrawal_id: int
-    solana_tx_sig: bytes
-    signer: bytes
-
-    def fields(self) -> dict[str, Any]:
-        return {
-            "withdrawal_id": self.withdrawal_id,
-            "solana_tx_sig": self.solana_tx_sig,
-            "signer": self.signer,
-        }
-
-
-@dataclass
-class FailWithdrawal(Action):
-    ACTION_NAME = "FailWithdrawal"
-    withdrawal_id: int
-    reason: str
-    signer: bytes
-
-    def fields(self) -> dict[str, Any]:
-        return {
-            "withdrawal_id": self.withdrawal_id,
-            "reason": self.reason,
-            "signer": self.signer,
-        }
-
-
-@dataclass
-class CreateMarket(Action):
-    """Register a perpetual market with its risk parameters (admin).
-    ``max_open_interest`` 0 means uncapped. ``tick_size`` and ``lot_size`` are
-    the price and quantity grids; the engine refuses creation with 0."""
-
-    ACTION_NAME = "CreateMarket"
-    market: int
-    im_bps: int
-    mm_bps: int
-    taker_fee_bps: int
-    maker_fee_bps: int
-    signer: bytes
-    funding_interval_ms: int
-    max_funding_rate_bps: int
-    pool_id: int
-    sz_decimals: int
-    ticker: str
-    tick_size: int
-    lot_size: int
-    max_open_interest: int = 0
-
-    def fields(self) -> dict[str, Any]:
-        return {
-            "market": self.market,
-            "im_bps": self.im_bps,
-            "mm_bps": self.mm_bps,
-            "taker_fee_bps": self.taker_fee_bps,
-            "maker_fee_bps": self.maker_fee_bps,
-            "signer": self.signer,
-            "funding_interval_ms": self.funding_interval_ms,
-            "max_funding_rate_bps": self.max_funding_rate_bps,
-            "pool_id": self.pool_id,
-            "sz_decimals": self.sz_decimals,
-            "ticker": self.ticker,
-            "max_open_interest": self.max_open_interest,
-            "tick_size": self.tick_size,
-            "lot_size": self.lot_size,
-        }
-
-
-@dataclass
 class SetUserMarketLeverage(Action):
     ACTION_NAME = "SetUserMarketLeverage"
     owner: bytes
@@ -1298,56 +1207,6 @@ class SetUserMarketLeverage(Action):
             "owner": self.owner,
             "market": self.market,
             "user_im_bps": self.user_im_bps,
-        }
-
-
-
-@dataclass
-class UpdateMarketFees(Action):
-    ACTION_NAME = "UpdateMarketFees"
-    market: int
-    signer: bytes
-    taker_fee_bps: Optional[int] = None
-    maker_fee_bps: Optional[int] = None
-    max_funding_rate_bps: Optional[int] = None
-    funding_interval_ms: Optional[int] = None
-    max_position_size: Optional[int] = None
-    default_ttl_ms: Optional[int] = None
-    net_delta_margin: Optional[bool] = None
-    tick_size: Optional[int] = None
-    lot_size: Optional[int] = None
-    primary_oracle_signer: Optional[bytes] = None
-    oracle_staleness_ms: Optional[int] = None
-    mark_source_mode: Optional[int] = None
-    max_mark_spread_bps: Optional[int] = None
-    cex_composite_staleness_ms: Optional[int] = None
-    fee_tiers: Optional[list[dict[str, Any]]] = None
-    im_bps: Optional[int] = None
-    mm_bps: Optional[int] = None
-    max_open_interest: Optional[int] = None
-
-    def fields(self) -> dict[str, Any]:
-        return {
-            "market": self.market,
-            "signer": self.signer,
-            "taker_fee_bps": self.taker_fee_bps,
-            "maker_fee_bps": self.maker_fee_bps,
-            "max_funding_rate_bps": self.max_funding_rate_bps,
-            "funding_interval_ms": self.funding_interval_ms,
-            "max_position_size": self.max_position_size,
-            "default_ttl_ms": self.default_ttl_ms,
-            "net_delta_margin": self.net_delta_margin,
-            "tick_size": self.tick_size,
-            "lot_size": self.lot_size,
-            "primary_oracle_signer": self.primary_oracle_signer,
-            "oracle_staleness_ms": self.oracle_staleness_ms,
-            "mark_source_mode": self.mark_source_mode,
-            "max_mark_spread_bps": self.max_mark_spread_bps,
-            "cex_composite_staleness_ms": self.cex_composite_staleness_ms,
-            "fee_tiers": self.fee_tiers,
-            "im_bps": self.im_bps,
-            "mm_bps": self.mm_bps,
-            "max_open_interest": self.max_open_interest,
         }
 
 
@@ -1435,7 +1294,7 @@ RETIRED_ADMIN_KINDS = frozenset({"SetTriggerMarketConfig"})
 
 # Authority lists the engine refuses in an ``UpdateAuthoritySet``. They still
 # decode, so a historical proposal naming one can be read and rejected.
-RETIRED_AUTHORITY_DOMAINS = frozenset({"CexComposite", "ScheduledOps"})
+RETIRED_AUTHORITY_DOMAINS = frozenset({"CexComposite", "MarketParams", "ScheduledOps"})
 
 
 def _admin_action_kind(action: AdminActionWire) -> str | None:
@@ -1676,9 +1535,6 @@ __all__ = [
     "Withdraw",
     "WithdrawRequest",
     "DepositLocator",
-    "ConfirmDeposit",
-    "ConfirmWithdrawal",
-    "FailWithdrawal",
     "VoteWithdrawalPaid",
     "VoteWithdrawalPayoutDead",
     "VoteDeposit",
@@ -1689,12 +1545,10 @@ __all__ = [
     "record_withdrawal_payout_message",
     "vote_deposit_message",
     "vote_pause_bridge_message",
-    "CreateMarket",
     "SetUserMarketLeverage",
     "CreateSubAccount",
     "SubAccountTransfer",
     "RecordWithdrawalPayout",
-    "UpdateMarketFees",
     "SubmitOracleObservation",
     "ConfigureOraclePolicy",
     "AdminActionWire",

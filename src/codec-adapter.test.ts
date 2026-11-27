@@ -17,8 +17,8 @@ describe("codec-adapter enum loudness", () => {
 
   it("throws for an out-of-range markSourceMode on encode", () => {
     const action = {
-      type: "CreateMarket",
-      data: { ticker: "BTC", markSourceMode: 7 },
+      type: "Deposit",
+      data: { markSourceMode: 7 },
     } as unknown as Action;
     expect(() => toWasmFields(action)).toThrow(
       /unknown markSourceMode value: 7/,
@@ -44,7 +44,7 @@ describe("codec-adapter enum loudness", () => {
 
   it("throws for an unknown markSourceMode variant on decode", () => {
     expect(() =>
-      fromWasmFields(ActionType.CreateMarket, { mark_source_mode: "Vwap" }),
+      fromWasmFields(ActionType.Deposit, { mark_source_mode: "Vwap" }),
     ).toThrow(/unknown markSourceMode variant: Vwap/);
   });
 });

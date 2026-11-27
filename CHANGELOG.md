@@ -31,8 +31,36 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **Rust (`proof-sdk-rs`):** `InfoClient::account_v2` returning `AccountSnapshot`;
     the core exports
     `query::decode_account_view`, `AccountView` and `PositionSummary`.
+- **Engine error codes, all three SDKs:** 158 `DirectCustodyClosed` (a direct
+  `Deposit` or `Withdraw` on a chain with an operator receipt registry), 159
+  `EventSettlesByQuorum` (a `ResolveEvent` for an event no `MarketOracle` rule
+  decides) and 160 `NonCanonicalProposal` (a pending proposal the upgrade
+  failed because it no longer re-encodes to its own bytes).
 
 ### Changed
+
+- **Breaking wire, all three SDKs:** follows the major wire release that
+  retires the relayer key ([exchange#1632](https://github.com/Proof-labs/exchange/pull/1632),
+  engine 18.0). proof-wire is pinned to that pull request's head `ee462c44`
+  until the release publishes the wire tag.
+  - The admin actions `CreateMarket` and `CreateEvent` name no `signer`: the
+    quorum is the authorization. The content hash of every proposal carrying
+    one changes (re-pinned to the engine's goldens), and a 17.0 proposal
+    that still carries the signer no longer decodes.
+  - The event oracle source `RelayerAttested` is `QuorumAttested`, in the
+    TypeScript `EventOracleSource` (`kind: "QuorumAttested"`) and the version 2
+    markets snapshot (`resolutionSource.type: "QuorumAttested"`, wire
+    `quorum_attested`). Records stored under the earlier name decode as the
+    new one.
+  - Error code 13 is `UnauthorizedSigner` ("the signer is not on the key list
+    this action requires"), renamed from `UnauthorizedRelayer`.
+  - The market-parameters authority list (`MarketParams`, list 5) is retired:
+    an `UpdateAuthoritySet` naming it decodes but is not submittable, like
+    `CexComposite` and `ScheduledOps`. The authorities read drops its always
+    empty slot: `marketParams` (TypeScript) and `market_params` (Python) leave
+    `AuthoritiesSnapshot`.
+  - TypeScript `MarketSettingsChange` is its own interface (it was
+    `UpdateMarketFees` without `signer`); the fields are unchanged.
 
 - **Breaking (Rust, `proof-sdk-rs`):** `PredictionSettled` and `ConditionMet`
   gain `fund_charged`, the part of the settlement loss the pool's insurance
@@ -45,6 +73,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   still reads. `PlacementOutcome` and `OrderPlacement` are no longer `Copy`.
 - **Breaking (Rust):** `Error::OrderResultUnreadable` carries only the
   receipt; the event that did not parse is in `receipt.events`.
+
+### Removed
+
+- **Breaking wire, all three SDKs:** the retired single-key and single-signer
+  action bytes 0x07 `CreateMarket`, 0x09 `ConfirmDeposit`, 0x0A
+  `ConfirmWithdrawal`, 0x0B `FailWithdrawal`, 0x10 `UpdateMarketFees`, 0x13
+  `SetAccountFeeOverride` and 0x15 `FailDeposit` no longer encode or decode.
+  Market creation, market settings and account fee overrides go through
+  `ProposeAdminAction` with the admin actions of the same names; bridge
+  operator votes replace the custody actions. TypeScript drops the
+  `ActionType` entries, the `OperatorAction` arms and the `ConfirmDeposit`,
+  `ConfirmWithdrawal`, `FailWithdrawal` and `UpdateMarketFees` types; Python
+  drops the `ConfirmDeposit`, `ConfirmWithdrawal`, `FailWithdrawal`,
+  `CreateMarket` and `UpdateMarketFees` builders.
+- Error codes 70 (`AdminActionRequiresProposal`) and 76
+  (`WithdrawalTerminalGated`) are retired and decode as unknown; neither is
+  reassigned.
 
 ### Fixed
 

@@ -69,7 +69,7 @@ define_error_kinds! {
     10  => StateCorruption     ~ "Engine read state in an unexpected shape (e.g. missing required key, malformed value). Indicates a bug or data corruption — file an issue with the surrounding context.",
     11  => InsufficientBalance ~ "Account's USDC balance cannot cover the requested debit (deposit, withdrawal, or fee).",
     12  => InsufficientMargin  ~ "Post-trade equity would fall below the initial-margin requirement for the resulting portfolio. Reduce order size, add collateral, or close offsetting positions.",
-    13  => UnauthorizedRelayer ~ "Tx is a relayer-only action (oracle update, funding tick, deposit confirmation, etc.) but the signer is not registered as an authorized relayer.",
+    13  => UnauthorizedSigner  ~ "The signer is not on the key list this action requires. Sign with a key on that list.",
     14  => WithdrawalNotFound            ~ "Withdrawal ID does not exist or has already been claimed/refunded.",
     15  => WithdrawalAlreadyProcessed    ~ "Withdrawal was already settled (claim or refund); duplicate finalize call rejected.",
     16  => DuplicateDeposit             ~ "On-chain deposit signature has already been credited; idempotency guard rejected the replay.",
@@ -130,14 +130,16 @@ define_error_kinds! {
     67  => EmergencyRateLimited             ~ "Per-signer emergency action bound reached within the rolling window.",
     68  => EmergencyGlobalRateLimited       ~ "Chain-wide emergency action bound reached within the rolling window.",
     69  => EmergencyActionRetired           ~ "This emergency arm was retired; new submissions fail closed.",
-    70  => AdminActionRequiresProposal      ~ "The signer registry exists — this admin action is proposal-only, even for an authorized relayer.",
+    // 70 was AdminActionRequiresProposal, retired with the single-key admin
+    // routes; never reassigned.
     71  => InvalidAdminRegistry             ~ "Proposed signer roster violates the registry invariants (threshold bounds, sorted unique members, roster size, version headroom).",
     // Operator-custody withdrawals (receipt-gated terminals).
     72  => BridgeReceiptRegistryInactive    ~ "A receipt-gated withdrawal action was submitted while no operator receipt registry exists on this chain; the operator custody phase is inactive and the path fails closed.",
     73  => BridgeReceiptInvalid             ~ "The operator quorum proof failed verification: bad structure, fewer distinct members than the threshold, or an invalid signature.",
     74  => BridgeReceiptMismatch            ~ "The signed receipt does not bind to this withdrawal or deployment (id, owner, amount, destination, epoch or terminal state differs); the log names the field.",
     75  => WithdrawalBelowMinimum           ~ "The net withdrawal amount is below the effective minimum (the configured minimum, floored at the flat fee): the payout would be worth less than it costs to settle.",
-    76  => WithdrawalTerminalGated          ~ "A retired legacy relayer terminal (ConfirmWithdrawal / FailWithdrawal) was submitted at or above the receipt cutover; rejected as a normal failed action.",
+    // 76 was WithdrawalTerminalGated, retired with the single-signer bridge
+    // terminals; never reassigned.
     77  => UnpricedNoVerdict                ~ "The oracle policy has no certified verdict for this market in this block (stale, unpriceable, or not yet committed); mark-dependent actions are refused until a later block certifies a price.",
     // 78-81 are reserved on the wire for oracle-policy errors.
     82  => UnpricedGuardUnset               ~ "The oracle-guard gate is active and this market has no mark-price max oracle age set; every mark-dependent action is refused until governance sets one.",
@@ -210,7 +212,10 @@ define_error_kinds! {
     154 => PayoutRecordedForAnotherWithdrawal ~ "The Squads payout (vault, transaction index) already settled another withdrawal Paid; one payout settles one withdrawal, so this payout record or Paid vote is refused.",
     155 => MarketSettingsChanged ~ "A quorum UpdateMarketFees names a settings sequence its market is not at, as when the settings changed after the proposal was made. Re-read the market's settings_sequence and propose the change again.",
     156 => PostOnlyNotResting ~ "A post-only order with IOC or FOK time in force: it may neither take nor rest, so it could never fill.",
-    157 => AuthorityDomainRetired ~ "UpdateAuthoritySet names a retired authority list (composite feeder or scheduled operations). No action reads either list; nothing was written.",
+    157 => AuthorityDomainRetired ~ "UpdateAuthoritySet names a retired authority list (composite feeder, market parameters or scheduled operations). No action reads it; nothing was written.",
+    158 => DirectCustodyClosed ~ "A direct Deposit or Withdraw on a chain with an operator receipt registry, where only bridge operator votes move money. Deposit through the bridge; withdraw with WithdrawRequest.",
+    159 => EventSettlesByQuorum ~ "ResolveEvent for an event no MarketOracle rule decides. Settle it through the admin quorum's SettleEvent or VoidEvent.",
+    160 => NonCanonicalProposal ~ "A pending proposal's stored action still decodes but no longer re-encodes to its own bytes, so it could never be approved; an upgrade failed it. Propose the action again.",
     255 => InternalError                ~ "Catch-all for unexpected runtime failures (panics caught by the FFI boundary, etc.). Treat as a server bug.",
 }
 
@@ -363,7 +368,7 @@ mod exec_error_meaning_tests {
             ExecError::InsufficientMargin,
             ExecError::StateCorruption("e".into()),
             ExecError::InternalError("e".into()),
-            ExecError::UnauthorizedRelayer,
+            ExecError::UnauthorizedSigner,
             ExecError::WithdrawalNotFound(0),
             ExecError::WithdrawalAlreadyProcessed(0),
             ExecError::DuplicateDeposit,
@@ -466,7 +471,6 @@ mod exec_error_meaning_tests {
             ExecError::BridgeReceiptInvalid("e".into()),
             ExecError::BridgeReceiptMismatch("e".into()),
             ExecError::WithdrawalBelowMinimum { amount: 0, min: 1 },
-            ExecError::WithdrawalTerminalGated("e".into()),
             ExecError::SubAccountNotFound,
             ExecError::SubAccountAlreadyExists,
             ExecError::SubAccountTransferSameAccount,
@@ -586,7 +590,47 @@ mod exec_error_meaning_tests {
                 predecessor: MarketSettingsSequence(0),
                 stored: MarketSettingsSequence(1),
             },
+            ExecError::DirectCustodyClosed,
+            ExecError::EventSettlesByQuorum {
+                event_id: crate::types::EventId(0),
+            },
+            ExecError::NonCanonicalProposal,
         ]
+    }
+
+    /// Code 13 names a signer off the action's key list, codes 158-160 decode
+    /// to their own kinds with the wire's meaning, and the retired codes 70
+    /// and 76 decode to nothing.
+    #[test]
+    fn code_13_and_codes_158_to_160_match_the_wire() {
+        let pairs = [
+            (ExecError::UnauthorizedSigner, ErrorKind::UnauthorizedSigner),
+            (
+                ExecError::DirectCustodyClosed,
+                ErrorKind::DirectCustodyClosed,
+            ),
+            (
+                ExecError::EventSettlesByQuorum {
+                    event_id: crate::types::EventId(7),
+                },
+                ErrorKind::EventSettlesByQuorum,
+            ),
+            (
+                ExecError::NonCanonicalProposal,
+                ErrorKind::NonCanonicalProposal,
+            ),
+        ];
+        for (e, kind) in pairs {
+            assert_eq!(ErrorKind::from_code(e.code()), Some(kind));
+            assert_eq!(kind.meaning(), e.meaning());
+        }
+        assert_eq!(ErrorKind::UnauthorizedSigner.code(), 13);
+        assert_eq!(ErrorKind::DirectCustodyClosed.code(), 158);
+        assert_eq!(ErrorKind::EventSettlesByQuorum.code(), 159);
+        assert_eq!(ErrorKind::NonCanonicalProposal.code(), 160);
+        for retired in [70, 76] {
+            assert_eq!(ErrorKind::from_code(retired), None);
+        }
     }
 
     /// Each unpriced reason keeps its own code, name and the wire's meaning.
@@ -808,7 +852,8 @@ mod exec_error_meaning_tests {
     /// RunFundingTick), 78-81 (reserved for oracle errors), 90 (the retired
     /// sub-account switch), 91 and 128 (the retired payout lease), 101
     /// (unassigned), 112 (the retired PLP configuration), 117-122, 126-127,
-    /// 129 and 152 (unassigned on the wire).
+    /// 129 and 152 (unassigned on the wire), 70 and 76 (retired with the
+    /// single-key admin routes and the single-signer bridge terminals).
     /// Catches the case where a code is reserved by the mirrored engine error
     /// enum but no SDK classification maps to it.
     #[test]
@@ -816,8 +861,8 @@ mod exec_error_meaning_tests {
         let mut codes: Vec<u32> = ERROR_KINDS.iter().map(|kind| kind.code()).collect();
         codes.sort();
         codes.dedup();
-        let expected: Vec<u32> = (1u32..=157)
-            .filter(|c| !matches!(c, 24 | 25 | 30 | 31 | 36 | 41 | 78..=81 | 90 | 91 | 101 | 112 | 117..=122 | 126..=129 | 152))
+        let expected: Vec<u32> = (1u32..=160)
+            .filter(|c| !matches!(c, 24 | 25 | 30 | 31 | 36 | 41 | 70 | 76 | 78..=81 | 90 | 91 | 101 | 112 | 117..=122 | 126..=129 | 152))
             .chain(std::iter::once(255))
             .collect();
         assert_eq!(
@@ -838,12 +883,11 @@ pub mod prelude {
     pub use crate::types::{
         AccountFeeOverride, Action, AmendOrder, ApproveAgent, AttachConditional,
         AttachedConditional, Branch, CancelAllOrders, CancelClientOrder, CancelClientOrders,
-        CancelOrder, CancelOrders, CancelReason, CancelReplaceOrder, ConfirmDeposit,
-        ConfirmWithdrawal, CreateEvent, CreateMarket, Deposit, Event, EventId, EventInfo,
-        EventOracleSource, EventStatus, ExecError, FailDepositReason, FailWithdrawal, FillId,
-        MarkSourceMode, MarketConfig, MarketId, MarketKind, Order, OrderEntry, OrderId, OrderKind,
-        Outcome, PlaceOrder, PlaceOrders, Position, ResolveEvent, RevokeAgent,
-        SetUserMarketLeverage, Side, TimeInForce, UpdateMarketFees, Withdraw, WithdrawRequest,
+        CancelOrder, CancelOrders, CancelReason, CancelReplaceOrder, CreateEvent, CreateMarket,
+        Deposit, Event, EventId, EventInfo, EventOracleSource, EventStatus, ExecError,
+        FailDepositReason, FillId, MarkSourceMode, MarketConfig, MarketId, MarketKind, Order,
+        OrderEntry, OrderId, OrderKind, Outcome, PlaceOrder, PlaceOrders, Position, ResolveEvent,
+        RevokeAgent, SetUserMarketLeverage, Side, TimeInForce, Withdraw, WithdrawRequest,
         WithdrawalStatus, BINARY_PRICE_MAX, DEFAULT_CEX_COMPOSITE_STALENESS_MS,
         DEFAULT_MAX_MARK_SPREAD_BPS,
     };
