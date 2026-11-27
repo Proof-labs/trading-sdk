@@ -272,7 +272,8 @@ pub enum TxStatus {
         log: Option<String>,
     },
     /// Admitted with no verdict yet. Reconcile with
-    /// [`ExchangeClient::wait_for_receipt`]; never re-sign.
+    /// [`ExchangeClient::wait_for_receipt`]; never re-sign while it may still
+    /// land (see [`Error::Unconfirmed`]).
     Pending,
     /// Turned away by the gateway before admission. It did not execute.
     Refused(RefusalReason),
@@ -382,7 +383,9 @@ fn status(outcome: SubmissionOutcome<PreAdmissionRefusal>) -> TxStatus {
 /// - [`Error::Unconfirmed`] from [`Self::send`] (or any helper) means no
 ///   verdict came back and the transaction may still execute. It carries the
 ///   [`SignedTx`]: reconcile its hash with [`Self::wait_for_receipt`], or
-///   resend the same bytes; never sign the action again.
+///   resend the same bytes; never sign the action again while it may still
+///   land. An order, cancel or position trigger can't once a block timed past
+///   its nonce plus 1 minute commits without it.
 /// - [`Error::OrderResultUnreadable`] means it executed but its order results
 ///   did not read: reconcile its hash, never sign it again. Any other `Err`
 ///   means nothing executed.
@@ -585,7 +588,11 @@ impl ExchangeClient {
     /// no verdict came back (transport failure, 5xx, unreadable answer): look
     /// `tx.hash` up with [`Self::wait_for_receipt`], or resend the same `tx`
     /// (same nonce, so it executes at most once). Signing the action again
-    /// creates a second transaction. [`Error::OrderResultUnreadable`] means it
+    /// risks executing it twice, unless it is an order, cancel or position
+    /// trigger and a block timed past its nonce plus 1 minute committed without
+    /// the first: then the first can no longer land, and resending it does
+    /// nothing.
+    /// [`Error::OrderResultUnreadable`] means it
     /// executed but its order results did not read: reconcile, never re-sign.
     /// Other errors mean it was not sent.
     pub async fn send(&self, tx: &SignedTx) -> Result<Submitted> {

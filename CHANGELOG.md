@@ -60,6 +60,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   still reads. `PlacementOutcome` and `OrderPlacement` are no longer `Copy`.
 - **Breaking (Rust):** `Error::OrderResultUnreadable` carries only the
   receipt; the event that did not parse is in `receipt.events`.
+- Docs: orders, cancels and position triggers are refused once their nonce
+  trails block time by more than 1 minute, from the engine release with
+  Proof-labs/exchange#1649. Other actions keep 2 days.
 
 ### Fixed
 

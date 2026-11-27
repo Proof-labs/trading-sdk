@@ -701,12 +701,14 @@ The engine maintains a per-account sorted `Vec<u64>` of recent nonces (capacity
 | Condition | Result |
 |-----------|--------|
 | `nonce < block_time - 2 days` | `InvalidNonce` (21) — too old |
+| order, cancel or position trigger with `nonce < block_time - 1 minute` | `InvalidNonce` (21) — too old |
 | `nonce > block_time + 1 day` | `InvalidNonce` (21) — too far future |
 | `nonce` already in recent set | `InvalidNonce` (21) — replay |
 | recent set full and `nonce <= oldest retained` | `InvalidNonce` (21) — below oldest |
 
-All four map to code 21. Nonces are **burned on success** (the nonce is
-persisted even if the handler fails). Only invalid signatures skip the burn.
+All of these map to code 21. Nonces are **burned on success** (the nonce is
+persisted even if the handler fails). Invalid signatures and rejected nonces
+skip the burn.
 
 ### Thread safety
 
@@ -737,7 +739,9 @@ accepts out-of-order unique nonces within its window and rejects replays.
 - No sequential ordering required — nonces can arrive out of order
 - No sync call needed before the first transaction
 - Thread-safe allocation within one shared allocator instance
-- Wide engine window (+1 day / −2 days) tolerates NTP skew
+- Wide engine window (+1 day / −2 days) tolerates NTP skew, except for orders,
+  cancels and position triggers: those are refused once a minute old, so a
+  client clock a minute behind gets every order refused
 
 ### Finalized account reads
 

@@ -102,7 +102,9 @@ class SubmissionPending(ProofTradingSdkError):
     final result, or a transport failure after sending may hide whether the
     request was admitted at all. The transaction may still commit, so the caller must
     reconcile by ``tx_hash`` — re-submitting an order that is still in flight
-    risks a double fill.
+    risks a double fill. An order, cancel or position trigger can no longer
+    land once a block timed past its nonce plus 1 minute commits without it,
+    so only then is signing a replacement safe.
 
     Attributes:
         tx_hash: Transaction hash to reconcile the submission against.

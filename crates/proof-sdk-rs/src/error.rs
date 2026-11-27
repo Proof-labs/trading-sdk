@@ -17,7 +17,10 @@ use proof_trading_sdk::SignerError;
 /// have reached the gateway, the error is [`Error::Unconfirmed`] and carries
 /// the signed transaction: reconcile its hash with
 /// [`crate::ExchangeClient::wait_for_receipt`], or resend the same bytes,
-/// before signing a replacement. [`Error::OrderResultUnreadable`] is the one
+/// before signing a replacement. An order, cancel or position trigger can no
+/// longer land once a block timed past its nonce plus 1 minute commits without
+/// it, so only then is a replacement safe, and resending it after that minute
+/// does nothing. [`Error::OrderResultUnreadable`] is the one
 /// error whose transaction executed: reconcile it, never sign it again.
 #[derive(Debug)]
 #[non_exhaustive]
