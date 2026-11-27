@@ -893,3 +893,64 @@ async fn candles_and_bbo_read_bars_for_the_asked_market() {
     assert_eq!(targets[0], format!("GET /v1/history/candles?{query}"));
     assert_eq!(targets[1], format!("GET /v1/history/bbo?{query}"));
 }
+
+#[tokio::test]
+async fn account_v2_reads_the_v2_route_and_preserves_valuation() {
+    let raw: Vec<u8> = include_str!("../../../conformance/account-v2.hex")
+        .trim()
+        .as_bytes()
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| {
+            u8::from_str_radix(std::str::from_utf8(pair).expect("fixture hex is ASCII"), 16)
+                .expect("fixture hex is valid")
+        })
+        .collect();
+    let envelope =
+        json!({"data": base64::engine::general_purpose::STANDARD.encode(raw), "height": u64::MAX});
+    let (info, log) = fixture(vec![(200, envelope)]).await;
+    let snapshot = info.account_v2(mm()).await.expect("v2 fixture must decode");
+    assert_eq!(snapshot.height, u64::MAX);
+    let view = snapshot.account;
+    assert_eq!(view.positions[0].valuation_price, Some(55));
+    assert_eq!(view.positions[0].book_restricted, Some(true));
+    let calls = requests(&log);
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0, format!("GET /v2/account/{MM}"));
+}
+
+#[tokio::test]
+async fn account_v2_refuses_a_positional_v1_account() {
+    let mut envelope = data(&json!([0, [], 0, 0, 0, 0, [], 0, 0]));
+    envelope["height"] = json!(42);
+    let (info, log) = fixture(vec![(200, envelope)]).await;
+    assert!(matches!(info.account_v2(mm()).await, Err(Error::Decode(_))));
+    assert_eq!(requests(&log).len(), 1);
+}
+
+#[tokio::test]
+async fn account_v2_refuses_missing_or_invalid_height() {
+    let raw = include_str!("../../../conformance/account-v2.hex").trim();
+    let bytes: Vec<u8> = raw
+        .as_bytes()
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| {
+            u8::from_str_radix(std::str::from_utf8(pair).expect("ASCII hex"), 16)
+                .expect("valid fixture hex")
+        })
+        .collect();
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    let mut cases = vec![json!({"data": encoded})];
+    for height in [json!(null), json!(true), json!(-1), json!(1.5), json!("42")] {
+        cases.push(json!({"data": encoded, "height": height}));
+    }
+    let count = cases.len();
+    let (info, log) = fixture(cases.into_iter().map(|body| (200, body)).collect()).await;
+    for _ in 0..count {
+        assert!(matches!(info.account_v2(mm()).await, Err(Error::Decode(_))));
+    }
+    assert_eq!(requests(&log).len(), count);
+}

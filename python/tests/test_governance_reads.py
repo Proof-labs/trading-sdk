@@ -17,15 +17,19 @@ def envelope(raw):
 
 
 def config():
-    return [U32, [U32, U32], U32, U32, U32, U32]
+    return [U32, [U32, U32], U32, U32, U32, U32, [U32, U32]]
+
+
+GENESIS = sdk.LiquidationConfigInfo(1, sdk.LiquidationConfig(
+    10500, sdk.FullCloseThreshold(2, 3), 100, 20, 10, 50, sdk.FundLimits(10_000, 5_000),
+))
 
 
 def test_engine_genesis_vector_matches_typescript_liquidation_reads():
-    # Same engine-produced vector as src/liquidation-reads.test.ts.
-    result = sdk.decode_liquidation_config_info({"data": "kgGWzSkEkgIDZBQKMg=="})
-    assert result == sdk.LiquidationConfigInfo(1, sdk.LiquidationConfig(
-        10500, sdk.FullCloseThreshold(2, 3), 100, 20, 10, 50,
-    ))
+    # Same vectors as src/liquidation-reads.test.ts: the proof-wire 14 record,
+    # and the record before the fund limits, which takes their initial values.
+    assert sdk.decode_liquidation_config_info({"data": "kgGXzSkEkgIDZBQKMpLNJxDNE4g="}) == GENESIS
+    assert sdk.decode_liquidation_config_info({"data": "kgGWzSkEkgIDZBQKMg=="}) == GENESIS
 
 
 def test_authority_sets_preserve_addresses_and_order_without_deduplication():
@@ -64,9 +68,12 @@ def test_authority_cardinality_bound_matches_engine():
 def test_liquidation_exact_ranges_and_legacy_default_are_read_facts():
     result = sdk.decode_liquidation_config_info(envelope([U64, config()]))
     assert result.sequence == U64
-    assert result.config == sdk.LiquidationConfig(U32, sdk.FullCloseThreshold(U32, U32), U32, U32, U32, U32)
+    assert result.config == sdk.LiquidationConfig(
+        U32, sdk.FullCloseThreshold(U32, U32), U32, U32, U32, U32, sdk.FundLimits(U32, U32),
+    )
     legacy = sdk.decode_liquidation_config_info(envelope([0, [0, [0, 0], 0, 0, 0]]))
     assert legacy.config.takeover_discount_bps == 50
+    assert legacy.config.fund_limits == sdk.FundLimits(10_000, 5_000)
     # Read validation does not replace action-admission policy with defaults.
     assert legacy.config.target_ratio_bps == 0
 
@@ -77,8 +84,9 @@ def invalid_configs():
     for index in [0, 2, 3, 4, 5]:
         for value in [-1, U32+1, True, 1.0, "1"]:
             raw = config(); raw[index] = value; yield [0, raw]
-    for value in [[], [1], [1, 2, 3], {}, [-1, 2], [1, U32+1], [True, 2]]:
-        raw = config(); raw[1] = value; yield [0, raw]
+    for index in [1, 6]:
+        for value in [[], [1], [1, 2, 3], {}, [-1, 2], [1, U32+1], [True, 2], 0]:
+            raw = config(); raw[index] = value; yield [0, raw]
 
 
 @pytest.mark.parametrize("raw", list(invalid_configs()))

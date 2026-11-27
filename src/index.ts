@@ -143,6 +143,7 @@ export {
   type AccountFeeOverrideChange,
   type MarketSettingsChange,
   type MarketStatus,
+  type FundLimits,
   type LiquidationConfig,
   type LiquidationConfigInfo,
   type SetLiquidationConfig,
@@ -276,6 +277,11 @@ export {
   type PositionTriggerHistoryPage,
   type TriggerMarketHistoryPage,
   type AccountInfo,
+  type AccountView,
+  type AccountSnapshot,
+  type PositionSummary,
+  type UnpricedPosition,
+  type SettlementReferenceUnavailable,
   type PositionInfo,
   type MarketConfig,
   type MarketListing,
@@ -332,6 +338,7 @@ export {
   type MarginOffsetPolicySetEvent,
 } from "./margin-offsets.js";
 export {
+  INITIAL_FUND_LIMITS,
   INITIAL_TAKEOVER_DISCOUNT_BPS,
   MAX_PARTIAL_PENALTY_BPS,
   MAX_TAKEOVER_DISCOUNT_BPS,
@@ -382,10 +389,6 @@ export {
   type EventVoidedEvent,
   type VoidSettlementEvent,
 } from "./void-events.js";
-export {
-  decodeResolutionBalanceSnapshotEvent,
-  type ResolutionBalanceSnapshotEvent,
-} from "./resolution-balance-events.js";
 export {
   LIQUIDATION_HISTORY_EVENT_TYPES,
   decodeLiquidationHistoryPage,

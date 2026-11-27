@@ -88,8 +88,8 @@ pub use history::{
 };
 pub use ids::{IndexerEventId, SubAccountId, TriggerGroupId, TriggerLimbId};
 pub use info::{
-    AccountState, ChainStatus, ClientConfig, InfoClient, Level, Orderbook, Trade, DEVNET_CHAIN_ID,
-    DEVNET_GATEWAY_URL,
+    AccountSnapshot, AccountState, ChainStatus, ClientConfig, InfoClient, Level, Orderbook, Trade,
+    DEVNET_CHAIN_ID, DEVNET_GATEWAY_URL,
 };
 pub use nonce::{NonceAllocator, MAX_CLOCK_LEAD_MS};
 pub use state::{
@@ -105,7 +105,8 @@ pub use ws::{
 pub use proof_trading_sdk as core;
 pub use proof_trading_sdk::bridge::WithdrawalId;
 pub use proof_trading_sdk::gateway::{TxAttribute, TxEvent, TxHash};
-pub use proof_trading_sdk::query::{AccountInfo, PositionBrief};
+pub use proof_trading_sdk::query::{AccountInfo, AccountView, PositionBrief, PositionSummary};
+pub use proof_trading_sdk::query_v2;
 pub use proof_trading_sdk::types::{
     Action, AtomicBasketLeg, CancelClientOrders, CancelOrders, CancelReplaceOrder, CancelTarget,
     ClientTriggerGroupId, ClientTriggerId, EventId, EventInfo, FundingRate, MarketConfig, MarketId,

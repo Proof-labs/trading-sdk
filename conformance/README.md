@@ -19,6 +19,9 @@ for commands and the [CI workflow](../.github/workflows/ci.yml) for automation.
 
 ---
 
+`account-v2.hex` pins the engine map-encoded account response. The Rust,
+TypeScript and Python account-v2 tests share these exact bytes.
+
 ## Layout
 
 ```

@@ -29,6 +29,9 @@ export interface ConditionalVoidSettledEvent {
   branchWeight: bigint;
   /** Signed. */
   realizedPnl: bigint;
+  /** Micro-USDC: the part of this loss the pool's insurance fund paid for
+   *  the owner. `0n` when absent, as on blocks before proof-wire 14. */
+  fundCharged: bigint;
 }
 
 export type VoidSettlementEvent =
@@ -56,6 +59,7 @@ function conditionalVoidSettled(a: Attributes): ConditionalVoidSettledEvent {
     settlementPrice: a.u64("settlement_price"),
     branchWeight: a.u64("branch_weight"),
     realizedPnl: a.i64("realized_pnl"),
+    fundCharged: a.has("fund_charged") ? a.u64("fund_charged") : 0n,
   };
 }
 

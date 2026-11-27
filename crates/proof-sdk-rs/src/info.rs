@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use proof_trading_sdk::gateway::{GatewayClient, GatewayOptions};
-use proof_trading_sdk::query::{AccountInfo, AccountStateInfo};
+use proof_trading_sdk::query::{AccountInfo, AccountStateInfo, AccountView};
 use proof_trading_sdk::reads::{self, Shape};
 use proof_trading_sdk::types::{EventId, EventInfo, MarketConfig, MarketId, Order, Position, Side};
 use reqwest::StatusCode;
@@ -129,6 +129,19 @@ pub struct ChainStatus {
     pub height: u64,
     /// That block's time, ms since the epoch.
     pub block_time_ms: u64,
+}
+
+/// Account valuation and the block height of that same response.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AccountSnapshot {
+    pub height: u64,
+    pub account: AccountView,
+}
+
+#[derive(Deserialize)]
+struct AccountEnvelope {
+    height: u64,
+    data: String,
 }
 
 /// One aggregated price level. `price` in micro-USDC, `quantity` in contracts.
@@ -377,6 +390,22 @@ impl InfoClient {
     pub async fn account(&self, owner: Address) -> Result<AccountInfo> {
         let bytes = self.post_info_data("clearinghouseState", owner).await?;
         decode(&bytes, &reads::ACCOUNT_INFO, "account")
+    }
+
+    /// `GET /v2/account/{owner}`: map-encoded valuation including exact
+    /// valuation references and the block height of that same response.
+    ///
+    /// # Errors
+    /// Returns a read or decode error, including for a positional v1 account.
+    pub async fn account_v2(&self, owner: Address) -> Result<AccountSnapshot> {
+        let envelope: AccountEnvelope = self.get_json(&format!("/v2/account/{owner}")).await?;
+        let bytes = unbase64(&envelope.data)?;
+        let account =
+            proof_trading_sdk::query::decode_account_view(&bytes).map_err(Error::Decode)?;
+        Ok(AccountSnapshot {
+            height: envelope.height,
+            account,
+        })
     }
 
     /// `GET /v1/account/{owner}/state`: balance and positions as of a

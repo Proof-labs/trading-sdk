@@ -401,8 +401,11 @@ pub struct PredictionSettled {
     pub size: u64,
     /// The Yes share's payoff in micro-USDC, whichever side `side` is.
     pub payoff_per_share: u64,
-    /// micro-USDC; the signed change to this account's balance.
+    /// micro-USDC; the signed amount the position settled for.
     pub cash_delta: i64,
+    /// micro-USDC; the part of this loss the pool's insurance fund paid for
+    /// the owner. 0 when absent, as on blocks before proof-wire 14.
+    pub fund_charged: u64,
 }
 
 /// `condition_met`.
@@ -424,6 +427,9 @@ pub struct ConditionMet {
     /// Why a winner was paid in cash instead of converting; `None` when it
     /// converted or lost.
     pub fallback_reason: Option<ConversionFallbackReason>,
+    /// micro-USDC; the part of this loss the pool's insurance fund paid for
+    /// the owner. 0 when absent, as on blocks before proof-wire 14.
+    pub fund_charged: u64,
 }
 
 /// Why a winning conditional position was paid in cash instead of
@@ -880,6 +886,7 @@ fn prediction_settled(a: &Attrs<'_>) -> Option<PredictionSettled> {
         size: a.u64("size")?,
         payoff_per_share: a.u64("payoff_per_share")?,
         cash_delta: a.parse("cash_delta")?,
+        fund_charged: a.opt("fund_charged")?.unwrap_or(0),
     })
 }
 
@@ -897,6 +904,7 @@ fn condition_met(a: &Attrs<'_>) -> Option<ConditionMet> {
         fallback_reason: a
             .text("fallback_reason")
             .map(|r| ConversionFallbackReason::from(r.as_str())),
+        fund_charged: a.opt("fund_charged")?.unwrap_or(0),
     })
 }
 
@@ -1188,15 +1196,18 @@ mod tests {
             panic!()
         };
         assert_eq!(
-            (p.side, p.size, p.cash_delta),
-            (Side::Buy, 272, -59_296_000)
+            (p.side, p.size, p.cash_delta, p.fund_charged),
+            (Side::Buy, 272, -59_296_000, 0)
         );
 
         let met = json!({"event_id": "33", "market": "3302", "owner": MAKER, "side": "sell", "size": "4", "entry_price": "74000000000", "settlement_price": "73000000000", "realized_pnl": "4000000", "converted_size": "0", "fallback_reason": "maintenance_margin"});
         let Event::ConditionMet(m) = kind_of("condition_met", &met) else {
             panic!()
         };
-        assert_eq!((m.realized_pnl, m.converted_size), (4_000_000, 0));
+        assert_eq!(
+            (m.realized_pnl, m.converted_size, m.fund_charged),
+            (4_000_000, 0, 0)
+        );
         assert_eq!(
             m.fallback_reason,
             Some(ConversionFallbackReason::Known(
@@ -1236,6 +1247,25 @@ mod tests {
             panic!()
         };
         assert_eq!(t.reason, None, "an older event without the field");
+    }
+
+    #[test]
+    fn settlement_events_carry_the_fund_charge() {
+        let settled = json!({"event_id": "33", "market": "3300", "owner": MAKER, "side": "buy", "size": "272", "payoff_per_share": "0", "cash_delta": "-59296000", "fund_charged": "1296000"});
+        let Event::PredictionSettled(p) = kind_of("prediction_settled", &settled) else {
+            panic!()
+        };
+        assert_eq!((p.cash_delta, p.fund_charged), (-59_296_000, 1_296_000));
+
+        let met = json!({"event_id": "33", "market": "3302", "owner": MAKER, "side": "buy", "size": "4", "entry_price": "74000000000", "settlement_price": "73000000000", "realized_pnl": "-4000000", "converted_size": "0", "fallback_reason": "", "fund_charged": "2520000"});
+        let Event::ConditionMet(m) = kind_of("condition_met", &met) else {
+            panic!()
+        };
+        assert_eq!((m.realized_pnl, m.fund_charged), (-4_000_000, 2_520_000));
+
+        // Present but unreadable is a decode failure, never a silent 0.
+        let bad = json!({"event_id": "33", "market": "3300", "owner": MAKER, "side": "buy", "size": "272", "payoff_per_share": "0", "cash_delta": "-59296000", "fund_charged": "-1"});
+        assert!(is_malformed(&kind_of("prediction_settled", &bad)));
     }
 
     #[test]

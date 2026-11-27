@@ -18,6 +18,9 @@ import {
   Side,
   TimeInForce,
   type AccountInfo,
+  type AccountView,
+  type PositionSummary,
+  type UnpricedPosition,
   type OpenOrder,
   type ActionTypeValue,
   type AdminAction,
@@ -1012,6 +1015,50 @@ export function accountInfoFromWasm(v: unknown): AccountInfo {
     })),
     feesAccrued: a.fees_accrued as bigint,
     volume30dMicroUsdc: a.volume_30d_micro_usdc as bigint,
+  };
+}
+
+/** Field naming only; shared Rust owns v2 account decoding. */
+export function accountViewFromWasm(value: unknown): AccountView {
+  const a = value as WasmRecord;
+  return {
+    balance: a.balance as bigint,
+    equity: a.equity as bigint,
+    totalMm: a.total_mm as bigint,
+    totalIm: a.total_im as bigint,
+    marginRatioBps: (a.margin_ratio_bps ?? null) as bigint | null,
+    bindingScenario: (a.binding_scenario as WasmRecord[]).map((s) => ({
+      eventId: s.event_id as number,
+      branch: s.branch as AccountView["bindingScenario"][number]["branch"],
+    })),
+    feesAccrued: a.fees_accrued as bigint,
+    volume30dMicroUsdc: a.volume_30d_micro_usdc as bigint,
+    cashoutEquity: a.cashout_equity as bigint,
+    positions: (a.positions as WasmRecord[]).map((p): PositionSummary => ({
+      market: p.market as number,
+      side: p.side as PositionSummary["side"],
+      entryPrice: p.entry_price as bigint,
+      size: p.size as bigint,
+      positionEpoch: (p.position_epoch ?? null) as bigint | null,
+      upnlNow: (p.upnl_now ?? null) as bigint | null,
+      mmNow: p.mm_now as bigint,
+      imNow: p.im_now as bigint,
+      pnlIfFires: p.pnl_if_fires as bigint,
+      pnlIfDies: p.pnl_if_dies as bigint,
+      fundingSince: p.funding_since as bigint,
+      adlScore: p.adl_score as bigint,
+      valuationPrice: (p.valuation_price ?? null) as bigint | null,
+      bookRestricted: (p.book_restricted ?? null) as boolean | null,
+      stale: (p.stale ?? null) as PositionSummary["stale"],
+    })),
+    unpriced: (a.unpriced as WasmRecord[]).map((u): UnpricedPosition => ({
+      market: u.market as number,
+      side: u.side as UnpricedPosition["side"],
+      entryPrice: u.entry_price as bigint,
+      size: u.size as bigint,
+      reason: u.reason as UnpricedPosition["reason"],
+    })),
+    totalsComplete: a.totals_complete as boolean,
   };
 }
 

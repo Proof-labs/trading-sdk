@@ -76,6 +76,7 @@ import {
 } from "./holding-steps.js";
 import {
   accountInfoFromWasm,
+  accountViewFromWasm,
   openOrdersFromWasm,
   eventInfoFromWasm,
   marketConfigFromWasm,
@@ -131,6 +132,7 @@ import type {
   OrderEntry,
   MarketOrder,
   AccountInfo,
+  AccountSnapshot,
   HistoryCashFlow,
   HistoryFillsPage,
   HistoryPositionSnapshot,
@@ -2260,6 +2262,35 @@ export class ExchangeClient {
     return accountInfoFromWasm(
       await this.decodeRead("Account", fromBase64(json.data as string)),
     );
+  }
+
+  /** Account valuation and its block height, from `GET /v2/account/{owner}`. */
+  async queryAccountV2(addressHex?: string): Promise<AccountSnapshot | null> {
+    const hex = addressHex ?? this.addressHex;
+    if (!hex) return null;
+    const owner = hex.replace(/^0x/i, "").toLowerCase();
+    if (!/^[0-9a-f]{40}$/.test(owner)) {
+      throw new Error("account owner must be a 40-character hex address");
+    }
+    const json = await this.apiJson(
+      `${this.readBaseUrl}/v2/account/${owner}`,
+      "account",
+    );
+    const height = json.height;
+    if (
+      typeof height !== "number" ||
+      !Number.isSafeInteger(height) ||
+      height < 0
+    ) {
+      throw new Error("account v2 height must be a non-negative safe integer");
+    }
+    const account = accountViewFromWasm(
+      await this.decodeRead(
+        "AccountV2",
+        fromBase64(requireEncodedData(json, "account v2")),
+      ),
+    );
+    return { height, account };
   }
 
   /** Convenience: fetch just the USDC balance (microUSDC) for an address. */

@@ -23,6 +23,7 @@ from proof_trading_sdk._native import (
     SigningHandle,
     chain_id_from_string,
     decode_open_orders,
+    decode_account_view,
     generate_keypair,
     pubkey_to_owner,
     reject_floats,
@@ -1136,6 +1137,32 @@ class ExchangeClient:
             },
             raw={"tuple": list(raw)},
         )
+
+    def account_v2(self, owner: bytes | str | None = None) -> dict[str, t.Any]:
+        """Map-encoded account valuation via ``GET /v2/account/{owner}``.
+
+        Returns ``{"height": int, "account": dict}`` from one response.
+        Account fields use snake_case with exact integers. ``valuation_price``
+        is the valuation reference (binary firing payout, not trading mark).
+        Missing references/restrictions remain None. A positional v1 account is refused.
+        This read does not verify a finalized-state witness.
+        """
+        owner_hex = canonical_owner(self._own_owner() if owner is None else owner)
+        resp = self._request("GET", f"/v2/account/{owner_hex}")
+        payload = _response_object(resp)
+        if payload.get("error") is not None:
+            raise ProofTradingSdkError(f"gateway error for account v2: {payload['error']}")
+        encoded = payload.get("data")
+        if not isinstance(encoded, str):
+            raise CodecError("invalid account v2 data envelope")
+        height = payload.get("height")
+        if type(height) is not int or not 0 <= height <= 2**64 - 1:
+            raise CodecError("account v2 height must be an unsigned 64-bit integer")
+        try:
+            account = decode_account_view(base64.b64decode(encoded, validate=True))
+            return {"height": height, "account": account}
+        except (ValueError, binascii.Error) as exc:
+            raise CodecError("invalid account v2 response") from exc
 
     def open_orders(self, owner: bytes | str) -> list[dict[str, t.Any]]:
         """Open orders for *owner* via ``POST /info`` (``openOrders``).

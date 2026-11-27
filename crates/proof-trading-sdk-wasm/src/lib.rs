@@ -117,6 +117,8 @@ pub enum ReadKind {
     InsuranceFundDirectory = 6,
     /// `query_v2::InsuranceFundState` (`GET /v2/insurance-fund/{pool}?witness=1`).
     InsuranceFundState = 7,
+    /// `query_v2::Account` (`GET /v2/account/{owner}`).
+    AccountV2 = 15,
 }
 
 fn decode_as<T: serde::de::DeserializeOwned + serde::Serialize>(
@@ -164,6 +166,11 @@ pub fn decode_read(kind: ReadKind, bytes: &[u8]) -> Result<JsValue, JsError> {
             &Shape::Optional(&EVENT_INFO),
         ),
         ReadKind::Account => decode_records::<core_sdk::query::AccountInfo>(bytes, &ACCOUNT_INFO),
+        ReadKind::AccountV2 => {
+            let view = core_sdk::query::decode_account_view(bytes)
+                .map_err(|error| JsError::new(&error))?;
+            to_bigint_js(&view)
+        }
         ReadKind::AdminAction => decode_as::<governance::AdminAction>(bytes),
         // The bridge views are v2 named-map encodes
         // (`query_v2::encode`), so a field a later engine appends is skipped

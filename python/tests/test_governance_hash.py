@@ -53,10 +53,11 @@ GOLDEN_RETIRED_SCHEDULED = (
 )
 # SetLiquidationConfig (inner tag 0x11): a struct variant whose newtypes are
 # bare integers and whose full-close threshold is a nested struct, carrying
-# the configuration exchange-wire freezes in its own vector. Same authority
-# as above; the TypeScript suite pins the identical constant.
+# the configuration exchange-wire freezes in its own vector (the omitted fund
+# limits take their initial 10,000 and 5,000 basis points). Same authority
+# as above; the Rust and TypeScript suites pin the identical constant.
 GOLDEN_SET_LIQUIDATION_CONFIG = (
-    "1759bbe56cdd4604699aa7fc464b04fa8e79f055a23b26c9b4f25d386943136c"
+    "9267b43a18d3eb0b50049821f466217f5b445a90309562e5037f4d3173a969ca"
 )
 # SetMarginOffsetPolicy (inner tag 0x1B): a struct variant whose predecessor is
 # an absent Option and whose pair list is positional. Same authority as above;

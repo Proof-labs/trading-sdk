@@ -276,3 +276,71 @@ mod set_account_fee_override_tests {
         assert_eq!(decoded_change, change());
     }
 }
+
+#[cfg(test)]
+mod set_liquidation_config_tests {
+    use super::{
+        admin_proposal_content_hash, canonical_admin_action_bytes, AdminAction, LiquidationConfig,
+        ProposalId, RegistryVersion, SetLiquidationConfig, SignatureThreshold, SignerAddress,
+    };
+    use proof_wire::liquidation_config::{
+        FullCloseThreshold, FundLimits, LiquidationConfigSequence, LiquidationPenaltyBps,
+        LiquidationWorkCount, TakeoverDiscountBps, TargetRatioBps,
+    };
+
+    /// The configuration exchange-wire freezes in its own vector.
+    fn update() -> AdminAction {
+        AdminAction::SetLiquidationConfig(SetLiquidationConfig {
+            predecessor: LiquidationConfigSequence(1),
+            sequence: LiquidationConfigSequence(2),
+            config: LiquidationConfig {
+                target_ratio_bps: TargetRatioBps(10_500),
+                full_close_threshold: FullCloseThreshold {
+                    numerator: 2,
+                    denominator: 3,
+                },
+                partial_penalty_bps: LiquidationPenaltyBps(100),
+                max_book_orders: LiquidationWorkCount(20),
+                max_committed_fills: LiquidationWorkCount(10),
+                takeover_discount_bps: TakeoverDiscountBps::INITIAL,
+                fund_limits: FundLimits::INITIAL,
+            },
+        })
+    }
+
+    #[test]
+    fn set_liquidation_config_matches_the_frozen_wire_bytes() {
+        // exchange-wire's `set_liquidation_config_bytes_are_positional_and_canonical`.
+        assert_eq!(
+            hex::encode(canonical_admin_action_bytes(&update()).expect("action encodes")),
+            concat!(
+                "81b45365744c69717569646174696f6e436f6e666967",
+                "930102",
+                "97cd29049202036414",
+                "0a32",
+                "92cd2710cd1388",
+            )
+        );
+    }
+
+    #[test]
+    fn set_liquidation_config_matches_the_frozen_content_hash() {
+        // The TypeScript and Python suites pin this same constant.
+        let hash = admin_proposal_content_hash(
+            &[0x11; 32],
+            ProposalId(42),
+            RegistryVersion(3),
+            SignatureThreshold(2),
+            &SignerAddress([0x22; 20]),
+            7,
+            1_000,
+            259_201_000,
+            &update(),
+        )
+        .expect("content hash");
+        assert_eq!(
+            hex::encode(hash),
+            "9267b43a18d3eb0b50049821f466217f5b445a90309562e5037f4d3173a969ca"
+        );
+    }
+}
