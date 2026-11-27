@@ -341,11 +341,12 @@ jobs:
     permissions:
       contents: read
       id-token: write # the OIDC token npm trusts, and provenance
+    # Pinned to commits: this job can publish to npm, so a moved tag must not change what runs.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
           check-latest: true
@@ -354,7 +355,7 @@ jobs:
       # Same npm and WASM toolchain as publish.yml's npm job.
       - name: Upgrade npm
         run: npm install -g npm@12
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           targets: wasm32-unknown-unknown
       - name: Resolve wasm-bindgen version from the crate graph
@@ -363,7 +364,7 @@ jobs:
           cargo generate-lockfile
           version="$(cargo metadata --format-version 1 | jq -r 'first(.packages[] | select(.name=="wasm-bindgen")).version')"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@073e1fd0bc889c9aee68dbaaa927cde1b5653a83 # v2.90.11
         with:
           tool: wasm-bindgen-cli@${{ steps.wb.outputs.version }}
       - run: npm ci --ignore-scripts
