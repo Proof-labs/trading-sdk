@@ -68,6 +68,13 @@ import {
   type OrderSummaryPage,
 } from "./order-summaries.js";
 import {
+  decodeHoldingStepPage,
+  holdingStepOwners,
+  holdingStepSearchParams,
+  type HoldingStepFilters,
+  type HoldingStepPage,
+} from "./holding-steps.js";
+import {
   accountInfoFromWasm,
   accountViewFromWasm,
   openOrdersFromWasm,
@@ -1889,6 +1896,40 @@ export class ExchangeClient {
       "account",
     );
     return decodeOrderSummaryPage(json);
+  }
+
+  /**
+   * Holdings of one or more owners (an account and its sub-accounts) at fixed
+   * steps over `[fromMs, toMs)`: per owner and market the last snapshot in
+   * each `stepMs` step (`kind: "step"`), plus every held→flat change at its
+   * exact snapshot (`"close"`) and every flat→held change at the first
+   * sampled snapshot after it (`"open"`). A `close` with no held row before
+   * it is a holding opened and closed between two samples, or one opened
+   * before `fromMs` that closed before the end of the first step; a lone
+   * `close` in the first step is ambiguous unless the read starts one step
+   * earlier. Rows come newest first, so judge this only after reading every
+   * page. Pass `nextCursor` back as `cursor` with the same owners and
+   * filters. Reads
+   * `GET /v1/history/positions/{owner}?interval=…&transitions=true`.
+   *
+   * The server refuses a read of more than 20,000 owner × market × step
+   * probes with 400 `read_too_large`. With `markets` the SDK checks this
+   * before fetching. Without `markets` the server counts every market the
+   * owners have ever held, so the same request can start failing as the
+   * account ages; pass the held markets explicitly, split owners or markets
+   * across calls, or widen `stepMs`.
+   */
+  async queryHoldingSteps(
+    owners: readonly string[],
+    filters: HoldingStepFilters,
+  ): Promise<HoldingStepPage> {
+    const [first] = holdingStepOwners(owners);
+    const qs = holdingStepSearchParams(owners, filters).toString();
+    const json = await this.apiJson(
+      `${this.gatewayUrl}/v1/history/positions/${first}?${qs}`,
+      "account",
+    );
+    return decodeHoldingStepPage(json, owners, filters.markets);
   }
 
   /** Shared market-level deferred/resumed trigger transitions. These are not
