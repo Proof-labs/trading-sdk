@@ -215,7 +215,6 @@ define_error_kinds! {
     157 => AuthorityDomainRetired ~ "UpdateAuthoritySet names a retired authority list (composite feeder, market parameters or scheduled operations). No action reads it; nothing was written.",
     158 => DirectCustodyClosed ~ "A direct Deposit or Withdraw on a chain with an operator receipt registry, where only bridge operator votes move money. Deposit through the bridge; withdraw with WithdrawRequest.",
     159 => EventSettlesByQuorum ~ "ResolveEvent for an event no MarketOracle rule decides. Settle it through the admin quorum's SettleEvent or VoidEvent.",
-    160 => NonCanonicalProposal ~ "A pending proposal's stored action still decodes but no longer re-encodes to its own bytes, so it could never be approved; an upgrade failed it. Propose the action again.",
     255 => InternalError                ~ "Catch-all for unexpected runtime failures (panics caught by the FFI boundary, etc.). Treat as a server bug.",
 }
 
@@ -594,15 +593,14 @@ mod exec_error_meaning_tests {
             ExecError::EventSettlesByQuorum {
                 event_id: crate::types::EventId(0),
             },
-            ExecError::NonCanonicalProposal,
         ]
     }
 
-    /// Code 13 names a signer off the action's key list, codes 158-160 decode
+    /// Code 13 names a signer off the action's key list, codes 158 and 159 decode
     /// to their own kinds with the wire's meaning, and the retired codes 70
     /// and 76 decode to nothing.
     #[test]
-    fn code_13_and_codes_158_to_160_match_the_wire() {
+    fn code_13_and_codes_158_and_159_match_the_wire() {
         let pairs = [
             (ExecError::UnauthorizedSigner, ErrorKind::UnauthorizedSigner),
             (
@@ -615,10 +613,6 @@ mod exec_error_meaning_tests {
                 },
                 ErrorKind::EventSettlesByQuorum,
             ),
-            (
-                ExecError::NonCanonicalProposal,
-                ErrorKind::NonCanonicalProposal,
-            ),
         ];
         for (e, kind) in pairs {
             assert_eq!(ErrorKind::from_code(e.code()), Some(kind));
@@ -627,7 +621,6 @@ mod exec_error_meaning_tests {
         assert_eq!(ErrorKind::UnauthorizedSigner.code(), 13);
         assert_eq!(ErrorKind::DirectCustodyClosed.code(), 158);
         assert_eq!(ErrorKind::EventSettlesByQuorum.code(), 159);
-        assert_eq!(ErrorKind::NonCanonicalProposal.code(), 160);
         for retired in [70, 76] {
             assert_eq!(ErrorKind::from_code(retired), None);
         }
@@ -861,7 +854,7 @@ mod exec_error_meaning_tests {
         let mut codes: Vec<u32> = ERROR_KINDS.iter().map(|kind| kind.code()).collect();
         codes.sort();
         codes.dedup();
-        let expected: Vec<u32> = (1u32..=160)
+        let expected: Vec<u32> = (1u32..=159)
             .filter(|c| !matches!(c, 24 | 25 | 30 | 31 | 36 | 41 | 70 | 76 | 78..=81 | 90 | 91 | 101 | 112 | 117..=122 | 126..=129 | 152))
             .chain(std::iter::once(255))
             .collect();

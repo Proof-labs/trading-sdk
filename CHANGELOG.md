@@ -47,10 +47,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     the core exports
     `query::decode_account_view`, `AccountView` and `PositionSummary`.
 - **Engine error codes, all three SDKs:** 158 `DirectCustodyClosed` (a direct
-  `Deposit` or `Withdraw` on a chain with an operator receipt registry), 159
+  `Deposit` or `Withdraw` on a chain with an operator receipt registry) and 159
   `EventSettlesByQuorum` (a `ResolveEvent` for an event no `MarketOracle` rule
-  decides) and 160 `NonCanonicalProposal` (a pending proposal the upgrade
-  failed because it no longer re-encodes to its own bytes).
+  decides).
 
 ### Changed
 

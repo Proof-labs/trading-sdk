@@ -236,9 +236,6 @@ export enum ExecErrorCode {
   /** A `ResolveEvent` for an event no `MarketOracle` rule decides: it
    *  settles only through the admin quorum's `SettleEvent` or `VoidEvent`. */
   EventSettlesByQuorum = 159,
-  /** An upgrade failed a pending proposal whose stored action no longer
-   *  re-encodes to its own bytes. */
-  NonCanonicalProposal = 160,
   InternalError = 255,
 }
 
@@ -814,11 +811,6 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "EventSettlesByQuorum",
     description:
       "ResolveEvent for an event no MarketOracle rule decides. Settle it through the admin quorum's SettleEvent or VoidEvent.",
-  },
-  160: {
-    name: "NonCanonicalProposal",
-    description:
-      "A pending proposal's stored action still decodes but no longer re-encodes to its own bytes, so it could never be approved; an upgrade failed it. Propose the action again.",
   },
   255: { name: "InternalError", description: "unexpected runtime failure" },
 };

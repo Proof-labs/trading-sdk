@@ -130,7 +130,6 @@
 {"case":"manifest/157","code":157,"log":null,"expect":{"name":"AuthorityDomainRetired"}}
 {"case":"manifest/158","code":158,"log":null,"expect":{"name":"DirectCustodyClosed"}}
 {"case":"manifest/159","code":159,"log":null,"expect":{"name":"EventSettlesByQuorum"}}
-{"case":"manifest/160","code":160,"log":null,"expect":{"name":"NonCanonicalProposal"}}
 {"case":"manifest/255","code":255,"log":null,"expect":{"name":"InternalError"}}
 {"case":"code50/oi_log","code":50,"log":"open interest limit exceeded on market 7: would be 4, cap 3","expect":{"name":"OpenInterestLimitExceeded"}}
 {"case":"code50/slippage_log","code":50,"log":"atomic basket aggregate slippage 51 bps exceeds budget 50 bps","expect":{"name":"SlippageExceeded"}}
