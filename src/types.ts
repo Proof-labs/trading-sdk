@@ -38,12 +38,16 @@ export enum TimeInForce {
 /**
  * Wire-format action type identifiers. Each value is a single byte.
  * Retired, never reassigned: 0x01 `PlaceOrder`, 0x02 `CancelOrder`, 0x03
- * `OracleUpdate`, 0x04 `MarketOrder`, 0x12 `RunFundingTick`, 0x14
- * `OracleUpdateComposite`, 0x17 `ClosePosition`, 0x18 `CancelClientOrder`,
- * 0x22 `ConfirmWithdrawalReceipt`, 0x23 `FailWithdrawalReceipt`, 0x24
- * `AuthorizeWithdrawal` and 0x2E `ClaimWithdrawalPayout`. Order batches are
- * on 0x35-0x37; the single-order names stay as aliases of the batch byte
- * they encode on. Bridge operators vote instead of submitting receipts.
+ * `OracleUpdate`, 0x04 `MarketOrder`, 0x07 `CreateMarket`, 0x09
+ * `ConfirmDeposit`, 0x0A `ConfirmWithdrawal`, 0x0B `FailWithdrawal`, 0x10
+ * `UpdateMarketFees`, 0x12 `RunFundingTick`, 0x13 `SetAccountFeeOverride`,
+ * 0x14 `OracleUpdateComposite`, 0x15 `FailDeposit`, 0x17 `ClosePosition`,
+ * 0x18 `CancelClientOrder`, 0x22 `ConfirmWithdrawalReceipt`, 0x23
+ * `FailWithdrawalReceipt`, 0x24 `AuthorizeWithdrawal` and 0x2E
+ * `ClaimWithdrawalPayout`. Order batches are on 0x35-0x37; the single-order
+ * names stay as aliases of the batch byte they encode on. Bridge operators
+ * vote instead of submitting receipts, and markets are created and changed
+ * only through the admin quorum (`ProposeAdminAction`).
  */
 export const ActionType = {
   /** Place 1 to {@link MAX_ORDERS_PER_BATCH} limit or market orders for one
@@ -63,20 +67,13 @@ export const ActionType = {
   CancelClientOrder: 0x37,
   /** Oracle-policy source observation relayed by the feeder. */
   SubmitOracleObservation: 0x2d,
-  /** Credit USDC to an account (legacy, prefer ConfirmDeposit). */
+  /** Credit USDC to an account directly (custody key; refused on a chain
+   *  with an operator receipt registry). */
   Deposit: 0x05,
   /** Debit USDC from an account (direct withdraw, checks margin). */
   Withdraw: 0x06,
-  /** Register a new perpetual market with risk parameters (admin). */
-  CreateMarket: 0x07,
   /** User requests a USDC withdrawal to a Solana address. */
   WithdrawRequest: 0x08,
-  /** Relayer confirms an on-chain USDC deposit from Solana. */
-  ConfirmDeposit: 0x09,
-  /** Relayer confirms a USDC withdrawal was sent on Solana. */
-  ConfirmWithdrawal: 0x0a,
-  /** Relayer marks a withdrawal as permanently failed; refunds balance. */
-  FailWithdrawal: 0x0b,
   /** Atomically replace a whole-position stop-loss/take-profit bracket. */
   SetPositionTriggers: 0x25,
   /** Cancel the bracket attached to an exact position generation. */
@@ -108,11 +105,6 @@ export const ActionType = {
   /** One operator's vote that a recorded payout is dead (0x34); the roster
    *  threshold clears the withdrawal's payout slot. */
   VoteWithdrawalPayoutDead: 0x34,
-  /** Update a subset of `MarketConfig` tunables on a live market (admin).
-   *  Fee tiering, funding-rate cap tightening, position-limit updates
-   *  without a chain rebase. */
-  UpdateMarketFees: 0x10,
-
   /** User picks a per-market initial-margin override capped by the
    *  market's risk floor. `user_im_bps == 0` clears the override.
    *  Engine takes max(market.im_bps, user_im_bps) on every IM check.
@@ -331,41 +323,42 @@ export interface MarketOrder {
 }
 
 /**
- * Credit USDC to an account (dev/bootstrap action).
- *
- * Per audit B1 (2026-04-23) this action requires a relayer-authorized
- * signer — the envelope signer's derived address must equal `signer`,
- * and `signer` must be on the on-chain relayer allowlist. Clients
- * outside the allowlist see `UnauthorizedRelayer` at the engine.
- * Prefer `ConfirmDeposit` for production flows tied to Solana bridge
- * events.
+ * Credit USDC to an account directly, with no Solana transfer behind it
+ * (tooling such as the devnet faucet, and tests). The signer must be
+ * custody-authorized (code 13 otherwise), and every signer is refused with
+ * code 158 (`DirectCustodyClosed`) on a chain with an operator receipt
+ * registry, where only bridge operator votes (`VoteDeposit`) credit
+ * deposits.
  */
 export interface Deposit {
   /** Account address to credit (20 bytes). */
   owner: Address;
   /** Deposit amount in microUSDC (6 decimal places, e.g., 100_000_000 = $100). */
   amount: bigint;
-  /** Authorized relayer signer (20 bytes). Must match the envelope pubkey's derived owner. */
+  /** The custody-authorized key that signs the credit (20 bytes). Must
+   *  match the envelope pubkey's derived owner. */
   signer: Address;
 }
 
 /**
- * Debit USDC from an account (direct withdraw, checks margin requirements).
- *
- * Per audit B2 (2026-04-23) same relayer-authorization contract as
- * `Deposit`: the envelope signer must equal `signer` and that address
- * must be on the relayer allowlist.
+ * Debit USDC from an account directly (checks margin requirements). Same
+ * authorization as `Deposit`: a custody-authorized signer, refused with code
+ * 158 (`DirectCustodyClosed`) on a chain with an operator receipt registry.
+ * Users withdraw through `WithdrawRequest`, which bridge operator votes
+ * settle.
  */
 export interface Withdraw {
   /** Account address to debit (20 bytes). */
   owner: Address;
   /** Withdrawal amount in microUSDC (6 decimal places, e.g., 100_000_000 = $100). */
   amount: bigint;
-  /** Authorized relayer signer (20 bytes). Must match the envelope pubkey's derived owner. */
+  /** The custody-authorized key that signs the debit (20 bytes). Must
+   *  match the envelope pubkey's derived owner. */
   signer: Address;
 }
 
-/** Register a new perpetual market with its risk and fee parameters (admin action). */
+/** Register a new perpetual market with its risk and fee parameters: the
+ *  payload of the admin action `CreateMarket`, which the quorum authorizes. */
 export interface CreateMarket {
   /** Market identifier (unique integer). */
   market: number;
@@ -377,8 +370,6 @@ export interface CreateMarket {
   takerFeeBps: number;
   /** Maker fee rate in basis points (e.g., 2 = 0.02%). */
   makerFeeBps: number;
-  /** Authorized relayer signer address (20 bytes). */
-  signer: Address;
   /** Funding interval in milliseconds (0 = funding disabled). */
   fundingIntervalMs: bigint;
   /** Maximum absolute funding rate per interval in basis points. */
@@ -409,8 +400,8 @@ export interface CreateMarket {
   ticker: string;
   /**
    * Aggregate market open-interest cap in contracts. Omitted, null, and 0 all
-   * mean uncapped and encode identically as the canonical 14-field payload
-   * with an explicit 0 cap. Legacy 11-field payloads still decode as 0n.
+   * mean uncapped and encode identically as the canonical 13-field payload
+   * with an explicit 0 cap.
    */
   maxOpenInterest?: bigint | null;
   /**
@@ -445,36 +436,6 @@ export interface WithdrawRequest {
 export interface DepositLocator {
   topIndex: number;
   innerIndex?: number | null;
-}
-
-/** Relayer confirms an on-chain USDC deposit from Solana. Credits the account. */
-export interface ConfirmDeposit {
-  /** Account address to credit (20 bytes). */
-  owner: Address;
-  /** Deposit amount in microUSDC (6 decimal places). */
-  amount: bigint;
-  /** Solana transaction signature for idempotency (typically 64 bytes). */
-  solanaTxSig: Uint8Array;
-  /** Authorized relayer signer address (20 bytes). */
-  signer: Address;
-  /**
-   * Instruction locator within the signature. Omitted/`null` on pre-locator
-   * txs (the engine reads that as top-level instruction 0, no inner). Trailing
-   * optional field: absent still encodes as a trailing `nil`, so the payload is
-   * a 5-element array either way — an engine predating the locator rejects it.
-   * See the MAJOR-bump entry in CHANGELOG.md for the engine floor.
-   */
-  locator?: DepositLocator | null;
-}
-
-/** Relayer confirms a USDC withdrawal was sent on Solana. */
-export interface ConfirmWithdrawal {
-  /** Engine-assigned withdrawal ID. */
-  withdrawalId: bigint;
-  /** Solana transaction signature (typically 64 bytes). */
-  solanaTxSig: Uint8Array;
-  /** Authorized relayer signer address (20 bytes). */
-  signer: Address;
 }
 
 /** Lifecycle status of a withdrawal record. Title-case strings are
@@ -700,16 +661,6 @@ export interface PendingDepositPage {
   nextCursor: string | null;
 }
 
-/** Relayer marks a withdrawal as permanently failed; refunds the debited balance. */
-export interface FailWithdrawal {
-  /** Engine-assigned withdrawal ID. */
-  withdrawalId: bigint;
-  /** Human-readable reason for the failure. */
-  reason: string;
-  /** Authorized relayer signer address (20 bytes). */
-  signer: Address;
-}
-
 /** One optional limb of a whole-position protection bracket. */
 export interface TriggerLimb {
   /** Trigger threshold in micro-USDC; must be non-zero. */
@@ -797,13 +748,13 @@ export type PriceComparison =
 
 /**
  * How an event's YES/NO outcome is determined at settlement. Carried
- * optionally on `CreateEvent`; `undefined`
- * (the wire `nil`) means `RelayerAttested` — the legacy default where
- * the resolver supplies the outcome and the engine trusts it. The two
- * auto-resolve modes derive YES/NO from an on-chain oracle reading and
- * make the relayer's outcome a verifiable assertion (engine recomputes
- * and rejects on mismatch). Use `RelayerAttested` for events that have
- * no on-chain price (e.g. "did Apple announce X?").
+ * optionally on `CreateEvent`; `undefined` (the wire `nil`) means
+ * `QuorumAttested`, the default: the admin quorum's `SettleEvent` names the
+ * outcome. The two auto-resolve modes derive YES/NO from an on-chain oracle
+ * reading and make the resolver's outcome a verifiable assertion (engine
+ * recomputes and rejects on mismatch). Use `QuorumAttested` for events that
+ * have no on-chain price (e.g. "did Apple announce X?"). Records stored
+ * under the earlier name `RelayerAttested` decode as `QuorumAttested`.
  */
 export type EventOracleSource =
   | {
@@ -817,7 +768,7 @@ export type EventOracleSource =
       strikePrice: bigint;
       comparison: PriceComparison;
     }
-  | { kind: "RelayerAttested" };
+  | { kind: "QuorumAttested" };
 
 /**
  * Attach a conditional to an existing event (admin-actions inner tag `0x0a`):
@@ -967,8 +918,8 @@ export interface VoteWithdrawalPayoutDead {
 
 /**
  * One registry member's vote to credit one observed Solana deposit (0x32),
- * the vote-model replacement for the bare relayer `ConfirmDeposit`
- * assertion. Aggregated and settled exactly like
+ * the vote-model replacement for the retired single-signer `ConfirmDeposit`
+ * (0x09). Aggregated and settled exactly like
  * {@link VoteWithdrawalPaid}; the signature is over the canonical vote
  * message carrying the full credit identity and the signing time, so two
  * members voting on the same observation sign the same credit identity.
@@ -999,7 +950,11 @@ export interface VoteDeposit {
   signature: Uint8Array;
 }
 
-/** Resolve a standalone event (0x27). YES/NO only — the engine rejects `Void`. */
+/** Resolve a standalone event (0x27). YES/NO only — the engine rejects `Void`.
+ *  Signed by an oracle key (code 13 otherwise), and only for an event its
+ *  `MarketOracle` rule decides: any other event is refused with code 159
+ *  (`EventSettlesByQuorum`) and settles through the admin quorum's
+ *  `SettleEvent` or `VoidEvent`. */
 export interface ResolveEvent {
   eventId: number;
   outcome: Outcome;
@@ -1009,8 +964,8 @@ export interface ResolveEvent {
 /**
  * Create a standalone event (admin-actions v2 inner tag `0x09`): one
  * prediction-binary book (EBY at `childMarketBase`) under one
- * `EventInfo`, no underlying perp and no conditional legs. The embedded
- * `signer` must be zero — governance supplies the authorization.
+ * `EventInfo`, no underlying perp and no conditional legs. The quorum is
+ * the authorization, so the payload names no signer.
  */
 export interface CreateEvent {
   eventId: number;
@@ -1021,8 +976,7 @@ export interface CreateEvent {
   resolutionWindowMs: bigint;
   takerFeeBps: number;
   makerFeeBps: number;
-  signer: Address;
-  /** How YES/NO is determined; `undefined` (wire `nil`) = `RelayerAttested`. */
+  /** How YES/NO is determined; `undefined` (wire `nil`) = `QuorumAttested`. */
   oracleSource?: EventOracleSource;
   /** Optional body text; encodes as "" when absent (`serde(default)`). */
   description?: string;
@@ -1079,29 +1033,20 @@ export interface EventInfo {
   status: EventStatus;
   createdMs: bigint;
   resolvedMs: bigint;
-  /** `undefined` (wire `nil`) means `RelayerAttested`. */
+  /** `undefined` (wire `nil`) means `QuorumAttested`. */
   oracleSource?: EventOracleSource;
   /** Every attachment, in attachment order; empty for a binary-only event. */
   attachedConditionals: AttachedConditional[];
 }
 
 /**
- * Update a subset of `MarketConfig` fields on an existing market.
- * Every tunable is optional; `null`/`undefined` leaves the current
- * value untouched. Requires relayer authorization.
- *
- * Built 2026-04-21 when we observed BTC funding spikes to −1608 bps
- * under the seed-time max_funding_rate_bps = 3000 cap on a live
- * chain we couldn't rebase. This is the engine-level lever to tighten
- * parameters on a running market.
- *
- * `kind` and `szDecimals` remain immutable. Lowering either margin ratio
- * needs a `MarketParams` grant for the signing key; the admin quorum
- * (`MarketSettingsChange`) needs none.
+ * The settings a quorum `UpdateMarketFees` (`QuorumUpdateMarketFees`) sets
+ * on `market`. Every tunable is optional; `null`/`undefined` leaves the
+ * current value untouched. The quorum is the authorization, so the change
+ * names no signer. `kind` and `szDecimals` remain immutable.
  */
-export interface UpdateMarketFees {
+export interface MarketSettingsChange {
   market: number;
-  signer: Address;
   /** New taker fee in basis points. Omit to leave unchanged. */
   takerFeeBps?: number | null;
   /** New maker fee in basis points. Omit to leave unchanged. */
@@ -1178,14 +1123,12 @@ export interface UpdateMarketFees {
   feeTiers?: FeeTier[] | null;
   /**
    * New initial margin ratio in basis points, 1 to 10,000. Omit to leave
-   * unchanged. Lowering it needs a `MarketParams` grant for the signing
-   * key; the admin quorum needs none.
+   * unchanged.
    */
   imBps?: number | null;
   /**
    * New maintenance margin ratio in basis points. Omit to leave unchanged.
-   * Positive and no greater than the resulting `imBps`; lowering it follows
-   * the same rule as `imBps`.
+   * Positive and no greater than the resulting `imBps`.
    */
   mmBps?: number | null;
   /**
@@ -1292,7 +1235,8 @@ export type TraderAction =
 
 /**
  * Operator actions — privileged infrastructure submitted by the operator's
- * relayer or oracle feeder, **not** by a trading integration. Each is gated
+ * custody key, oracle feeder or bridge operators, **not** by a trading
+ * integration. Each is gated
  * by a dedicated engine allowlist or the market's oracle policy; a normal
  * trader's signer is rejected. They are part of
  * the public wire contract (so operator tooling has one SDK), but a trading
@@ -1303,17 +1247,12 @@ export type OperatorAction =
   | { type: "SubmitOracleObservation"; data: SubmitOracleObservation }
   | { type: "Deposit"; data: Deposit }
   | { type: "Withdraw"; data: Withdraw }
-  | { type: "CreateMarket"; data: CreateMarket }
-  | { type: "ConfirmDeposit"; data: ConfirmDeposit }
-  | { type: "ConfirmWithdrawal"; data: ConfirmWithdrawal }
-  | { type: "FailWithdrawal"; data: FailWithdrawal }
   | { type: "ResolveEvent"; data: ResolveEvent }
   | { type: "VoteWithdrawalPaid"; data: VoteWithdrawalPaid }
   | { type: "RecordWithdrawalPayout"; data: RecordWithdrawalPayout }
   | { type: "VoteDeposit"; data: VoteDeposit }
   | { type: "VotePauseBridge"; data: VotePauseBridge }
-  | { type: "VoteWithdrawalPayoutDead"; data: VoteWithdrawalPayoutDead }
-  | { type: "UpdateMarketFees"; data: UpdateMarketFees };
+  | { type: "VoteWithdrawalPayoutDead"; data: VoteWithdrawalPayoutDead };
 
 /**
  * Discriminated union of every exchange action. Equals
@@ -1364,13 +1303,16 @@ export interface CancelAllOrdersForAccount {
 
 /** One operator-authority allowlist an `UpdateAuthoritySet` action targets.
  *  Externally tagged on the wire, so the domain arrives as this bare
- *  string, never a numeric discriminant. `Custody`/`MarketParams` are the
- *  capability sets; `Oracle`/`Relayer` are the genesis-seeded presence sets. */
-export type AuthorityDomain = "Oracle" | "Relayer" | "Custody" | "MarketParams";
+ *  string, never a numeric discriminant. `Custody` is the capability set;
+ *  `Oracle`/`Relayer` are the genesis-seeded presence sets. */
+export type AuthorityDomain = "Oracle" | "Relayer" | "Custody";
 
-/** A retired authority list. The engine refuses any change naming one; the
- *  names still decode from historical proposals. */
-export type RetiredAuthorityDomain = "CexComposite" | "ScheduledOps";
+/** A retired authority list. The engine refuses any change naming one with
+ *  code 157 (`AuthorityDomainRetired`); the names still decode from
+ *  historical proposals. `MarketParams` (list 5) retired with the
+ *  single-key market settings. */
+export type RetiredAuthorityDomain =
+  "CexComposite" | "MarketParams" | "ScheduledOps";
 
 /**
  * Governance addition/removal of members in one privileged authorization
@@ -1427,7 +1369,7 @@ export interface SetWithdrawalLimit {
   windowSecs: number;
 }
 
-/** Protocol-wide limits shared by ConfirmDeposit and Deposit (inner tag 28). */
+/** Protocol-wide limits on direct `Deposit` credits (inner tag 28). */
 export interface SetDepositLimit {
   /** Maximum single credit in micro-USDC; 0 disables this bound. */
   perDepositMaxMicroUsdc: bigint;
@@ -1552,7 +1494,7 @@ export interface SetMarginOffsetPolicy {
 /** Settles an unresolved event on the outcome the quorum names (inner tag
  *  30): a price event (`MarketOracle`) once its resolution window has
  *  closed and, on an engine whose `SettleEvent` accepts it, an event without
- *  an oracle rule (`RelayerAttested`, or no source) from its settlement time;
+ *  an oracle rule (`QuorumAttested`, or no source) from its settlement time;
  *  an older engine refuses that event as not a price event. `Yes` or `No`
  *  only: the encoder and the engine refuse `Void`. */
 export interface SettleEvent {
@@ -1570,13 +1512,6 @@ export interface SetMarketStatus {
   market: number;
   status: MarketStatus;
 }
-
-/** The settings a quorum `UpdateMarketFees` sets on `market`: every field of
- *  {@link UpdateMarketFees} but `signer`, with the same meaning, because the
- *  quorum is the authorization. An omitted or `null` field keeps its
- *  setting. The quorum may also lower a margin rate, which a key may do only
- *  with a `MarketParams` grant. */
-export type MarketSettingsChange = Omit<UpdateMarketFees, "signer">;
 
 /** Changes a live market's settings through the admin quorum (inner tag 35).
  *  The engine refuses the proposal with code 155 (`MarketSettingsChanged`)
@@ -1678,9 +1613,9 @@ export interface LiquidationConfigInfo {
 }
 
 /**
- * Closed, typed set of operations executable through the multisig. The
- * embedded `CreateMarket.signer` / `AttachConditional.signer` must be
- * zero — governance supplies the authorization, not the embedded address.
+ * Closed, typed set of operations executable through the multisig.
+ * Governance supplies the authorization: `CreateMarket` and `CreateEvent`
+ * name no signer, and the embedded `AttachConditional.signer` must be zero.
  *
  * `Batch` executes its items atomically in order against one overlay:
  * all succeed or the proposal fails with no partial state. Admitted on
@@ -1915,14 +1850,14 @@ export interface AdminSignerRegistry {
  * The engine's privileged authorization sets, as read from
  * `GET /v1/admin/authorities`. Each is a list of 20-byte addresses. An empty
  * list is a real chain state: no signer holds that authority. The engine's
- * response still carries the retired composite-feeder and
- * scheduled-operations slots, always empty; they are decoded and dropped.
+ * response still carries the retired composite-feeder, market-parameters
+ * and scheduled-operations slots, always empty; they are decoded and
+ * dropped.
  */
 export interface AuthoritiesSnapshot {
   relayer: Address[];
   oracle: Address[];
   custody: Address[];
-  marketParams: Address[];
 }
 
 /** Why a pending proposal expired. */
@@ -3088,7 +3023,7 @@ export interface BindingScenarioEntry {
 /** One deposit/withdrawal event from owner- and event-filtered
  * `/v1/history/account-events` pages. */
 export interface HistoryCashFlow {
-  /** Original engine event kind, including direct relayer credits/debits. */
+  /** Original engine event kind, including direct custody credits/debits. */
   kind:
     | "deposited"
     | "withdrawn"

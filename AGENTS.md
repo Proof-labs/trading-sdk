@@ -269,7 +269,7 @@ await client.submitTx({
 
 **If you are building a trading integration, stop here — you never need this
 section.** The actions below are operator infrastructure (oracle feeder,
-relayer/admin). Each is gated by a dedicated engine allowlist or the market's
+custody key, bridge operators). Each is gated by a dedicated engine allowlist or the market's
 oracle policy; a trader's signer is rejected, so they grant nothing without an
 operator-provisioned key. They live in the public SDK so operator tooling needs
 no second SDK.
@@ -284,11 +284,21 @@ const order: TraderAction = { type: "PlaceOrder", data: {/* … */} };
 await client.submitTx(order); // submitTx still accepts the full Action union
 ```
 
-Operator actions (`SubmitOracleObservation`, `CreateMarket`, `UpdateMarketFees`,
-`ConfirmDeposit`/`ConfirmWithdrawal`/`FailWithdrawal`, `Deposit`/`Withdraw`,
-`ResolveEvent`, `ClaimWithdrawalPayout`) are in `OperatorAction`; the Python SDK
-exposes them via typed builders where present or `RawAction` otherwise. See
-`src/types.ts` for every payload shape.
+Operator actions (`SubmitOracleObservation`, `Deposit`/`Withdraw`,
+`ResolveEvent`, the bridge operator votes and `RecordWithdrawalPayout`) are in
+`OperatorAction`; the Python SDK exposes them via typed builders where present
+or `RawAction` otherwise. See `src/types.ts` for every payload shape.
+
+Market creation, market settings and account fee overrides are admin actions
+only (`CreateMarket`, `UpdateMarketFees` and `SetAccountFeeOverride` inside
+`ProposeAdminAction`): their single-key bytes 0x07, 0x10 and 0x13 are retired,
+as are the single-signer custody bytes 0x09 `ConfirmDeposit`, 0x0A
+`ConfirmWithdrawal`, 0x0B `FailWithdrawal` and 0x15 `FailDeposit`, which
+bridge operator votes replace. A direct `Deposit` or `Withdraw` on a chain
+with an operator receipt registry is refused with code 158
+(`DirectCustodyClosed`); `ResolveEvent` is oracle-key only, and an event with
+no `MarketOracle` rule settles through the quorum's `SettleEvent` (code 159,
+`EventSettlesByQuorum`, otherwise).
 
 ## Reading data
 

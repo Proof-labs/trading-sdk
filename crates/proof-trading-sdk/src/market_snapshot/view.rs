@@ -382,7 +382,7 @@ mod tests {
             (
                 "events/0/resolution_source/type",
                 Value::from(1),
-                "relayer_attested",
+                "quorum_attested",
             ),
             (
                 "events/0/resolution_source/comparison",

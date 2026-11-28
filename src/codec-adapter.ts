@@ -135,8 +135,8 @@ function eventOracleSourceToWasm(
 ): unknown {
   if (src === null || src === undefined) return null;
   switch (src.kind) {
-    case "RelayerAttested":
-      return "RelayerAttested";
+    case "QuorumAttested":
+      return "QuorumAttested";
     case "UnderlyingPriceVsStrike":
       return {
         UnderlyingPriceVsStrike: {
@@ -438,17 +438,14 @@ function convertObject(data: Record<string, unknown>): Record<string, unknown> {
 
 /**
  * Refuse a market creation whose ticker breaks the ticker rule, on every
- * signable shape that creates a market: the direct `CreateMarket` action, and
- * a `CreateMarket` proposed or approved through governance, alone or as an
- * item of an admin `Batch`. Encode direction only: decoding never checks, so
+ * signable shape that creates a market: a `CreateMarket` proposed or approved
+ * through governance, alone or as an item of an admin `Batch`. Encode direction only: decoding never checks, so
  * markets created before the rule still read back. `adminProposalContentHash`
  * does not check either, so the hash of a proposal already on chain can still
  * be recomputed (for example to reject it).
  */
 function validateCreateMarketTickers(action: DecodedAction): void {
-  if (action.type === "CreateMarket") {
-    validateTicker(action.data.ticker ?? "");
-  } else if (
+  if (
     action.type === "ProposeAdminAction" ||
     action.type === "ApproveAdminAction"
   ) {
@@ -563,15 +560,6 @@ export function toWasmFields(action: DecodedAction): {
     listFieldsToWasm(action) ??
     convertObject(action.data as unknown as Record<string, unknown>);
 
-  // `CreateMarket.max_open_interest` is a non-optional u64 in the Rust/WASM
-  // core. The public TS input intentionally accepts omission/null as the
-  // operator-facing spelling of "uncapped", so normalize both before crossing
-  // the serde_wasm_bindgen boundary. This also makes the WASM migration path
-  // emit the same canonical 14-field payload as the current TS codec.
-  if (action.type === "CreateMarket" && fields.max_open_interest == null) {
-    fields.max_open_interest = 0n;
-  }
-
   return {
     actionType,
     fields,
@@ -677,7 +665,7 @@ function governanceActionFromWasm(value: unknown): unknown {
 /** Decode an `EventOracleSource` from serde's `{ Variant: {...} }` / string form. */
 function eventOracleSourceFromWasm(v: unknown): EventOracleSource | null {
   if (v === null || v === undefined) return null;
-  if (v === "RelayerAttested") return { kind: "RelayerAttested" };
+  if (v === "QuorumAttested") return { kind: "QuorumAttested" };
   if (typeof v === "object") {
     const obj = v as Record<string, unknown>;
     if ("UnderlyingPriceVsStrike" in obj) {
@@ -1488,8 +1476,8 @@ function eventViewFromWasm(v: unknown): EventView {
             strikePrice: source.strike_price as bigint,
             comparison: viewName(VIEW_COMPARISONS, source.comparison),
           }
-        : source.type === "relayer_attested"
-          ? { type: "RelayerAttested" }
+        : source.type === "quorum_attested"
+          ? { type: "QuorumAttested" }
           : { type: "Unknown" },
     attachedConditionals: (e.attached_conditionals as WasmRecord[]).map(
       (a) => ({

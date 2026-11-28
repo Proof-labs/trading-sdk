@@ -27,8 +27,9 @@ rmpv = { version = "1.3.1", features = ["with-serde"] }
 # The wire contract, one definition shared with the engine. `version` pins
 # the compatible proof-wire major. The rev stays a commit sha, never a tag
 # name, so the pin cannot move (#123).
-# In-progress pin: the wire dev mirror carrying exchange#1547 (merged); swap to the wire tag once it releases.
-proof-wire = { version = "14", git = "https://github.com/Proof-labs/wire.git", rev = "be5d6d81701c72cab7dfceba9f24261a5c09600d", features = ["bridge"] }
+# In-progress pin: exchange#1632 (the major wire release that retires the
+# relayer key) at its head ee462c44; swap to the wire tag once it releases.
+proof-wire = { version = "14", git = "ssh://git@github.com/Proof-labs/exchange.git", rev = "ee462c440e1ce9b953ad6161f8edb50b1f1d41e4", features = ["bridge"] }
 ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
 # SHA-256 for the admin-proposal content hash (§2.4) — must match exchange-core.
 sha2 = "0.11"

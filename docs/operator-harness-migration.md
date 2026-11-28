@@ -1,6 +1,7 @@
 # Operator harness compatibility
 
-Current SDK builds support `CreateMarket.tickSize` and `lotSize` together with
+Current SDK builds support `CreateMarket.tickSize` and `lotSize` (the admin
+action `CreateMarket`, proposed through the quorum) together with
 `SubmitOracleObservation`. Use the current engine contract rather than a
 maintenance package that restores retired actions.
 
@@ -13,6 +14,11 @@ maintenance package that restores retired actions.
 | `OracleUpdate` (0x03), `OracleUpdateComposite` (0x14) | `SubmitOracleObservation` under the market's installed `ConfigureOraclePolicy`                                                                                        |
 | `RunFundingTick` (0x12)                               | No action. The engine applies funding on each market's `fundingIntervalMs`; observe it through funding events.                                                        |
 | `@proof-labs/trading-sdk/testing`                     | No replacement subpath. Its last action was `RunFundingTick`; funding is scheduled as above, and liquidation runs in the engine, observed through liquidation events. |
+
+The release that follows exchange#1632 (the relayer key retired) removed the single-key
+`CreateMarket` (0x07) and `UpdateMarketFees` (0x10): create and change a market
+through `ProposeAdminAction` with the admin actions of the same names, which
+name no signer.
 
 The TypeScript package root exports `CreateMarket`, `SubmitOracleObservation`
 and `ConfigureOraclePolicy`. Python exports the matching builders from

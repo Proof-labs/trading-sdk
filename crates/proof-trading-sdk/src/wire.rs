@@ -166,8 +166,7 @@ fixed_byte_newtype! {
 }
 
 /// A Solana transaction signature — the raw on-chain signature bytes that
-/// bridge actions (`ConfirmDeposit`, `ConfirmWithdrawal`)
-/// carry for idempotency / dedup. Variable length (Solana signatures are
+/// bridge messages (`VoteDeposit`) carry for idempotency / dedup. Variable length (Solana signatures are
 /// 64 bytes, but the length is *not* constrained here — the engine and
 /// gateway validate it downstream, and the dedup keyspace is byte-equality
 /// so the SDK must not silently reshape it).

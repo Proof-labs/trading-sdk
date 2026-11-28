@@ -729,8 +729,10 @@ Ordinary-account support remains deferred in [#360](https://github.com/Proof-lab
 
 #### Operator actions (privileged)
 
-`OperatorAction` covers oracle-feeder / relayer-admin actions — e.g.
-`SubmitOracleObservation`, `UpdateMarketFees`, `CreateMarket`. **A trading
+`OperatorAction` covers oracle-feeder, custody and bridge-operator actions — e.g.
+`SubmitOracleObservation`, `Deposit`, `VoteDeposit`. Markets are created and
+changed only through governance (`CreateMarket` and `UpdateMarketFees` inside
+`ProposeAdminAction`). **A trading
 integration never needs these.** Each is gated by a dedicated engine allowlist
 or the market's oracle policy, so codec availability grants nothing without an
 operator-provisioned key. See [AGENTS.md](AGENTS.md) → "Operator actions".

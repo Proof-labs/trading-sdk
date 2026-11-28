@@ -199,9 +199,16 @@ describe("codec v1", () => {
   it("refuses retired action bytes in both directions", () => {
     for (const [name, byte] of [
       ["OracleUpdate", 0x03],
+      ["CreateMarket", 0x07],
+      ["ConfirmDeposit", 0x09],
+      ["ConfirmWithdrawal", 0x0a],
+      ["FailWithdrawal", 0x0b],
+      ["UpdateMarketFees", 0x10],
       ["RunLiquidationSweep", 0x11],
       ["RunFundingTick", 0x12],
+      ["SetAccountFeeOverride", 0x13],
       ["OracleUpdateComposite", 0x14],
+      ["FailDeposit", 0x15],
     ] as const) {
       expect(name in ActionType).toBe(false);
       expect(() =>
@@ -299,50 +306,12 @@ describe("codec v1 all action types", () => {
     },
     { type: "Withdraw", data: { owner: OWNER, amount: 500n, signer: SIGNER } },
     {
-      type: "CreateMarket",
-      data: {
-        market: 2,
-        imBps: 1000,
-        mmBps: 500,
-        takerFeeBps: 5,
-        makerFeeBps: 2,
-        signer: SIGNER,
-        fundingIntervalMs: 3600000n,
-        maxFundingRateBps: 100,
-        szDecimals: 4,
-        ticker: "ETH",
-        tickSize: 1n,
-        lotSize: 1n,
-      },
-    },
-    {
       type: "WithdrawRequest",
       data: {
         owner: OWNER,
         amount: 1000n,
         solanaDestination: new Uint8Array(32).fill(0x01),
       },
-    },
-    {
-      type: "ConfirmDeposit",
-      data: {
-        owner: OWNER,
-        amount: 5000n,
-        solanaTxSig: new Uint8Array(64).fill(0xab),
-        signer: SIGNER,
-      },
-    },
-    {
-      type: "ConfirmWithdrawal",
-      data: {
-        withdrawalId: 7n,
-        solanaTxSig: new Uint8Array(64).fill(0xcd),
-        signer: SIGNER,
-      },
-    },
-    {
-      type: "FailWithdrawal",
-      data: { withdrawalId: 8n, reason: "tx failed", signer: SIGNER },
     },
     {
       type: "ApproveAgent",
@@ -378,34 +347,6 @@ describe("codec v1 all action types", () => {
     {
       type: "ResolveEvent",
       data: { eventId: 700, outcome: Outcome.No, signer: SIGNER },
-    },
-    {
-      // All fields set — the common "tighten everything" admin call.
-      type: "UpdateMarketFees",
-      data: {
-        market: 7,
-        signer: SIGNER,
-        takerFeeBps: 8,
-        makerFeeBps: 1,
-        maxFundingRateBps: 100,
-        fundingIntervalMs: 3_600_000n,
-        maxPositionSize: 50n,
-      },
-    },
-    {
-      // Partial update — only the funding cap changes, everything else
-      // left unchanged. Should round-trip with null/undefined preserved
-      // as `null` on the decoded side.
-      type: "UpdateMarketFees",
-      data: {
-        market: 7,
-        signer: SIGNER,
-        takerFeeBps: null,
-        makerFeeBps: null,
-        maxFundingRateBps: 100,
-        fundingIntervalMs: null,
-        maxPositionSize: null,
-      },
     },
     {
       // BE-16: per-user leverage selector.
@@ -568,97 +509,6 @@ describe("codec v1 all action types", () => {
     }
   });
 
-  it("round-trips ConfirmDeposit with a DepositLocator (full fidelity)", () => {
-    const action: Action = {
-      type: "ConfirmDeposit",
-      data: {
-        owner: OWNER,
-        amount: 100000n,
-        solanaTxSig: new Uint8Array(64).fill(0xab),
-        signer: SIGNER,
-        locator: { topIndex: 3, innerIndex: 1 },
-      },
-    };
-    const { action: decoded } = decodeTx(encodeTx(action, 9n));
-    // The trailing optional locator must survive encode→decode structurally.
-    expect(decoded).toEqual(action);
-  });
-
-  it("round-trips ConfirmDeposit without a locator (trailing nil → null)", () => {
-    const action: Action = {
-      type: "ConfirmDeposit",
-      data: {
-        owner: OWNER,
-        amount: 100000n,
-        solanaTxSig: new Uint8Array(64).fill(0xab),
-        signer: SIGNER,
-      },
-    };
-    const { action: decoded } = decodeTx(encodeTx(action, 9n));
-    expect(decoded.type).toBe("ConfirmDeposit");
-    if (decoded.type === "ConfirmDeposit") {
-      // Absent on the wire (trailing nil) decodes back as null.
-      expect(decoded.data.locator).toBeNull();
-    }
-  });
-
-  it("round-trips a top-level-transfer locator (present, no inner index)", () => {
-    // A non-CPI transfer: the locator is PRESENT with no inner index, which is
-    // a different wire shape from an absent locator (`92 03 c0` vs `c0`).
-    const action: Action = {
-      type: "ConfirmDeposit",
-      data: {
-        owner: OWNER,
-        amount: 100000n,
-        solanaTxSig: new Uint8Array(64).fill(0xab),
-        signer: SIGNER,
-        locator: { topIndex: 3 },
-      },
-    };
-    const payload = encodePayloadBytes(action);
-    expect(Array.from(payload.slice(-3))).toEqual([0x92, 0x03, 0xc0]);
-    const decoded = decodeTx(encodeTx(action, 9n)).action;
-    expect(decoded.type).toBe("ConfirmDeposit");
-    if (decoded.type === "ConfirmDeposit") {
-      expect(decoded.data.locator).toEqual({ topIndex: 3, innerIndex: null });
-    }
-  });
-
-  it("decodes legacy pre-locator ConfirmDeposit bytes (4-element array)", () => {
-    const action: Action = {
-      type: "ConfirmDeposit",
-      data: {
-        owner: OWNER,
-        amount: 100000n,
-        solanaTxSig: new Uint8Array(64).fill(0xab),
-        signer: SIGNER,
-      },
-    };
-    const modern = encodePayloadBytes(action);
-    // New encoder: a 5-element array whose absent locator is a trailing nil.
-    expect(modern[0]).toBe(0x95);
-    expect(modern[modern.length - 1]).toBe(0xc0);
-    // Pre-locator engines emitted the same payload as a 4-element array with
-    // no locator slot at all. Those bytes must keep decoding — the
-    // backward-decode half of the MINOR claim for this wire change.
-    const legacy = modern.slice(0, modern.length - 1);
-    legacy[0] = 0x94;
-    const { privateKey } = generateKeypair();
-    const envelope = signEnvelopeFromPayload(
-      UNBOUND_CHAIN_ID,
-      ActionType.ConfirmDeposit,
-      9n,
-      legacy,
-      privateKey,
-    );
-    const decoded = decodeTx(envelope).action;
-    expect(decoded.type).toBe("ConfirmDeposit");
-    if (decoded.type === "ConfirmDeposit") {
-      expect(decoded.data.amount).toBe(100000n);
-      expect(decoded.data.locator).toBeNull();
-    }
-  });
-
   it("refuses a seq or action type the wire cannot carry instead of wrapping it", () => {
     const { privateKey } = generateKeypair();
     const payload = new Uint8Array([0x90]);
@@ -666,8 +516,8 @@ describe("codec v1 all action types", () => {
       [257, 1n],
       [1.5, 1n],
       [-1, 1n],
-      [ActionType.ConfirmDeposit, -1n],
-      [ActionType.ConfirmDeposit, 2n ** 64n + 7n],
+      [ActionType.Deposit, -1n],
+      [ActionType.Deposit, 2n ** 64n + 7n],
     ] as const) {
       expect(() =>
         signEnvelopeFromPayload(
@@ -750,12 +600,12 @@ describe("codec v1 all action types", () => {
 
   it("round-trips ProposeAdminAction with UpdateAuthoritySet, add and remove", () => {
     const cases: Array<{
-      domain: "MarketParams" | "Relayer";
+      domain: "Custody" | "Relayer";
       add: Uint8Array[];
       remove: Uint8Array[];
     }> = [
       {
-        domain: "MarketParams",
+        domain: "Custody",
         add: [new Uint8Array(20).fill(0xb2)],
         remove: [],
       },
@@ -806,138 +656,6 @@ describe("codec v1 all action types", () => {
     };
     expect(() => encodeTx(action, 1n)).toThrow();
   });
-
-  it("round-trips CreateMarket poolId", () => {
-    const action: Action = {
-      type: "CreateMarket",
-      data: {
-        market: 42,
-        imBps: 1000,
-        mmBps: 500,
-        takerFeeBps: 5,
-        makerFeeBps: 2,
-        signer: SIGNER,
-        fundingIntervalMs: 60000n,
-        maxFundingRateBps: 100,
-        poolId: 9,
-        szDecimals: 4,
-        ticker: "BTC",
-        tickSize: 1n,
-        lotSize: 1n,
-      },
-    };
-
-    const { action: decoded } = decodeTx(encodeTx(action, 1n));
-    if (decoded.type !== "CreateMarket") throw new Error("type narrowing");
-    // An omitted cap encodes as an explicit zero tail and decodes back as 0n —
-    // "uncapped" is a value, not an absence.
-    expect(decoded.data).toEqual({ ...action.data, maxOpenInterest: 0n });
-  });
-
-  it("round-trips CreateMarket maxOpenInterest tail", () => {
-    const action: Action = {
-      type: "CreateMarket",
-      data: {
-        market: 42,
-        imBps: 1000,
-        mmBps: 500,
-        takerFeeBps: 5,
-        makerFeeBps: 2,
-        signer: SIGNER,
-        fundingIntervalMs: 60_000n,
-        maxFundingRateBps: 100,
-        poolId: 9,
-        szDecimals: 5,
-        ticker: "BTC",
-        tickSize: 1n,
-        lotSize: 1n,
-        maxOpenInterest: 1_000_000n,
-      },
-    };
-
-    const { action: decoded } = decodeTx(encodeTx(action, 1n));
-    expect(decoded).toEqual(action);
-  });
-
-  it("encodes CreateMarket to a 14-element array whatever the cap's value", () => {
-    const base: Action = {
-      type: "CreateMarket",
-      data: {
-        market: 42,
-        imBps: 1000,
-        mmBps: 500,
-        takerFeeBps: 5,
-        makerFeeBps: 2,
-        signer: SIGNER,
-        fundingIntervalMs: 60_000n,
-        maxFundingRateBps: 100,
-        poolId: 9,
-        szDecimals: 5,
-        ticker: "BTC",
-        tickSize: 1n,
-        lotSize: 1n,
-      },
-    };
-    const withCap = (maxOpenInterest?: bigint | null): Action => ({
-      type: "CreateMarket",
-      data: {
-        ...base.data,
-        ...(maxOpenInterest === undefined ? {} : { maxOpenInterest }),
-      },
-    });
-
-    // The engine always serializes max_open_interest, so the array length must
-    // never depend on its value. If it did, the api-gateway's structured path —
-    // which re-encodes the payload from JSON before the engine verifies the
-    // signature over those bytes — could produce a different length than the
-    // client signed, and every such tx would fail verification. Pin the msgpack
-    // fixarray header (0x90 | n): 0x9e is a 14-element array.
-    for (const cap of [undefined, null, 0n, 1_000_000n]) {
-      const bytes = encodePayloadBytes(withCap(cap));
-      expect(bytes[0]).toBe(0x9e);
-    }
-
-    // Omission, JSON-style null, and explicit zero are the same market and
-    // therefore must be the exact same canonical bytes. All three decode to
-    // the public uncapped value 0n rather than restoring absence/null.
-    const canonicalUncapped = encodePayloadBytes(withCap(undefined));
-    for (const cap of [undefined, null, 0n]) {
-      expect(encodePayloadBytes(withCap(cap))).toEqual(canonicalUncapped);
-      const decoded = decodeTx(encodeTx(withCap(cap), 1n)).action;
-      if (decoded.type !== "CreateMarket") throw new Error("type narrowing");
-      expect(decoded.data.maxOpenInterest).toBe(0n);
-    }
-  });
-
-  it.each([-1n, 0x1_0000_0000_0000_0000n])(
-    "rejects CreateMarket maxOpenInterest outside u64: %s",
-    (maxOpenInterest) => {
-      const action: Action = {
-        type: "CreateMarket",
-        data: {
-          market: 42,
-          imBps: 1000,
-          mmBps: 500,
-          takerFeeBps: 5,
-          makerFeeBps: 2,
-          signer: SIGNER,
-          fundingIntervalMs: 60_000n,
-          maxFundingRateBps: 100,
-          poolId: 9,
-          szDecimals: 5,
-          ticker: "BTC",
-          tickSize: 1n,
-          lotSize: 1n,
-          maxOpenInterest,
-        },
-      };
-      // The WASM core rejects out-of-u64 BigInts at deserialization; the
-      // hand-written TS codec used to phrase this as "unsigned u64 range".
-      expect(() => encodePayloadBytes(action)).toThrow(
-        /BigInt outside u64|unsigned u64 range/,
-      );
-    },
-  );
 
   it("round-trips AtomicBasketOrder", () => {
     const action: Action = {
@@ -1004,290 +722,6 @@ describe("codec v1 all action types", () => {
       data: { owner: SIGNER, clientOrderId: 9n },
     });
   });
-
-  // Deeper round-trip: field-by-field equality for UpdateMarketFees
-  // (the shape the shallow type-name check doesn't cover). Catches
-  // silent serialization drift in the Option<T> fields.
-  it("round-trips UpdateMarketFees field values (all set)", () => {
-    const primary: Address = new Uint8Array([
-      0xf1, 0xf1, 0xf1, 0xf1, 0xf1, 0xf1, 0xf1, 0xf1, 0xf1, 0xf1, 0xf1, 0xf1,
-      0xf1, 0xf1, 0xf1, 0xf1, 0xf1, 0xf1, 0xf1, 0xf1,
-    ]);
-    const action: Action = {
-      type: "UpdateMarketFees",
-      data: {
-        market: 42,
-        signer: SIGNER,
-        takerFeeBps: 8,
-        makerFeeBps: 1,
-        maxFundingRateBps: 250,
-        fundingIntervalMs: 28_800_000n,
-        maxPositionSize: 1000n,
-        defaultTtlMs: 60_000n,
-        netDeltaMargin: true,
-        tickSize: 100n,
-        lotSize: 10n,
-        primaryOracleSigner: primary,
-        oracleStalenessMs: 60_000n,
-        markSourceMode: 1,
-        maxMarkSpreadBps: 75,
-        cexCompositeStalenessMs: 15_000n,
-        feeTiers: [
-          {
-            min30dVolumeMicroUsdc: 0n,
-            makerFeeTenthBps: 0,
-            takerFeeTenthBps: 5,
-          },
-          {
-            min30dVolumeMicroUsdc: 1_000_000_000n,
-            makerFeeTenthBps: -1,
-            takerFeeTenthBps: 3,
-          },
-        ],
-        imBps: 3334,
-        mmBps: 1667,
-        maxOpenInterest: 2_000_000n,
-      },
-    };
-    const { action: decoded } = decodeTx(encodeTx(action, 1n));
-    expect(decoded.type).toBe("UpdateMarketFees");
-    if (decoded.type !== "UpdateMarketFees") throw new Error("type narrowing");
-    expect(decoded.data.market).toBe(42);
-    expect(decoded.data.takerFeeBps).toBe(8);
-    expect(decoded.data.makerFeeBps).toBe(1);
-    expect(decoded.data.maxFundingRateBps).toBe(250);
-    expect(decoded.data.fundingIntervalMs).toBe(28_800_000n);
-    expect(decoded.data.maxPositionSize).toBe(1000n);
-    expect(decoded.data.defaultTtlMs).toBe(60_000n);
-    expect(decoded.data.netDeltaMargin).toBe(true);
-    expect(decoded.data.tickSize).toBe(100n);
-    expect(decoded.data.lotSize).toBe(10n);
-    expect(decoded.data.primaryOracleSigner).toEqual(primary);
-    expect(decoded.data.oracleStalenessMs).toBe(60_000n);
-    expect(decoded.data.markSourceMode).toBe(1);
-    expect(decoded.data.maxMarkSpreadBps).toBe(75);
-    expect(decoded.data.cexCompositeStalenessMs).toBe(15_000n);
-    expect(decoded.data.feeTiers).toEqual(action.data.feeTiers);
-    expect(decoded.data.imBps).toBe(3334);
-    expect(decoded.data.mmBps).toBe(1667);
-    expect(decoded.data.maxOpenInterest).toBe(2_000_000n);
-  });
-
-  it("round-trips UpdateMarketFees with only BE-48/BE-50 fields set", () => {
-    // Operator setting tick/lot/oracle gates without touching fees.
-    // Verifies the new fields travel independently of the older ones.
-    const primary: Address = new Uint8Array([
-      0xf1, 0xf1, 0xf1, 0xf1, 0xf1, 0xf1, 0xf1, 0xf1, 0xf1, 0xf1, 0xf1, 0xf1,
-      0xf1, 0xf1, 0xf1, 0xf1, 0xf1, 0xf1, 0xf1, 0xf1,
-    ]);
-    const action: Action = {
-      type: "UpdateMarketFees",
-      data: {
-        market: 7,
-        signer: SIGNER,
-        tickSize: 100n,
-        lotSize: 5n,
-        primaryOracleSigner: primary,
-        oracleStalenessMs: 30_000n,
-      },
-    };
-    const { action: decoded } = decodeTx(encodeTx(action, 1n));
-    if (decoded.type !== "UpdateMarketFees") throw new Error("type narrowing");
-    expect(decoded.data.market).toBe(7);
-    expect(decoded.data.tickSize).toBe(100n);
-    expect(decoded.data.lotSize).toBe(5n);
-    expect(decoded.data.primaryOracleSigner).toEqual(primary);
-    expect(decoded.data.oracleStalenessMs).toBe(30_000n);
-    // Fee fields remain null (untouched).
-    expect(decoded.data.takerFeeBps).toBeNull();
-    expect(decoded.data.maxPositionSize).toBeNull();
-    expect(decoded.data.netDeltaMargin).toBeNull();
-    expect(decoded.data.imBps).toBeNull();
-    expect(decoded.data.mmBps).toBeNull();
-    expect(decoded.data.maxOpenInterest).toBeNull();
-  });
-
-  it("round-trips UpdateMarketFees primary oracle clear sentinel", () => {
-    const action: Action = {
-      type: "UpdateMarketFees",
-      data: {
-        market: 7,
-        signer: SIGNER,
-        primaryOracleSigner: new Uint8Array(20),
-      },
-    };
-
-    const { action: decoded } = decodeTx(encodeTx(action, 1n));
-
-    if (decoded.type !== "UpdateMarketFees") throw new Error("type narrowing");
-    expect(decoded.data.primaryOracleSigner).toEqual(new Uint8Array(20));
-  });
-
-  it("round-trips UpdateMarketFees with None fields preserved as null", () => {
-    const action: Action = {
-      type: "UpdateMarketFees",
-      data: {
-        market: 42,
-        signer: SIGNER,
-        takerFeeBps: null,
-        makerFeeBps: null,
-        maxFundingRateBps: 100,
-        fundingIntervalMs: null,
-        maxPositionSize: null,
-        defaultTtlMs: null,
-      },
-    };
-    const { action: decoded } = decodeTx(encodeTx(action, 1n));
-    if (decoded.type !== "UpdateMarketFees") throw new Error("type narrowing");
-    expect(decoded.data.takerFeeBps).toBeNull();
-    expect(decoded.data.makerFeeBps).toBeNull();
-    expect(decoded.data.maxFundingRateBps).toBe(100);
-    expect(decoded.data.fundingIntervalMs).toBeNull();
-    expect(decoded.data.maxPositionSize).toBeNull();
-    expect(decoded.data.defaultTtlMs).toBeNull();
-    expect(decoded.data.feeTiers).toBeNull();
-    expect(decoded.data.imBps).toBeNull();
-    expect(decoded.data.mmBps).toBeNull();
-    expect(decoded.data.maxOpenInterest).toBeNull();
-  });
-
-  it("round-trips UpdateMarketFees with only maxOpenInterest set", () => {
-    const action: Action = {
-      type: "UpdateMarketFees",
-      data: {
-        market: 7,
-        signer: SIGNER,
-        maxOpenInterest: 500_000n,
-      },
-    };
-
-    const { action: decoded } = decodeTx(encodeTx(action, 1n));
-    if (decoded.type !== "UpdateMarketFees") throw new Error("type narrowing");
-    expect(decoded.data.maxOpenInterest).toBe(500_000n);
-    // Slots 18/19 are required placeholders; max OI is engine slot 20.
-    expect(decoded.data.imBps).toBeNull();
-    expect(decoded.data.mmBps).toBeNull();
-  });
-
-  it.each([-1n, 0x1_0000_0000_0000_0000n])(
-    "rejects UpdateMarketFees maxOpenInterest outside u64: %s",
-    (maxOpenInterest) => {
-      const action: Action = {
-        type: "UpdateMarketFees",
-        data: { market: 7, signer: SIGNER, maxOpenInterest },
-      };
-      // The WASM core rejects out-of-u64 BigInts at deserialization; the
-      // hand-written TS codec used to phrase this as "unsigned u64 range".
-      expect(() => encodePayloadBytes(action)).toThrow(
-        /BigInt outside u64|unsigned u64 range/,
-      );
-    },
-  );
-
-  it("decodes the wire-12 UpdateMarketFees payload width (23 fields)", () => {
-    const encoder = new Encoder({ useBigInt64: true });
-    const payload = encoder.encode([
-      7,
-      Array.from(SIGNER),
-      ...Array(21).fill(null),
-    ]);
-    const wire = encoder.encode([
-      ENVELOPE_VERSION,
-      ActionType.UpdateMarketFees,
-      1n,
-      payload,
-      ZERO_PUBKEY,
-      ZERO_SIG,
-    ]);
-
-    const { action: decoded } = decodeTx(wire);
-    if (decoded.type !== "UpdateMarketFees") throw new Error("type narrowing");
-    expect(decoded.data.imBps).toBeNull();
-    expect(decoded.data.mmBps).toBeNull();
-    expect(decoded.data.maxOpenInterest).toBeNull();
-    expect(decoded.data.impactNotional).toBeNull();
-  });
-
-  it("refuses a pre-12 UpdateMarketFees payload shorter than the pinned width", () => {
-    // The positional decode is strict — the same bytes the engine refuses.
-    // Legacy (pre-default_ttl_ms) payloads no longer decode anywhere.
-    const encoder = new Encoder({ useBigInt64: true });
-    const payload = encoder.encode([
-      7,
-      Array.from(SIGNER),
-      ...Array(16).fill(null),
-    ]);
-    const wire = encoder.encode([
-      ENVELOPE_VERSION,
-      ActionType.UpdateMarketFees,
-      1n,
-      payload,
-      ZERO_PUBKEY,
-      ZERO_SIG,
-    ]);
-    expect(() => decodeTx(wire)).toThrow(/UpdateMarketFees/);
-  });
-
-  it("round-trips the canonical funding and impact-notional fields", () => {
-    const action: Action = {
-      type: "UpdateMarketFees",
-      data: {
-        market: 7,
-        signer: SIGNER,
-        impactNotional: 1_000_000_000n,
-        fundingDeadBandBps: 10,
-        fundingInterestRate: -12_500,
-      },
-    };
-    const { action: decoded } = decodeTx(encodeTx(action, 1n));
-    if (decoded.type !== "UpdateMarketFees") throw new Error("type narrowing");
-    expect(decoded.data.impactNotional).toBe(1_000_000_000n);
-    expect(decoded.data.fundingDeadBandBps).toBe(10);
-    expect(decoded.data.fundingInterestRate).toBe(-12_500);
-  });
-
-  it.each([18, 20, 21, 22])(
-    "rejects the %i-field UpdateMarketFees payload without the required funding tail",
-    (width) => {
-      const encoder = new Encoder({ useBigInt64: true });
-      const payload = encoder.encode([
-        7,
-        Array.from(SIGNER),
-        ...Array(width - 2).fill(null),
-      ]);
-      const wire = encoder.encode([
-        ENVELOPE_VERSION,
-        ActionType.UpdateMarketFees,
-        1n,
-        payload,
-        ZERO_PUBKEY,
-        ZERO_SIG,
-      ]);
-
-      // Canonical engine update_market_fees_requires_the_funding_terms_tail
-      // deliberately refuses the previous shape rather than shifting fields.
-      expect(() => decodeTx(wire)).toThrow();
-    },
-  );
-
-  it("round-trips UpdateMarketFees with only defaultTtlMs set (operator-only path)", () => {
-    // Operator flipping TTL on its own, leaving everything else alone.
-    // Verifies the defaultTtlMs field travels independently.
-    const action: Action = {
-      type: "UpdateMarketFees",
-      data: {
-        market: 7,
-        signer: SIGNER,
-        defaultTtlMs: 120_000n,
-      },
-    };
-    const { action: decoded } = decodeTx(encodeTx(action, 1n));
-    if (decoded.type !== "UpdateMarketFees") throw new Error("type narrowing");
-    expect(decoded.data.market).toBe(7);
-    expect(decoded.data.defaultTtlMs).toBe(120_000n);
-    expect(decoded.data.takerFeeBps).toBeNull();
-    expect(decoded.data.maxPositionSize).toBeNull();
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1346,7 +780,7 @@ describe("codec v2 signing", () => {
     expect(signature!.length).toBe(64);
   });
 
-  it("V2 round-trips all 15 action types", () => {
+  it("V2 round-trips the core action types", () => {
     const { privateKey } = generateKeypair();
 
     const allActions: Action[] = [
@@ -1374,50 +808,12 @@ describe("codec v2 signing", () => {
         data: { owner: OWNER, amount: 500n, signer: SIGNER },
       },
       {
-        type: "CreateMarket",
-        data: {
-          market: 2,
-          imBps: 1000,
-          mmBps: 500,
-          takerFeeBps: 5,
-          makerFeeBps: 2,
-          signer: SIGNER,
-          fundingIntervalMs: 3600000n,
-          maxFundingRateBps: 100,
-          szDecimals: 4,
-          ticker: "ETH",
-          tickSize: 1n,
-          lotSize: 1n,
-        },
-      },
-      {
         type: "WithdrawRequest",
         data: {
           owner: OWNER,
           amount: 1000n,
           solanaDestination: new Uint8Array(32).fill(0x01),
         },
-      },
-      {
-        type: "ConfirmDeposit",
-        data: {
-          owner: OWNER,
-          amount: 5000n,
-          solanaTxSig: new Uint8Array(64).fill(0xab),
-          signer: SIGNER,
-        },
-      },
-      {
-        type: "ConfirmWithdrawal",
-        data: {
-          withdrawalId: 7n,
-          solanaTxSig: new Uint8Array(64).fill(0xcd),
-          signer: SIGNER,
-        },
-      },
-      {
-        type: "FailWithdrawal",
-        data: { withdrawalId: 8n, reason: "tx failed", signer: SIGNER },
       },
       {
         type: "ApproveAgent",
@@ -1637,89 +1033,32 @@ describe("codec/crypto hygiene", () => {
   });
 });
 
-describe("UpdateMarketFees.markSourceMode encoding", () => {
-  it("encodes markSourceMode as the canonical enum name, not a bare integer", () => {
-    // Regression: the enum must serialize as its variant name ("Median") to
-    // match the engine/gateway's rmp-serde re-encoding. The pre-fix codec
-    // emitted the integer index (0x01), which failed signature verification.
-    const action: Action = {
-      type: "UpdateMarketFees",
-      data: { market: 1, signer: SIGNER, markSourceMode: 1 },
-    };
-    const hex = bytesToHex(encodeTx(action, 1n));
-    const medianHex = bytesToHex(new TextEncoder().encode("Median"));
-    expect(hex).toContain(medianHex); // "Median" str bytes present
-  });
-
-  it("round-trips markSourceMode 0 (OracleOnly) and 1 (Median)", () => {
-    for (const mode of [0, 1] as const) {
-      const action: Action = {
-        type: "UpdateMarketFees",
-        data: { market: 1, signer: SIGNER, markSourceMode: mode },
-      };
-      const { action: decoded } = decodeTx(encodeTx(action, 1n));
-      expect(decoded.type).toBe("UpdateMarketFees");
-      if (decoded.type === "UpdateMarketFees") {
-        expect(decoded.data.markSourceMode).toBe(mode);
-      }
-    }
-  });
-
-  it("decode still accepts the legacy integer form (back-compat)", () => {
-    // A tx encoded by an old SDK put the raw integer at slot 13; decoding it
-    // must still yield the typed union rather than dropping to null.
-    const legacy = encodeTx(
-      { type: "UpdateMarketFees", data: { market: 1, signer: SIGNER } },
-      1n,
-    );
-    // Sanity: default (no markSourceMode) decodes as null.
-    const { action } = decodeTx(legacy);
-    if (action.type === "UpdateMarketFees") {
-      expect(action.data.markSourceMode ?? null).toBeNull();
-    }
-  });
-});
-
 describe("decodeSigningMessage", () => {
   const chainId = chainIdFromString("test-chain");
   const owner = pubkeyToOwner(getPublicKey(generateKeypair().privateKey));
 
-  const createMarket: Action = {
-    type: "CreateMarket",
-    data: {
-      market: 42,
-      imBps: 500,
-      mmBps: 250,
-      takerFeeBps: 5,
-      makerFeeBps: 2,
-      signer: owner,
-      fundingIntervalMs: 3_600_000n,
-      maxFundingRateBps: 100,
-      szDecimals: 2,
-      ticker: "XYZ-PERP",
-      tickSize: 1n,
-      lotSize: 1n,
-    },
+  const deposit: Action = {
+    type: "Deposit",
+    data: { owner, amount: 250_000_000n, signer: owner },
   };
 
-  it("round-trips the exact signingMessage() bytes for a CreateMarket", () => {
-    const payload = encodePayloadBytes(createMarket);
+  it("round-trips the exact signingMessage() bytes for a Deposit", () => {
+    const payload = encodePayloadBytes(deposit);
     const seq = 1_752_000_000_000n;
-    const msg = signingMessage(chainId, ActionType.CreateMarket, seq, payload);
+    const msg = signingMessage(chainId, ActionType.Deposit, seq, payload);
 
     const d = decodeSigningMessage(msg);
 
     expect(Array.from(d.chainId)).toEqual(Array.from(chainId));
-    expect(d.actionType).toBe(ActionType.CreateMarket);
-    expect(d.actionName).toBe("CreateMarket");
+    expect(d.actionType).toBe(ActionType.Deposit);
+    expect(d.actionName).toBe("Deposit");
     expect(d.seq).toBe(seq);
     expect(Array.from(d.payloadBytes)).toEqual(Array.from(payload));
     expect(d.decodeError).toBeNull();
-    expect(d.action?.type).toBe("CreateMarket");
-    if (d.action?.type === "CreateMarket") {
-      expect(d.action.data.ticker).toBe("XYZ-PERP");
-      expect(d.action.data.market).toBe(42);
-      expect(d.action.data.imBps).toBe(500);
+    expect(d.action?.type).toBe("Deposit");
+    if (d.action?.type === "Deposit") {
+      expect(d.action.data.amount).toBe(250_000_000n);
+      expect(Array.from(d.action.data.owner)).toEqual(Array.from(owner));
     }
   });
 
@@ -1753,7 +1092,7 @@ describe("decodeSigningMessage", () => {
     // A wire action newer than this SDK build: the envelope fields must
     // still parse so a signer tool can show them, with an honest "cannot
     // decode" instead of a false structural rejection.
-    const payload = encodePayloadBytes(createMarket);
+    const payload = encodePayloadBytes(deposit);
     const msg = signingMessage(chainId, 0xee, 5n, payload);
 
     const d = decodeSigningMessage(msg);
@@ -1769,17 +1108,17 @@ describe("decodeSigningMessage", () => {
 
   it("degrades to action:null when a known type's payload doesn't decode", () => {
     const garbage = new Uint8Array([0xff, 0x00, 0x13, 0x37]);
-    const msg = signingMessage(chainId, ActionType.CreateMarket, 5n, garbage);
+    const msg = signingMessage(chainId, ActionType.Deposit, 5n, garbage);
 
     const d = decodeSigningMessage(msg);
 
-    expect(d.actionName).toBe("CreateMarket");
+    expect(d.actionName).toBe("Deposit");
     expect(d.action).toBeNull();
     expect(d.decodeError).not.toBeNull();
   });
 
   it("refuses a known action payload with undisplayed trailing fields", () => {
-    const payload = encodePayloadBytes(createMarket);
+    const payload = encodePayloadBytes(deposit);
     const fields = new Decoder({ useBigInt64: true }).decode(payload);
     if (!Array.isArray(fields)) {
       expect.unreachable("expected a positional payload array");
@@ -1790,14 +1129,14 @@ describe("decodeSigningMessage", () => {
     ]);
     const msg = signingMessage(
       chainId,
-      ActionType.CreateMarket,
+      ActionType.Deposit,
       5n,
       extendedPayload,
     );
 
     const d = decodeSigningMessage(msg);
 
-    expect(d.actionName).toBe("CreateMarket");
+    expect(d.actionName).toBe("Deposit");
     expect(d.action).toBeNull();
     // Refusal is the contract: a non-canonical payload must never surface as a
     // decoded action. The WASM core rejects the extra trailing field at strict
@@ -1849,8 +1188,8 @@ describe("decodeSigningMessage", () => {
   });
 
   it("throws on a wrong domain prefix", () => {
-    const payload = encodePayloadBytes(createMarket);
-    const msg = signingMessage(chainId, ActionType.CreateMarket, 1n, payload);
+    const payload = encodePayloadBytes(deposit);
+    const msg = signingMessage(chainId, ActionType.Deposit, 1n, payload);
     msg[0] ^= 0xff;
     expect(() => decodeSigningMessage(msg)).toThrow(/domain prefix/);
   });
@@ -1864,8 +1203,8 @@ describe("decodeSigningMessage", () => {
   it("parses a preimage whose bytes sit at a nonzero offset in a larger buffer", () => {
     // The seq DataView reads through msg.buffer + byteOffset — a subarray
     // view over a bigger allocation must decode identically.
-    const payload = encodePayloadBytes(createMarket);
-    const msg = signingMessage(chainId, ActionType.CreateMarket, 9n, payload);
+    const payload = encodePayloadBytes(deposit);
+    const msg = signingMessage(chainId, ActionType.Deposit, 9n, payload);
     const padded = new Uint8Array(msg.length + 8);
     padded.set(msg, 8);
     const view = padded.subarray(8);
@@ -1873,7 +1212,7 @@ describe("decodeSigningMessage", () => {
     const d = decodeSigningMessage(view);
 
     expect(d.seq).toBe(9n);
-    expect(d.action?.type).toBe("CreateMarket");
+    expect(d.action?.type).toBe("Deposit");
   });
 });
 
@@ -2010,34 +1349,6 @@ describe("legacy short-payload decode compatibility", () => {
     ];
     for (const [byte, fields] of retired) {
       expect(() => decodeTx(envelope(byte, fields)), `0x${byte}`).toThrow();
-    }
-  });
-
-  it("decodes a 12-field CreateMarket from before the grid, tick and lot 0", () => {
-    // [market, im_bps, mm_bps, taker_fee_bps, maker_fee_bps, signer,
-    //  funding_interval_ms, max_funding_rate_bps, pool_id, sz_decimals,
-    //  ticker, max_open_interest] — no tick_size / lot_size.
-    const bytes = envelope(ActionType.CreateMarket, [
-      42,
-      1000,
-      500,
-      5,
-      2,
-      OWNER,
-      60_000n,
-      100,
-      9,
-      4,
-      "BTC",
-      1_000_000n,
-    ]);
-    const { action } = decodeTx(bytes);
-    expect(action.type).toBe("CreateMarket");
-    if (action.type === "CreateMarket") {
-      expect(action.data.ticker).toBe("BTC");
-      expect(action.data.maxOpenInterest).toBe(1_000_000n);
-      expect(action.data.tickSize).toBe(0n);
-      expect(action.data.lotSize).toBe(0n);
     }
   });
 

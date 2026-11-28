@@ -341,7 +341,6 @@ export async function seedWorld(opts: SeedWorldOptions = {}): Promise<World> {
             mmBps: spec.mmBps,
             takerFeeBps: 5,
             makerFeeBps: 2,
-            signer: new Uint8Array(20),
             fundingIntervalMs: 0n,
             maxFundingRateBps: 0,
             poolId: spec.poolId ?? 0,
@@ -433,10 +432,10 @@ export async function seedWorld(opts: SeedWorldOptions = {}): Promise<World> {
  *   2. Wire the key into an `ExchangeClient` and sync its nonce (0 for a
  *      brand-new account).
  *   3. Submit a self-signed Deposit for the seed balance. Dev-mode engine
- *      accepts this because signer == owner. In production the deposit
- *      flow runs through the Solana relayer (ConfirmDeposit), but that
- *      path requires a separate relayer key and is unnecessary for
- *      scenario tests.
+ *      accepts this because signer == owner. In production deposits are
+ *      credited by bridge operator votes (VoteDeposit), which a chain
+ *      with an operator registry requires (a direct Deposit is refused
+ *      there with code 158); scenario tests do not need that path.
  *   4. Wait for the Deposit to commit (submitTxCommit blocks until
  *      inclusion). After this the user is fully usable.
  */
@@ -460,9 +459,10 @@ async function createUser(
   // background check so scenario assertions use submitTxCommit directly.
   client.setUnsafeFastSubmit(true);
 
-  // Fund via relayer-signed Deposit. Engine's handle_deposit (audit
-  // B1, 2026-04-23) rejects with code=13 (UnauthorizedRelayer)
-  // unless the envelope signer is on the on-chain relayer allowlist.
+  // Fund via relayer-signed Deposit. The engine rejects it with code 13
+  // (UnauthorizedSigner) unless the envelope signer is custody-authorized
+  // (the relayer list through its fallback), and with code 158
+  // (DirectCustodyClosed) on a chain with an operator receipt registry.
   if (!relayerClient || !relayerAddress) {
     throw new Error(
       `scenario harness: cannot fund ${name} without a relayerPrivateKey. ` +

@@ -73,9 +73,10 @@ config = client.liquidation_config()
 print(authorities.relayer, config.sequence, config.config.takeover_discount_bps)
 ```
 
-`authorities()` reads `/v1/admin/authorities` as `AuthoritiesSnapshot`: four
-lists of 20-byte addresses (`relayer`, `oracle`, `custody`, `market_params`);
-the retired composite-feeder and scheduled-operations slots are dropped. Empty
+`authorities()` reads `/v1/admin/authorities` as `AuthoritiesSnapshot`: three
+lists of 20-byte addresses (`relayer`, `oracle`, `custody`); the retired
+composite-feeder, market-parameters and scheduled-operations slots are
+dropped. Empty
 sets are valid; a failed read raises
 instead of returning empty sets. Membership facts do not prove that a proposed
 action is authorized or that the response is authentic.
@@ -545,10 +546,12 @@ unsupported. See [availability](../README.md#setusermarketleverage-availability)
   `SetPositionTriggers`, `CancelPositionTriggers`,
   `SetUserMarketLeverage`, `ApproveAgent`, `RevokeAgent`, `CreateSubAccount`,
   `SubAccountTransfer`, `Deposit`, `Withdraw`, `WithdrawRequest`.
-- **Operator (privileged):** `SubmitOracleObservation`, `CreateMarket`, `UpdateMarketFees`,
-  `ConfirmDeposit`, `ConfirmWithdrawal`, `FailWithdrawal`,
-  `AuthorizeWithdrawal`, `ConfirmWithdrawalReceipt`, `FailWithdrawalReceipt`,
-  `ClaimWithdrawalPayout`, `RecordWithdrawalPayout`, `ResolveEvent`.
+- **Operator (privileged):** `SubmitOracleObservation`, `VoteDeposit`,
+  `VoteWithdrawalPaid`, `VoteWithdrawalPayoutDead`, `VotePauseBridge`,
+  `RecordWithdrawalPayout`, `ResolveEvent`. Markets are created and changed
+  only through governance (`CreateMarket` and `UpdateMarketFees` inside
+  `ProposeAdminAction`); the single-key bytes and the single-signer custody
+  actions are retired.
 - **Governance (admin multisig):** `ProposeAdminAction`, `ApproveAdminAction`,
   `RejectAdminAction`, `EmergencyAdminAction`. Their `action` is the inner
   admin action in its externally tagged wire form:

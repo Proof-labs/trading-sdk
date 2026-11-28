@@ -96,6 +96,7 @@ const RETIRED_ADMIN_KINDS: Record<RetiredAdminAction["kind"], true> = {
 
 const RETIRED_AUTHORITY_DOMAINS: Record<RetiredAuthorityDomain, true> = {
   CexComposite: true,
+  MarketParams: true,
   ScheduledOps: true,
 };
 

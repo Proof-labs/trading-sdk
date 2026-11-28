@@ -75,7 +75,7 @@ const REGISTRY_ABSENT = "91c0";
 
 /** `ProposalPage` — one Pending proposal wrapping a CreateMarket, no cursor. */
 const PAGE_PENDING_CREATE_MARKET =
-  "92919f2aa750656e64696e67a750656e64696e670702dc0014ccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaa92dc0014ccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaadc0014ccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbb91dc0014ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccce000f4549cf0000018bcfe56800cf0000018bd50bc4000181ac4372656174654d61726b65749ccd1092cd03e8cd01f40703dc00140000000000000000000000000000000000000000ce0036ee80cd03200904a4474f4c44ce075bcd1595ccdeccadccbeccef01dc00205a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5ac0";
+  "92919f2aa750656e64696e67a750656e64696e670702dc0014ccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaa92dc0014ccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaadc0014ccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbb91dc0014ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccce000f4549cf0000018bcfe56800cf0000018bd50bc4000181ac4372656174654d61726b65749bcd1092cd03e8cd01f40703ce0036ee80cd03200904a4474f4c44ce075bcd1595ccdeccadccbeccef01dc00205a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5ac0";
 
 /** `ProposalPage` — an Executed proposal wrapping a registry rewrite, with a cursor. */
 const PAGE_EXECUTED_REGISTRY_UPDATE =
@@ -83,16 +83,16 @@ const PAGE_EXECUTED_REGISTRY_UPDATE =
 
 /** One page per `ProposalStatus` shape — the encoding that cannot be guessed. */
 const PAGE_STATUS_FAILED =
-  "92919f3281a64661696c656491cd0fa181a64661696c656491cd0fa10702dc0014ccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaa92dc0014ccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaadc0014ccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbb91dc0014ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccce000f4549cf0000018bcfe56800cf0000018bd50bc4000181ac4372656174654d61726b65749ccd1092cd03e8cd01f40703dc00140000000000000000000000000000000000000000ce0036ee80cd03200904a4474f4c44ce075bcd1595ccdeccadccbeccef01dc00205a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5ac0";
+  "92919f3281a64661696c656491cd0fa181a64661696c656491cd0fa10702dc0014ccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaa92dc0014ccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaadc0014ccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbb91dc0014ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccce000f4549cf0000018bcfe56800cf0000018bd50bc4000181ac4372656174654d61726b65749bcd1092cd03e8cd01f40703ce0036ee80cd03200904a4474f4c44ce075bcd1595ccdeccadccbeccef01dc00205a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5ac0";
 
 const PAGE_STATUS_REJECTED =
-  "92919f3281a852656a656374656491dc0014ccddccddccddccddccddccddccddccddccddccddccddccddccddccddccddccddccddccddccddccdd81a852656a656374656491dc0014ccddccddccddccddccddccddccddccddccddccddccddccddccddccddccddccddccddccddccddccdd0702dc0014ccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaa92dc0014ccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaadc0014ccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbb91dc0014ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccce000f4549cf0000018bcfe56800cf0000018bd50bc4000181ac4372656174654d61726b65749ccd1092cd03e8cd01f40703dc00140000000000000000000000000000000000000000ce0036ee80cd03200904a4474f4c44ce075bcd1595ccdeccadccbeccef01dc00205a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5ac0";
+  "92919f3281a852656a656374656491dc0014ccddccddccddccddccddccddccddccddccddccddccddccddccddccddccddccddccddccddccddccdd81a852656a656374656491dc0014ccddccddccddccddccddccddccddccddccddccddccddccddccddccddccddccddccddccddccddccdd0702dc0014ccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaa92dc0014ccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaadc0014ccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbb91dc0014ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccce000f4549cf0000018bcfe56800cf0000018bd50bc4000181ac4372656174654d61726b65749bcd1092cd03e8cd01f40703ce0036ee80cd03200904a4474f4c44ce075bcd1595ccdeccadccbeccef01dc00205a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5ac0";
 
 const PAGE_STATUS_EXPIRED_TTL =
-  "92919f3281a74578706972656491a354746c81a74578706972656491a354746c0702dc0014ccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaa92dc0014ccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaadc0014ccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbb91dc0014ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccce000f4549cf0000018bcfe56800cf0000018bd50bc4000181ac4372656174654d61726b65749ccd1092cd03e8cd01f40703dc00140000000000000000000000000000000000000000ce0036ee80cd03200904a4474f4c44ce075bcd1595ccdeccadccbeccef01dc00205a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5ac0";
+  "92919f3281a74578706972656491a354746c81a74578706972656491a354746c0702dc0014ccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaa92dc0014ccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaadc0014ccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbb91dc0014ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccce000f4549cf0000018bcfe56800cf0000018bd50bc4000181ac4372656174654d61726b65749bcd1092cd03e8cd01f40703ce0036ee80cd03200904a4474f4c44ce075bcd1595ccdeccadccbeccef01dc00205a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5ac0";
 
 const PAGE_STATUS_EXPIRED_REGISTRY_CHANGED =
-  "92919f3281a74578706972656491af52656769737472794368616e67656481a74578706972656491af52656769737472794368616e6765640702dc0014ccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaa92dc0014ccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaadc0014ccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbb91dc0014ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccce000f4549cf0000018bcfe56800cf0000018bd50bc4000181ac4372656174654d61726b65749ccd1092cd03e8cd01f40703dc00140000000000000000000000000000000000000000ce0036ee80cd03200904a4474f4c44ce075bcd1595ccdeccadccbeccef01dc00205a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5ac0";
+  "92919f3281a74578706972656491af52656769737472794368616e67656481a74578706972656491af52656769737472794368616e6765640702dc0014ccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaa92dc0014ccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaadc0014ccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbbccbb91dc0014ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccce000f4549cf0000018bcfe56800cf0000018bd50bc4000181ac4372656174654d61726b65749bcd1092cd03e8cd01f40703ce0036ee80cd03200904a4474f4c44ce075bcd1595ccdeccadccbeccef01dc00205a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5ac0";
 
 /** `ProposalPage { items: [], next_cursor: None }` */
 const PAGE_EMPTY = "9290c0";
@@ -168,14 +168,13 @@ describe("decodeProposalDisplayInfo", () => {
       mmBps: 500,
       takerFeeBps: 7,
       makerFeeBps: 3,
-      signer: Uint8Array.from(new Array(20).fill(0)),
       fundingIntervalMs: 3_600_000n,
       maxFundingRateBps: 800,
       poolId: 9,
       szDecimals: 4,
       ticker: "GOLD",
       maxOpenInterest: 123_456_789n,
-      // A stored 12-element payload predates the grid and decodes with both 0.
+      // A stored 11-element payload predates the grid and decodes with both 0.
       tickSize: 0n,
       lotSize: 0n,
     });
@@ -267,21 +266,21 @@ const ACTION_CANCEL_ALL_SCOPED =
 const ACTION_CANCEL_ALL_UNSCOPED =
   "81b943616e63656c416c6c4f7264657273466f724163636f756e7492dc0014ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1c0";
 
-/** `AdminAction::UpdateAuthoritySet { domain: MarketParams, add: [B2×20], remove: [] }`
+/** `AdminAction::UpdateAuthoritySet { domain: Custody, add: [B2×20], remove: [] }`
  *  and the `{ domain: Relayer, add: [], remove: [C3×20] }` twin — the
  *  SDK's own `conformance/codec.ndjson` frozen tag-7 vectors
  *  (`propose_admin_action/update_authority_set_add` and `_remove`),
  *  generated from the real Rust core via `cargo run -p
  *  proof-trading-sdk-conformance --bin gen-vectors`. */
 const ACTION_UPDATE_AUTHORITY_SET_ADD =
-  "81b2557064617465417574686f7269747953657493ac4d61726b6574506172616d7391dc0014ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb290";
+  "81b2557064617465417574686f7269747953657493a7437573746f647991dc0014ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb290";
 const ACTION_UPDATE_AUTHORITY_SET_REMOVE =
   "81b2557064617465417574686f7269747953657493a752656c617965729091dc0014ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3";
 
 const ACTION_ATTACH =
   "81b1417474616368436f6e646974696f6e616c9a5b0fcd238ccd0d06cd06830502dc0014000000000000000000000000000000000000000000ce3b9aca00";
 const ACTION_BATCH =
-  "81a542617463689281ac4372656174654d61726b65749e0fcd0d06cd06830502dc00140000000000000000000000000000000000000000cdea60cd0bb80000a000010181b1417474616368436f6e646974696f6e616c9a5b0fcd238ccd0d06cd06830502dc0014000000000000000000000000000000000000000000ce3b9aca00";
+  "81a542617463689281ac4372656174654d61726b65749d0fcd0d06cd06830502cdea60cd0bb80000a000010181b1417474616368436f6e646974696f6e616c9a5b0fcd238ccd0d06cd06830502dc0014000000000000000000000000000000000000000000ce3b9aca00";
 const ACTION_TRIGGER_CONFIG =
   "81b6536574547269676765724d61726b6574436f6e666967970703c3ccfacd1388cd03e820";
 
@@ -340,7 +339,7 @@ describe("decodeAdminAction", () => {
       decodeAdminAction(decodeVector(ACTION_UPDATE_AUTHORITY_SET_ADD)),
     ).toEqual({
       kind: "UpdateAuthoritySet",
-      value: { domain: "MarketParams", add: [addrOf(0xb2)], remove: [] },
+      value: { domain: "Custody", add: [addrOf(0xb2)], remove: [] },
     });
     expect(
       decodeAdminAction(decodeVector(ACTION_UPDATE_AUTHORITY_SET_REMOVE)),
@@ -354,7 +353,7 @@ describe("decodeAdminAction", () => {
   });
 
   it("decodes an UpdateAuthoritySet naming a retired list, never submittable", () => {
-    for (const domain of ["CexComposite", "ScheduledOps"]) {
+    for (const domain of ["CexComposite", "MarketParams", "ScheduledOps"]) {
       const retired = decodeAdminAction({
         UpdateAuthoritySet: [domain, [new Array(20).fill(0xb2)], []],
       });
@@ -424,7 +423,7 @@ describe("decodeAdminAction", () => {
 
   it("tolerates the serde(default) trailers' absence, like the engine", () => {
     // 8 slots — an attachment written before the open-interest trailer
-    // existed, and 9 slots — an event written before its trailers. The
+    // existed, and 8 slots — an event written before its trailers. The
     // engine's decoder defaults them; the mirror must too, not refuse the
     // whole proposal list.
     const attach = decodeAdminAction({
@@ -453,7 +452,6 @@ describe("decodeAdminAction", () => {
         1_000,
         5,
         2,
-        new Array(20).fill(0),
       ],
     });
     if (event.kind !== "CreateEvent") throw new Error("expected CreateEvent");
@@ -540,22 +538,7 @@ describe("byte-field validation", () => {
       3n,
       1,
       {
-        CreateMarket: [
-          1,
-          1000,
-          500,
-          7,
-          3,
-          new Array(20).fill(0),
-          0n,
-          800,
-          0,
-          4,
-          "T",
-          0n,
-          1n,
-          1n,
-        ],
+        CreateMarket: [1, 1000, 500, 7, 3, 0n, 800, 0, 4, "T", 0n, 1n, 1n],
       },
       [0xde, 0xad],
       new Array(32).fill(0x5a),
@@ -689,7 +672,7 @@ describe("byte-field validation", () => {
     );
   });
 
-  it("decodes a 14-element CreateMarket with its tick and lot size", () => {
+  it("decodes a 13-element CreateMarket with its tick and lot size", () => {
     const p = decodeProposalDisplayInfo(validProposalRaw());
     if (p.action.kind !== "CreateMarket") throw new Error("unreachable");
     expect(p.action.value.tickSize).toBe(1n);
@@ -707,12 +690,12 @@ describe("byte-field validation", () => {
     const action = raw[12] as { CreateMarket: unknown[] };
     action.CreateMarket.push("trailing");
     expect(() => decodeProposalDisplayInfo(raw)).toThrow(
-      /proposal\.action: array had incorrect length, expected 14/,
+      /proposal\.action: array had incorrect length, expected 13/,
     );
 
     const nonString = validProposalRaw();
     const nonStringAction = nonString[12] as { CreateMarket: unknown[] };
-    nonStringAction.CreateMarket[10] = null;
+    nonStringAction.CreateMarket[9] = null;
     expect(() => decodeProposalDisplayInfo(nonString)).toThrow(
       /proposal\.action: invalid type: unit value, expected a string/,
     );
@@ -771,7 +754,9 @@ describe("byte-field validation", () => {
     ).toThrow(/rejections\[1\] is 33 bytes/);
   });
 
-  it("validates the signer inside a wrapped CreateMarket", () => {
+  it("refuses a CreateMarket that still carries the retired inner signer", () => {
+    // Release 18.0 removed the always-zero signer from the payload: a
+    // stored 17.0 proposal with it no longer decodes.
     const action = {
       CreateMarket: [
         1,
@@ -779,7 +764,7 @@ describe("byte-field validation", () => {
         500,
         7,
         3,
-        new Array(19).fill(0),
+        new Array(20).fill(0),
         0n,
         800,
         0,
@@ -790,9 +775,7 @@ describe("byte-field validation", () => {
         1n,
       ],
     };
-    expect(withField(12, action)).toThrow(
-      /proposal\.action: invalid length 19, expected 20 bytes/,
-    );
+    expect(withField(12, action)).toThrow(/proposal\.action: /);
   });
 
   it("accepts actionCanonicalBytes at any length but still checks its elements", () => {
@@ -894,7 +877,7 @@ describe("decodeNodeVersion", () => {
 describe("decodeAuthoritiesSnapshot", () => {
   const addr = (b: number) => new Array(20).fill(b);
 
-  it("checks all six engine slots and drops the two retired lists", () => {
+  it("checks all six engine slots and drops the three retired lists", () => {
     // Wire order: relayer, oracle, cex_composite, custody, market_params,
     // scheduled_ops. The engine keeps the retired slots empty; they are
     // non-empty here only to prove the slots are dropped.
@@ -910,7 +893,6 @@ describe("decodeAuthoritiesSnapshot", () => {
       relayer: [addrOf(0xaa)],
       oracle: [addrOf(0xbb)],
       custody: [addrOf(0xdd)],
-      marketParams: [addrOf(0xee)],
     });
   });
 
@@ -918,5 +900,8 @@ describe("decodeAuthoritiesSnapshot", () => {
     expect(() =>
       decodeAuthoritiesSnapshot([[], [], [new Array(19).fill(1)], [], [], []]),
     ).toThrow(/retired\[2\]/);
+    expect(() =>
+      decodeAuthoritiesSnapshot([[], [], [], [], [new Array(19).fill(1)], []]),
+    ).toThrow(/retired\[4\]/);
   });
 });

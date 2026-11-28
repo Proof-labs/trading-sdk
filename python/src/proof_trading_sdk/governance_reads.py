@@ -12,13 +12,13 @@ from proof_trading_sdk.errors import CodecError
 
 @dataclass(frozen=True)
 class AuthoritiesSnapshot:
-    """The live authority sets. The engine's retired composite-feeder and
-    scheduled-operations slots are decoded and dropped."""
+    """The live authority sets. The engine's retired composite-feeder,
+    market-parameters and scheduled-operations slots are decoded and
+    dropped."""
 
     relayer: list[bytes]
     oracle: list[bytes]
     custody: list[bytes]
-    market_params: list[bytes]
 
 
 @dataclass(frozen=True)
@@ -79,7 +79,6 @@ def decode_authorities_snapshot(value: t.Any) -> AuthoritiesSnapshot:
         relayer=raw["relayer"],
         oracle=raw["oracle"],
         custody=raw["custody"],
-        market_params=raw["market_params"],
     )
 
 

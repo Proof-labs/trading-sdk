@@ -107,9 +107,6 @@ describe("validateTicker: the engine's ticker rule", () => {
   });
 });
 
-const SIGNER = new Uint8Array(20).fill(0xff);
-const ZERO_SIGNER = new Uint8Array(20);
-
 function market(ticker: string): CreateMarket {
   return {
     market: 42,
@@ -117,7 +114,6 @@ function market(ticker: string): CreateMarket {
     mmBps: 500,
     takerFeeBps: 5,
     makerFeeBps: 2,
-    signer: SIGNER,
     fundingIntervalMs: 60000n,
     maxFundingRateBps: 100,
     poolId: 0,
@@ -161,22 +157,18 @@ function approve(action: AdminAction): Action {
 
 const single = (ticker: string): AdminAction => ({
   kind: "CreateMarket",
-  value: { ...market(ticker), signer: ZERO_SIGNER },
+  value: market(ticker),
 });
 
 const batch = (ticker: string): AdminAction => ({
   kind: "Batch",
   value: [
-    { kind: "CreateMarket", value: { ...market("BTC"), signer: ZERO_SIGNER } },
-    {
-      kind: "CreateMarket",
-      value: { ...market(ticker), market: 43, signer: ZERO_SIGNER },
-    },
+    { kind: "CreateMarket", value: market("BTC") },
+    { kind: "CreateMarket", value: { ...market(ticker), market: 43 } },
   ],
 });
 
 const shapes: [string, (ticker: string) => Action][] = [
-  ["direct CreateMarket", (t) => ({ type: "CreateMarket", data: market(t) })],
   ["proposed CreateMarket", (t) => propose(single(t))],
   ["proposed Batch item", (t) => propose(batch(t))],
   ["approved CreateMarket", (t) => approve(single(t))],
@@ -228,15 +220,20 @@ describe("read paths never check the ticker", () => {
     // from a good ticker of the same length and patch the one byte.
     const tx = signAndEncode(
       UNBOUND_CHAIN_ID,
-      { type: "CreateMarket", data: market("TEST3X") },
+      propose(single("TEST3X")),
       1n,
       new Uint8Array(32).fill(7),
     );
     const at = indexOf(tx, new TextEncoder().encode("TEST3X"));
     tx[at + 5] = ".".charCodeAt(0);
     const { action } = decodeTx(tx);
-    if (action.type !== "CreateMarket") throw new Error("type narrowing");
-    expect(action.data.ticker).toBe(TYPO);
+    if (
+      action.type !== "ProposeAdminAction" ||
+      action.data.action.kind !== "CreateMarket"
+    ) {
+      throw new Error("type narrowing");
+    }
+    expect(action.data.action.value.ticker).toBe(TYPO);
   });
 
   it("recomputes the content hash of a proposal already on chain", () => {

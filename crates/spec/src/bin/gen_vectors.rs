@@ -57,7 +57,7 @@ fn event_fields(oracle_source: serde_json::Value) -> serde_json::Value {
         "question": "Will the Fed cut rates?",
         "settlement_ms": 1_778_000_000_000u64, "resolution_window_ms": 1000u64,
         "taker_fee_bps": 5, "maker_fee_bps": 2,
-        "signer": vec![0u8; 20], "oracle_source": oracle_source,
+        "oracle_source": oracle_source,
         "description": "", "rules": "", "max_open_interest": 0u64
     })
 }
@@ -160,22 +160,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Retired bytes, kept only to sign the frozen envelopes below.
     const RETIRED_PLACE_ORDER: u8 = 0x01;
     const RETIRED_MARKET_ORDER: u8 = 0x04;
-    const CONFIRM_DEPOSIT: u8 = 0x09;
-    const CREATE_MARKET: u8 = 0x07;
-    const UPDATE_MARKET_FEES: u8 = 0x10;
     const ATOMIC_BASKET_ORDER: u8 = 0x1C;
     const PROPOSE_ADMIN_ACTION: u8 = 0x1E;
     const APPROVE_ADMIN_ACTION: u8 = 0x1F;
     const REJECT_ADMIN_ACTION: u8 = 0x20;
     const EMERGENCY_ADMIN_ACTION: u8 = 0x21;
-    // Coverage burn-down (issue #69): the 15 previously-unpinned action types.
-    // (CONFIRM_DEPOSIT is already declared above.) 0x22, 0x23, 0x24 and 0x2E
-    // are retired bytes and have no vectors.
+    // Coverage burn-down (issue #69): the previously-unpinned action types.
+    // 0x07, 0x09, 0x0A, 0x0B, 0x10, 0x13, 0x15, 0x22, 0x23, 0x24 and 0x2E are
+    // retired bytes and have no vectors.
     const DEPOSIT: u8 = 0x05;
     const WITHDRAW: u8 = 0x06;
     const WITHDRAW_REQUEST: u8 = 0x08;
-    const CONFIRM_WITHDRAWAL: u8 = 0x0a;
-    const FAIL_WITHDRAWAL: u8 = 0x0b;
     const APPROVE_AGENT: u8 = 0x0c;
     const REVOKE_AGENT: u8 = 0x0d;
     const RESOLVE_EVENT: u8 = 0x27;
@@ -296,106 +291,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                    "publish_time_ms": 1700000000123u64, "price_micro": 67000000000u64,
                    "confidence_micro": null, "evidence_digest": vec![0x5Au8;32], "signer": signer}),
         ),
-        // ConfirmDeposit (0x09) with the trailing DepositLocator. Mirrors the
-        // engine's own `all_action_variants` fixture (owner 0x55, amount
-        // 100_000, sig 0xAB×64, signer 0x66, locator top=3 inner=Some(1)); the
-        // locator serializes as a 2-element array `[top_index, inner_index]`.
-        codec_case(
-            "confirm_deposit/with_locator",
-            CONFIRM_DEPOSIT,
-            json!({
-                "owner": vec![0x55u8; 20],
-                "amount": 100_000u64,
-                "solana_tx_sig": vec![0xABu8; 64],
-                "signer": vec![0x66u8; 20],
-                "locator": { "top_index": 3, "inner_index": 1 }
-            }),
-        ),
-        // Pre-locator ConfirmDeposit: the locator is absent and encodes as a
-        // trailing `nil`. This is the backward-compatible (MINOR) tail — old
-        // 4-field bytes still decode, and the new encoder appends nil when the
-        // relayer supplies no locator.
-        codec_case(
-            "confirm_deposit/no_locator",
-            CONFIRM_DEPOSIT,
-            json!({
-                "owner": vec![0x55u8; 20],
-                "amount": 100_000u64,
-                "solana_tx_sig": vec![0xABu8; 64],
-                "signer": vec![0x66u8; 20]
-            }),
-        ),
-        // CreateMarket with the MANDATORY sz_decimals + ticker fields. Pins
-        // that a market-creation payload carries them — the gap that left the
-        // SDK building engine-rejected CreateMarket txs.
-        codec_case(
-            "create_market/full",
-            CREATE_MARKET,
-            json!({
-                "market": 42, "im_bps": 1000, "mm_bps": 500,
-                "taker_fee_bps": 5, "maker_fee_bps": 2, "signer": signer,
-                "funding_interval_ms": 60000u64, "max_funding_rate_bps": 100,
-                "pool_id": 9, "sz_decimals": 4, "ticker": "BTC",
-                "tick_size": 10_000u64, "lot_size": 1u64
-            }),
-        ),
-        // An explicit zero cap is semantically identical to omission, so both
-        // must produce the SAME bytes — the canonical 14-element uncapped
-        // payload with an explicit `0` cap. The array length never depends on
-        // the cap's value; see `CreateMarket::max_open_interest`.
-        codec_case(
-            "create_market/max_open_interest_zero_explicit",
-            CREATE_MARKET,
-            json!({
-                "market": 42, "im_bps": 1000, "mm_bps": 500,
-                "taker_fee_bps": 5, "maker_fee_bps": 2, "signer": signer,
-                "funding_interval_ms": 60000u64, "max_funding_rate_bps": 100,
-                "pool_id": 9, "sz_decimals": 4, "ticker": "BTC",
-                "max_open_interest": 0u64,
-                "tick_size": 10_000u64, "lot_size": 1u64
-            }),
-        ),
-        // S40: the CreateMarket cap tail. The uncapped case above encodes the
-        // same 14 elements with a zero in slot 11; this case pins a non-zero
-        // slot 11. Only the value differs between them, never the length.
-        codec_case(
-            "create_market/max_open_interest",
-            CREATE_MARKET,
-            json!({
-                "market": 43, "im_bps": 1000, "mm_bps": 500,
-                "taker_fee_bps": 5, "maker_fee_bps": 2, "signer": signer,
-                "funding_interval_ms": 60000u64, "max_funding_rate_bps": 100,
-                "pool_id": 9, "sz_decimals": 5, "ticker": "ETH",
-                "max_open_interest": 1_000_000u64,
-                "tick_size": 1_000u64, "lot_size": 100u64
-            }),
-        ),
-        // UpdateMarketFees appends the existing live-risk ratio levers at
-        // slots 18/19 before the S40 OI cap at slot 20, and wire 12's
-        // impact-notional lever last. Null placeholders are intentional and
-        // prevent the cap from being decoded as im_bps.
-        codec_case(
-            "update_market_fees/max_open_interest_only",
-            UPDATE_MARKET_FEES,
-            json!({
-                "market": 43, "signer": signer,
-                "im_bps": null, "mm_bps": null,
-                "max_open_interest": 500_000u64,
-                "impact_notional": null
-            }),
-        ),
-        // Pin the three adjacent risk tails together across Rust, TypeScript,
-        // and Python so a binding cannot shift max OI into an IM/MM slot.
-        codec_case(
-            "update_market_fees/margin_ratios_and_max_open_interest",
-            UPDATE_MARKET_FEES,
-            json!({
-                "market": 44, "signer": signer,
-                "im_bps": 3334, "mm_bps": 1667,
-                "max_open_interest": 750_000u64,
-                "impact_notional": 250_000_000u64
-            }),
-        ),
         // AtomicBasketOrder (0x1c) — multi-leg, mixed leg optionals; pins the
         // action that was entirely absent from the SDK. max_slippage_bps is
         // serde(default) and encodes as 0 when absent.
@@ -416,8 +311,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         // Admin-multisig governance (tags 0x1E–0x21). The nested
         // `action` is an externally-tagged `AdminAction`/`EmergencyAction`
         // enum — serde_json's map form `{ "Variant": { snake_case } }`, which
-        // is exactly what the TS adapter must reproduce. The embedded
-        // CreateMarket signer is zero (governance supplies authorization).
+        // is exactly what the TS adapter must reproduce. `CreateMarket` names
+        // no signer: governance supplies the authorization.
         codec_case(
             "propose_admin_action/create_market",
             PROPOSE_ADMIN_ACTION,
@@ -426,10 +321,29 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "registry_version": 3u64,
                 "action": { "CreateMarket": {
                     "market": 0, "im_bps": 3334, "mm_bps": 1667,
-                    "taker_fee_bps": 5, "maker_fee_bps": 2, "signer": vec![0u8; 20],
+                    "taker_fee_bps": 5, "maker_fee_bps": 2,
                     "funding_interval_ms": 60000u64, "max_funding_rate_bps": 3000,
                     "pool_id": 0, "sz_decimals": 0, "ticker": "BTC", "max_open_interest": 0u64,
                     "tick_size": 1u64, "lot_size": 1u64
+                }}
+            }),
+        ),
+        // The CreateMarket open-interest cap tail at a non-zero value, with a
+        // non-zero pool, size scale and grids: only the values differ from the
+        // case above, never the length.
+        codec_case(
+            "propose_admin_action/create_market_max_open_interest",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0x22u8; 20],
+                "registry_version": 3u64,
+                "action": { "CreateMarket": {
+                    "market": 43, "im_bps": 1000, "mm_bps": 500,
+                    "taker_fee_bps": 5, "maker_fee_bps": 2,
+                    "funding_interval_ms": 60000u64, "max_funding_rate_bps": 100,
+                    "pool_id": 9, "sz_decimals": 5, "ticker": "ETH",
+                    "max_open_interest": 1_000_000u64,
+                    "tick_size": 1_000u64, "lot_size": 100u64
                 }}
             }),
         ),
@@ -447,7 +361,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "action": { "Batch": [
                     { "CreateMarket": {
                         "market": 15, "im_bps": 3334, "mm_bps": 1667,
-                        "taker_fee_bps": 5, "maker_fee_bps": 2, "signer": vec![0u8; 20],
+                        "taker_fee_bps": 5, "maker_fee_bps": 2,
                         "funding_interval_ms": 60000u64, "max_funding_rate_bps": 3000,
                         "pool_id": 0, "sz_decimals": 0, "ticker": "BTC", "max_open_interest": 0u64,
                         "tick_size": 1u64, "lot_size": 1u64
@@ -500,12 +414,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             }),
         ),
         codec_case(
-            "propose_admin_action/create_event_relayer_attested",
+            "propose_admin_action/create_event_quorum_attested",
             PROPOSE_ADMIN_ACTION,
             json!({
                 "proposer": vec![0x22u8; 20],
                 "registry_version": 3u64,
-                "action": { "CreateEvent": event_fields(json!("RelayerAttested")) }
+                "action": { "CreateEvent": event_fields(json!("QuorumAttested")) }
             }),
         ),
         codec_case(
@@ -729,8 +643,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         // UpdateAuthoritySet (inner tag 0x07, exchange#422 / DEC-87,
         // exchange#472): addition/removal of members in one privileged
         // authority allowlist. `domain` is externally tagged as its bare
-        // variant name (fact 2), never a numeric discriminant — both a
-        // capability-set domain (`MarketParams`) and a genesis-seeded one
+        // variant name (fact 2), never a numeric discriminant — both the
+        // capability-set domain (`Custody`) and a genesis-seeded one
         // (`Relayer`) are pinned so the string is exercised, not inferred.
         codec_case(
             "propose_admin_action/update_authority_set_add",
@@ -739,7 +653,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "proposer": vec![0xA1u8; 20],
                 "registry_version": 1u64,
                 "action": { "UpdateAuthoritySet": {
-                    "domain": "MarketParams",
+                    "domain": "Custody",
                     "add": [vec![0xB2u8; 20]],
                     "remove": []
                 }}
@@ -983,24 +897,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             WITHDRAW_REQUEST,
             json!({ "owner": owner, "amount": 50_000_000u64,
                     "solana_destination": vec![0x44u8; 32] }),
-        ),
-        codec_case(
-            "confirm_deposit/basic",
-            CONFIRM_DEPOSIT,
-            json!({ "owner": owner, "amount": 100_000_000u64,
-                    "solana_tx_sig": vec![0xABu8; 64], "signer": signer }),
-        ),
-        codec_case(
-            "confirm_withdrawal/basic",
-            CONFIRM_WITHDRAWAL,
-            json!({ "withdrawal_id": 7u64,
-                    "solana_tx_sig": vec![0xABu8; 64], "signer": signer }),
-        ),
-        codec_case(
-            "fail_withdrawal/basic",
-            FAIL_WITHDRAWAL,
-            json!({ "withdrawal_id": 7u64,
-                    "reason": "insufficient bridge liquidity", "signer": signer }),
         ),
         // Agent authorization.
         codec_case(
